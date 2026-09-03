@@ -37,7 +37,7 @@ const ws = upsertWorkspace(store, workspaceRoot, 'oph-autoresearch')
 // 历史会话先建：列表按 updated_at 倒序，后建的排前面，
 // 有内容的那条要排第一才会被默认选中。
 for (const title of [
-  '审查桌面端 harness agent',
+  '审查桌面端 Agent 运行时',
   '分析文件夹内容',
   '实时语音聊天',
   '排查 React 与 Plan 循环异常',

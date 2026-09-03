@@ -14,7 +14,7 @@ import {
   workspace,
 } from '../lib/store/index.ts'
 import { ConversationRow } from './ConversationRow.tsx'
-import { IconPanel, IconPlus, IconSettings } from './Icons.tsx'
+import { IconEye, IconPanel, IconPlus, IconSettings } from './Icons.tsx'
 import { NewProjectDialog } from './NewProjectDialog.tsx'
 import { ProjectRow } from './ProjectRow.tsx'
 
@@ -111,7 +111,14 @@ export function Sidebar(props: { onClose?: () => void }) {
       <header class="sidebar-head">
         {/* 品牌位是静态的，别给它加下拉箭头：箭头承诺一个菜单，
             而承诺一个不存在的交互比没有交互更坏。 */}
-        <span class="brand">oph·autoresearch</span>
+        <span class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <IconEye size={15} />
+          </span>
+          <span class="brand-name">
+            OPH <strong>AutoResearch</strong>
+          </span>
+        </span>
         <div class="head-actions">
           {/* 放收起左栏——这个动作只有左栏自己这个位置放得下。 */}
           <button

@@ -37,17 +37,10 @@
   --text-tertiary: #9a9aa2;
   --text-inverted: #ffffff;
 
-  /*
-   * 唯一强调色，**没有色相**——就是同一档墨色。
-   *
-   * 这套界面通身是黑白灰（正文墨色、边框 1px 淡灰、发送键纯黑），一个蓝色强调
-   * 摆进来是唯一的一块彩，选中、焦点环、主按钮、光标条各处都跟着蓝一下。
-   * 要强调就靠深浅，不靠颜色。红/绿/橙那三档留着——它们表达的是**状态**
-   * （危险、成功、警告），不是强调。
-   */
-  --accent: #16161a;
-  --accent-hover: #35353b;
-  --accent-soft: rgba(0, 0, 0, 0.06);
+  /* 眼科科研识别色：低饱和深青用于主操作与当前状态。状态色仍各司其职。 */
+  --accent: #126e73;
+  --accent-hover: #0b5559;
+  --accent-soft: rgba(18, 110, 115, 0.09);
 
   --success: #1a7f47;
   --success-soft: rgba(26, 127, 71, 0.1);
@@ -194,9 +187,9 @@
     --text-tertiary: #6e6e78;
     --text-inverted: #16161a;
 
-    --accent: #f2f2f4;
-    --accent-hover: #d6d6da;
-    --accent-soft: rgba(255, 255, 255, 0.1);
+    --accent: #79ded6;
+    --accent-hover: #9cebe5;
+    --accent-soft: rgba(121, 222, 214, 0.12);
 
     --success: #4ec98a;
     --success-soft: rgba(78, 201, 138, 0.14);
@@ -237,9 +230,9 @@
   --text-tertiary: #6e6e78;
   --text-inverted: #16161a;
 
-  --accent: #f2f2f4;
-  --accent-hover: #d6d6da;
-  --accent-soft: rgba(255, 255, 255, 0.1);
+  --accent: #79ded6;
+  --accent-hover: #9cebe5;
+  --accent-soft: rgba(121, 222, 214, 0.12);
 
   --success: #4ec98a;
   --success-soft: rgba(78, 201, 138, 0.14);

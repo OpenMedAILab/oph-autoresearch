@@ -128,12 +128,12 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 7px;
   padding: 4px var(--s-2);
   border-radius: var(--r-xs);
-  font-weight: 600;
-  font-size: var(--fs-lg);
-  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  letter-spacing: -0.015em;
   /* 上移 2px、左移 2px。
      上移：标题栏这一格的视觉重心比几何中心低——右边那排窗口按钮是 28px 见方的
      图标，字比它们矮，居中对齐时看着偏下。
@@ -142,6 +142,29 @@
      用 transform 而不是改 padding：它不参与布局，不会把这一行撑高、也不会
      把右边那颗按钮挤走。 */
   transform: translate(-2px, -2px);
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.brand-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.brand-name strong {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .head-actions {

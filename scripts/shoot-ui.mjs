@@ -192,7 +192,15 @@ async function main() {
         await page.click('.drawer-toggle').catch(() => {})
         await page.waitForTimeout(400)
         await page.screenshot({ path: join(OUT, `${shot.name}-drawer.png`) })
+        await page.getByRole('button', { name: '新建对话' }).click()
+        await page.waitForTimeout(500)
+        await page.screenshot({ path: join(OUT, `${shot.name}-research.png`) })
       } else {
+        // 新研究首页是产品的核心入口，必须独立覆盖，不能只截已有会话。
+        await page.getByRole('button', { name: '新建对话' }).click()
+        await page.waitForTimeout(500)
+        await page.screenshot({ path: join(OUT, `${shot.name}-research.png`) })
+
         await page.keyboard.press('Control+k')
         await page.waitForTimeout(350)
         await page.screenshot({ path: join(OUT, `${shot.name}-palette.png`) })
