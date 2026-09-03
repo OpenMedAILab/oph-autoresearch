@@ -1,0 +1,74 @@
+[package]
+name = "qywork"
+version = "0.1.8"
+description = "oph-autoresearch —— 眼科影像 AI 自动科研工作台"
+authors = ["OpenMedAILab", "qywork contributors"]
+edition = "2021"
+rust-version = "1.80"
+
+# main.rs 只是一个薄壳，实现都在 lib.rs——这样逻辑能被 cargo test 覆盖，
+# 也能被 mobile 入口复用。
+# 注意：这一段必须放在全部 [package] 字段之后，否则后续键会被算作 lib 的键
+# （cargo 只会给一句 "unused manifest key: lib.authors" 的警告，很容易漏看）。
+[lib]
+name = "qywork_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+# 用于 sidecar 输出通道与握手/恢复计时。tokio 本来就在依赖树里（tauri 的运行时就是它），
+# 写成直接依赖只是让这些类型和函数可以被命名，不新增任何 crate。
+tokio = { version = "1", features = ["sync", "time"] }
+serde_json = "1"
+parking_lot = "0.12"
+anyhow = "1"
+portable-pty = "0.9"
+
+# 只有 Windows 需要：无装饰窗口的投影要自己向 DWM 要，见 lib.rs 的
+# `extend_frame_for_shadow`。版本跟 tauri 传递依赖的那份对齐（0.61），
+# 否则同一套 Win32 类型会编出两份，`hwnd()` 的返回值就对不上了。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Graphics_Dwm",
+  "Win32_UI_Controls",
+  # 启动失败时弹 MessageBoxW。它不依赖 WebView，正好覆盖「窗口还没建出来」那段。
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[features]
+# 由 tauri-build 生成的自定义协议开关，勿手改。
+custom-protocol = ["tauri/custom-protocol"]
+
+# `.tmp/cargo-target/debug` 曾长到 12 GB。实测构成：incremental 4.7 G · deps 4.6 G · build 1.3 G，
+# 其中 .pdb 1.48 G、.o 4.2 G——大头是调试信息。cargo 不回收旧产物，dev 每跑一次就往上堆，
+# 所以在生成端掐掉，而不是定期 clean。
+[profile.dev]
+# 增量缓存只对本 crate 生效（依赖一律非增量编译），而本 crate 只有 lib/sidecar/watcher 几个
+# 文件，全量重编它的代价远小于 4.7 G 的缓存。
+incremental = false
+# 保留行号表：panic 仍能定位到 .rs:行。去掉变量级调试信息——Rust 侧下断点本来就不是
+# 这个项目的调试方式，UI 在 WebView 里。
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# 依赖树全部不生成调试信息。本 crate 不受影响（这条只作用于非工作区成员）。
+debug = false
+
+[profile.dev.build-override]
+# build script 及其依赖同样不需要。
+debug = false
+
+[profile.release]
+# 单文件体积优先：这是选 Tauri 的理由之一，不该在编译配置上让回去。
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,18 @@
+/*
+ * 布局与组件样式的入口。
+ *
+ * 拆开之前这是一个 2070 行的文件。拆分**只动位置不动顺序**——CSS 里后面的规则
+ * 盖前面的，所以下面这个顺序就是层叠顺序，调换任意两行都会改变最终样式。
+ *
+ * 新增一段样式时：先找它属于哪一节，不要往末尾追加。往末尾加等于给它
+ * 最高的层叠优先级，而那通常不是期望的行为（现存的几条降序选择器警告就是这么来的）。
+ */
+
+@import "./app/shell.css";
+@import "./app/research.css";
+@import "./app/transcript.css";
+@import "./app/composer.css";
+@import "./app/panel.css";
+@import "./app/overlays.css";
+@import "./app/utility.css";
+@import "./app/settings.css";

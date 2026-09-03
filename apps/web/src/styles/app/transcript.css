@@ -1,0 +1,1195 @@
+/* 会话流、思考、Markdown、工具组卡与工具卡。
+ *
+ * 由 `../app.css` 按固定顺序引入——**顺序即层叠**，不要单独 import 这个文件。 */
+
+/* ── 会话流 ── */
+.transcript {
+  flex: 1;
+  /* flex 子项的默认 min-height 是 auto——它拒绝收缩到内容高度以下，因此这一块
+     把 .main 撑破 100%，上面的 overflow-y 不生效，滚动落到最外层：现象是
+     一条贯穿整个窗口的滚动条 + 页面「无限滚动」，左栏底部导航被一起顶出窗口。
+     同一个成因在 .sidebar-scroll 上出现过一次。 */
+  min-height: 0;
+  overflow-y: auto;
+  /*
+   * 两侧都预留滚动条槽。
+   *
+   * 滚动条只占右侧的话，这一块的内容盒比 .main 窄 10px，`margin: 0 auto` 的
+   * 会话正文就整体左移 5px；而输入区不是滚动容器，它按 .main 的整宽居中。
+   * 因此同样写着 max-width 760 + auto 的两块，肉眼看差了半个滚动条——
+   * 「输入框和对话内容没对齐」就是这 5px。
+   *
+   * both-edges 把槽对称地留在两边，正文的居中基准回到 .main 的整宽，和输入区
+   * 用的是同一条中线。给输入区补一个 padding-right 也能对齐，但那是拿一个
+   * 写死的数字去追一个由系统滚动条宽度决定的值。
+   */
+  scrollbar-gutter: stable both-edges;
+  /* 滚动锚定：新内容插入时不让浏览器把视口往回跳 */
+  overflow-anchor: none;
+}
+
+/* 条目间距 8px。
+ *
+ * gap 10 + `.fold` 的 margin 6/2 得到「正文↔折叠 16px、折叠↔正文 12px」，那套数
+ * 适合 320px 宽的窄栏；这里是 760px 宽的主列，同样的数字看起来就散，所以收一档。 */
+.transcript-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  /* 横向边距 = 输入区的 s-5 再加 `--composer-text-inset`：对齐的是输入框里的
+     文字列，不是它的边框（理由写在 tokens.css 那个变量上）。 */
+  /* 底部留白 = 滚到末尾时正文与输入框之间的距离。放在这里而不是输入区的
+     padding-top——理由写在 `.composer-wrap` 上。 */
+  padding: var(--s-6) calc(var(--s-5) + var(--composer-text-inset)) var(--s-8);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 输入框上方挂着占流的块（目标条 / 跟进卡片）时，正文贴住它：留白换成这一列
+   的缝，与块之间那几道同宽。判据在 store 的 `composerStackAbove()`。 */
+.transcript-inner.with-stack {
+  padding-bottom: var(--composer-stack-gap);
+}
+/* 整轮状态条不占流，它**悬浮在这段留白里**，所以留白要按「缝 + 它 + 缝」给，
+   上下两道缝才一样宽。给成上面那一档的话它压在正文上（实测 -27px）。
+   这条排在 .with-stack 之后：两个类同时挂着时以这一档为准。 */
+.transcript-inner.with-run-status {
+  padding-bottom: calc(var(--run-status-h) + var(--composer-stack-gap) * 2);
+}
+
+/* 历史分页的唯一入口。放在流顶端，补页后仍留在最上面；不悬浮、不遮正文。 */
+.history-boundary {
+  display: flex;
+  justify-content: center;
+  min-height: 24px;
+  margin-bottom: 2px;
+}
+.history-note,
+.history-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+.history-button {
+  padding: 3px var(--s-3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+}
+.history-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.history-button:disabled {
+  cursor: default;
+}
+.history-error {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  max-width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+.history-error > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.row {
+  display: flex;
+}
+/* 用户消息右对齐，与助手正文分列两侧。
+ *
+ * 不要为了「和工具卡对齐在同一条竖线」改成左对齐全宽：那样用户说的话和模型说的话
+ * 只靠底色区分，翻长会话时找不到上一句用户消息在哪。
+ * 位置这个维度分给「谁说的」，层级交给折叠的缩进。 */
+.row.user {
+  justify-content: flex-end;
+}
+/* 附件与气泡同一列、同样右对齐——附件属于这条消息，不是独立的一行。
+   宽度上限**只写在这里**，见下面 .bubble 的说明。 */
+.user-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: 85%;
+  min-width: 0;
+}
+
+/*
+ * **不能再写 `max-width: 85%`。**
+ *
+ * 这个百分比是相对 .user-col 的，而 .user-col 的宽度又是被自己的内容撑出来的
+ * （shrink-to-fit，上限 85%）。求父宽时子元素的循环百分比按 none 处理，父宽先
+ * 落在 max-content；父宽定下来之后 85% 才生效，因此气泡永远比它自己的内容窄
+ * 15%——每条用户消息都被迫换行，「咋啦」两个字会被拆成上下两行。
+ *
+ * 上限归 .user-col 一处，气泡本身跟着内容走。
+ */
+.bubble {
+  padding: 8px var(--s-3);
+  border-radius: var(--r-xl);
+  background: var(--bg-inset);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bubble.collapsible .user-bubble-copy {
+  max-height: var(--user-message-preview-height);
+  overflow: hidden;
+}
+.bubble.collapsible.expanded .user-bubble-copy {
+  max-height: none;
+}
+.user-bubble-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: max-content;
+  height: 18px;
+  margin: 0 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+}
+.user-bubble-toggle:hover {
+  color: var(--text-primary);
+}
+.user-bubble-toggle svg {
+  display: block;
+}
+.user-bubble-size {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+/*
+ * 助手正文。
+ *
+ * **不能写 `white-space: pre-wrap`。** 这个 div 拿到的是 markdown 渲染后的 HTML，
+ * 块级标签之间带着换行（`<p>A</p>\n<p>B</p>\n`）。pre-wrap 会把那些换行当成
+ * 可见空行画出来：每两段之间凭空多一整行行高，每条消息末尾再多一行。
+ *
+ * 这就是「段落间距怎么调都不变」的真正原因——多出来的不是 margin，是**字符**，
+ * 改 gap 和 margin 一点用都没有：调的不是产生那段空白的量。
+ *
+ * 行距 1.6 不要再放大：这一列里还夹着折叠行与代码块，松一档就一屏装不下
+ * 一次完整的工具往返。
+ *
+ * `min-width: 0` 不是可选的：作为列向 flex 子项，它的宽度下限是 min-content，
+ * 而里面一个不换行的代码块能把这个下限顶到几百像素——正文整块被撑得比会话列宽，
+ * 右边直接切在窗口沿上，也就不再和输入框同宽了。`.fold` / `.fold-group` /
+ * `.user-col` 早就各自写了这一对，这里是唯一漏掉的。
+ * （代码块本身有 overflow-x，压住外层它就自己滚。）
+ */
+.prose {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+/* ── Markdown ── */
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown p {
+  margin: 0 0 var(--s-2);
+}
+.markdown p:last-child {
+  margin-bottom: 0;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: var(--s-5) 0 var(--s-2);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.markdown h1 {
+  font-size: var(--fs-xl);
+}
+.markdown h2 {
+  font-size: var(--fs-lg);
+}
+.markdown h3 {
+  font-size: var(--fs-md);
+}
+.markdown ul,
+.markdown ol {
+  margin: var(--s-1) 0;
+  padding-left: 1.5em;
+}
+.markdown li + li {
+  margin-top: 2px;
+}
+.markdown blockquote {
+  margin: 0 0 var(--s-3);
+  padding-left: var(--s-3);
+  border-left: 2px solid var(--border-default);
+  color: var(--text-secondary);
+}
+.markdown :not(pre) > code {
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--bg-inset);
+}
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: var(--s-5) 0;
+}
+.markdown a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.code-block {
+  position: relative;
+  margin: 0 0 var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+/* 横向滚动在这一层，右上角那排工具在它外面，滚代码时不跟着走。 */
+.code-body {
+  margin: 0;
+  padding: var(--s-3) var(--s-4);
+  overflow-x: auto;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+/*
+ * 语法着色。
+ *
+ * 自己定义而不是引 highlight.js 的现成主题：现成主题是写死的一套亮色或暗色，
+ * 不跟随 prefers-color-scheme，也和这里的调色板对不上。
+ *
+ * 只用六个语义槽（关键字/字符串/数字/注释/函数/类型），不做二十种颜色的彩虹——
+ * 代码块的作用是让人读懂结构，不是当装饰画。注释刻意压到最低对比度，
+ * 它是所有 token 里最不需要被抢眼的。
+ */
+:root {
+  --hl-keyword: #8250df;
+  --hl-string: #0a6b3d;
+  --hl-number: #0550ae;
+  --hl-comment: #8b8b93;
+  --hl-function: #6639ba;
+  --hl-type: #953800;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --hl-keyword: #d2a8ff;
+    --hl-string: #7ee787;
+    --hl-number: #79c0ff;
+    --hl-comment: #7a7a84;
+    --hl-function: #d2a8ff;
+    --hl-type: #ffa657;
+  }
+}
+:root[data-theme="dark"] {
+  --hl-keyword: #d2a8ff;
+  --hl-string: #7ee787;
+  --hl-number: #79c0ff;
+  --hl-comment: #7a7a84;
+  --hl-function: #d2a8ff;
+  --hl-type: #ffa657;
+}
+
+.hljs-keyword,
+.hljs-built_in,
+.hljs-literal,
+.hljs-selector-tag {
+  color: var(--hl-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-symbol,
+.hljs-attr {
+  color: var(--hl-string);
+}
+.hljs-number,
+.hljs-meta {
+  color: var(--hl-number);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: var(--hl-function);
+}
+.hljs-type,
+.hljs-class,
+.hljs-title.class_,
+.hljs-variable.language_,
+.hljs-tag {
+  color: var(--hl-type);
+}
+.hljs-strong {
+  font-weight: 600;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+
+/*
+ * 语言角标与复制按钮：同一条水平线，右对齐贴住块的右上角。
+ * 整排压在首行代码上方，所以容器不收指针事件，只有按钮收——否则挡住横向滚动。
+ */
+.code-tools {
+  position: absolute;
+  top: 5px;
+  right: var(--s-1);
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  pointer-events: none;
+}
+.code-lang {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-family: var(--font-ui);
+  line-height: 18px;
+}
+/* 按钮与角标同高：高过角标一圈就成了压在代码上的第二层，不再是同一行。 */
+.code-copy {
+  pointer-events: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-xs);
+  color: var(--text-tertiary);
+}
+.code-copy::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-color: currentcolor;
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.6 3.4H4.9a1.5 1.5 0 0 0-1.5 1.5v5.7'/%3E%3Crect x='6.4' y='6.4' width='6.2' height='6.2' rx='1.5'/%3E%3C/g%3E%3C/svg%3E")
+    center / 13px no-repeat;
+}
+.code-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+/* 复制成功 1.2 秒的回执，由 App.tsx 的根委托加这个类。 */
+.code-copy.done {
+  color: var(--success);
+}
+.code-copy.done::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.4 8.6l3.1 3.1 6.1-6.6' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* 宽表格必须能独立横向滚动，否则会把整页撑出横向滚动条。 */
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 var(--s-3);
+}
+.markdown table {
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.markdown th,
+.markdown td {
+  padding: 5px var(--s-3);
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+}
+.markdown th {
+  background: var(--bg-sunken);
+  font-weight: 600;
+}
+
+/* ── 折叠：思考 / 工具 / 工具组共用同一个形状 ──
+ *
+ * 三条决定值得写下来：
+ *
+ * 1. **箭头在右侧、默认不显示**，hover / 键盘聚焦才淡入，展开态常显并转 90°。
+ *    左侧常驻箭头会在每一行的行首砌一列符号，把真正要读的动作名往右推。
+ * 2. **hover 只加深文字颜色，不加底色。** 一列折叠行里，底色块读起来是选中态。
+ * 3. **展开体靠一条左竖线表达从属**，不是靠边框围一个盒子——嵌套的盒子边框
+ *    是这一列里最重的视觉噪声。
+ */
+.fold {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  /* 折叠行之间比段落更紧：它们是过程记录，不是正文。 */
+  margin: 4px 0 2px;
+  font-size: var(--fs-base);
+}
+
+.fold-head {
+  display: flex;
+  align-items: center;
+  /* 箭头按它定位。 */
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+  /* 过程记录整体降一号字号 + 次级灰，和模型正文拉开层级。 */
+  font-size: var(--fs-sm);
+  color: var(--text-tertiary);
+  user-select: none;
+  list-style: none;
+  transition: color var(--t-fast) var(--ease);
+}
+.fold-head::-webkit-details-marker {
+  display: none;
+}
+.fold-head:hover {
+  color: var(--text-primary);
+}
+.fold-head::after {
+  /* 直接写字面量，不用 CSS 的 a 转义：转义序列经过任何一层字符串处理都可能
+     被当成八进制解释掉，页面上就变成一个豆腐块加一个 a。 */
+  content: "›";
+  /*
+   * **不占流。** 当成 flex 子项时它占掉 11.5px（gap 6 + 字形 5.5），而这一格
+   * 在 opacity 为 0 时不画：同一列里正文和读数条切在列边界上，折叠行却
+   * 切在往里 11.5px 的地方，三种文本三条右边界，那道空白看着像行尾有一块
+   * 看不见的元素。
+   *
+   * 不要改回 flex 子项，也不要改成 `display: none` + hover 时才显示——后者
+   * 会让鼠标划过时整行文字横挪 11.5px。绝对定位两头都占：不占位，也不重排。
+   * 代价是 hover / 展开时它压在行尾那 5.5px 上，压住的恰好是省略号，或是
+   * 已经被切掉一半的那个字。
+   *
+   * `-1px` 是视觉居中的微调。展开态那条规则必须把这个位移一并写上，
+   * 只写 `rotate(90deg)` 会把它整个覆掉，箭头当场掉半行。 */
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(calc(-50% - 1px));
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+  transition:
+    transform 0.15s,
+    opacity 0.15s;
+}
+.fold-head:hover::after,
+.fold-head:focus-visible::after {
+  opacity: 1;
+}
+.fold[open] > .fold-head::after {
+  transform: translateY(calc(-50% - 1px)) rotate(90deg);
+  opacity: 1;
+}
+
+/* 唯一的文本槽：动作名 / 状态字 / 目标 / 增删行数都在里面，按这个顺序排。
+   **只有目标那一格会被截**——它是唯一长度不定的；别的都短且定长，
+   各截各的会出现两个省略号。 */
+.fold-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+.fold-label {
+  flex: none;
+  white-space: nowrap;
+}
+.fold-word {
+  flex: none;
+  color: var(--danger);
+}
+/* **不加 opacity。** 蒙一层半透明会让失败行里「执行命令失败」和后面那段命令预览
+   同为 --danger 却显出两种深浅。要淡就把 token 定成淡的，不要在个别元素上再蒙。
+   槽里唯一会被截的就是它——路径和命令都可能很长。 */
+.fold-target {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 改了多少行，紧跟在目标后面、不收缩。
+   **这个类不能叫 `.fold-diff`**：那个名字被展开体里的 diff 代码块占着
+   （带内边距、灰底、260px 上限），同名的后果是这两个数被套上代码块的壳——
+   行尾长出一个灰盒子、整行被撑高，而 CSS 不会为此报任何错。 */
+.fold-delta {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.fold-add {
+  color: var(--success);
+}
+.fold-del {
+  color: var(--danger);
+}
+.fold.failed > .fold-head {
+  color: var(--danger);
+}
+
+/* 思考这类背景信息压暗一档，hover 恢复。 */
+.fold-dim > .fold-head {
+  opacity: 0.5;
+}
+.fold-dim > .fold-head:hover {
+  opacity: 0.8;
+}
+
+.fold-body {
+  min-width: 0;
+  max-width: 100%;
+  margin: 4px 0 4px 10px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+  overflow-x: auto;
+}
+/* 参数表：键窄值宽，值可换行。它回答的是「这一步带了什么参数」，
+   而那正是标题行放不下的部分。 */
+.args-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: 6px;
+  font-size: var(--fs-xs);
+}
+.args-table th,
+.args-table td {
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+.args-table th {
+  width: 1%;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+.args-table td {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* 展开体里的三种块，形状统一：等宽、11px、灰底、可滚。 */
+.fold-code,
+.fold-out {
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  max-height: 260px;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* 只用红字，不铺红底。底纹会把这一块整体推到前景，而失败的是**其中一步**，
+   不是整条会话——红字已经足够指出是哪一行。 */
+.fold-out.err {
+  color: var(--danger);
+}
+
+/* 工具读取到的图片是结果正文，不是附件 chip，也不藏进工具折叠。
+   原比例完整展示；大图限制在会话列内，长图允许自然向下延伸。 */
+.tool-images {
+  display: grid;
+  gap: var(--s-2);
+  width: 100%;
+  min-width: 0;
+  margin: 2px 0 6px;
+}
+.tool-images img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 560px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+  object-fit: contain;
+}
+
+/* 展开体里的待办清单。行的样式由 .todo-* 那套负责（面板和这里同一个组件），
+   这里只给它一点内边距——不给的话清单会贴着折叠卡的左边框。 */
+.fold-todos {
+  padding: var(--s-1) var(--s-2) var(--s-2);
+}
+
+/* 分隔线：同一个展开体里两格之间的界，1px 极浅，不是边框也不是留白。 */
+.fold-divider {
+  height: 1px;
+  margin: 6px 0;
+  background: var(--border-subtle);
+}
+
+/* 「输出」这类小标签，压在结果块上方。 */
+.fold-tag {
+  margin-bottom: 3px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* 编辑动作的红绿两块。看一次改动最快的方式是看那两行，不是读一句摘要。 */
+.fold-diff {
+  margin: 0 0 6px;
+  padding: var(--s-2) var(--s-3);
+  max-height: 260px;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fold-diff .del {
+  display: block;
+  color: var(--danger);
+  background: var(--diff-del-bg);
+}
+.fold-diff .add {
+  display: block;
+  color: var(--success);
+  background: var(--diff-add-bg);
+}
+.fold-pre {
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/*
+ * 运行中的中途输出。**高度固定，不随输出增长。**
+ *
+ * 跟着命令持续长高的话，就是 `.fold` 那条注释记的「会话流上下跳」，
+ * 而这次是命令跑多久跳多久——一次 `npm test` 五十秒。
+ * 八行够看出它在动，又不至于把一屏占掉一半；行数用自己的字号行高算，
+ * 改字号不用回来改这里。
+ */
+.fold-live {
+  margin: 0;
+  height: calc(8 * 1.5 * var(--fs-xs));
+  overflow-y: auto;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 组内成员：同样一条左竖线，比展开体少一点内边距。 */
+.fold-group {
+  min-width: 0;
+  max-width: 100%;
+}
+.fold-group .fold {
+  margin: 2px 0;
+}
+
+/* 没有 run 收尾条可挂的那些错误（没配 key、档案解析失败）。
+   **自带一整条规则，不与 .notice-card 共用选择器**：两者形状确实像，
+   共用的代价是删掉其中一个时把另一个的底色、内边距、圆角一起带走，
+   而 CSS 不会为此报任何错。
+   `pre-wrap`：正文可能带第二行（配置文件路径），压成一行就看不出路径在哪。 */
+.error-card {
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 指令被拒绝的回执：比错误轻，但必须看得见——静默吞掉正是要修的问题 */
+.notice-card {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+.notice-card span {
+  flex: 1;
+}
+
+/* 卡片内的次级按钮：不抢视觉，但确实可点 */
+.ghost-btn {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+.ghost-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* 压缩事件：与折叠行同一列同一号字，失败时才醒目。
+ *
+ * 不要改成居中：会话流里所有过程记录都靠左对齐在同一条竖线上，居中的那一条
+ * 会被读成另一类条目。 */
+.compaction {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 2px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+.compaction.failed {
+  color: var(--danger);
+}
+
+/* ── 运行读数条 ──
+ *
+ * 这是「这一轮花了多少」的唯一落点（输入区那份重复的金额已经删掉）。
+ * 左边五格 8×8 的星河方块条负责「还在不在跑」——文字变化在余光里看不出来，动效能。
+ * 跑完不是把它藏掉，而是暂停动画并压暗：读数要留在对应的那一轮下面。
+ */
+.run-strip {
+  display: grid;
+  grid-template-columns: 56px minmax(0, max-content);
+  align-items: center;
+  column-gap: 7px;
+  min-height: 16px;
+  margin: 7px 0 2px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 末尾那条不带自己的下外边距：底部留白由 `.transcript-inner` 统一给，
+   而那段留白是按「缝 + 整轮状态条 + 缝」算的。这 2px 叠上去，状态条上面
+   那道缝就比下面宽 2px。 */
+.transcript-inner > .run-strip:last-child {
+  margin-bottom: 0;
+}
+
+/*
+ * 还在跑的那一条**没有自己的定位规则**，它就是流里的最后一条内容。
+ *
+ * 不要再往它身上加 `position: sticky` / `margin-top: auto` / 自带的下内边距。
+ * 那三样是同一类毛病：读数条被钉在屏幕底边，而滚动位置仍停在
+ * 离底两百多像素——粘住的只是这一条，新来的正文还在视口下面看不见（实测数据写在
+ * `Transcript.tsx` 的 `onScroll` 上面）。
+ *
+ * 「内容长了不把它顶出视口」由那边的贴底跟随负责；它离输入框那段固定距离由
+ * `.transcript-inner` 的下内边距给。位置的事归 JS，留白的事归 CSS，不要换手。
+ */
+
+/*
+ * 五格 8×8 的方块，颜色一格接一格加深再退回去，格子里嵌白色星点。
+ *
+ * 每格是独立元素，不是一个元素靠遮罩切出来的：遮罩只有一个 `mask-size`，
+ * 五格只能同时变，扫不出一格接一格。
+ *
+ * **底色是纯色，深浅由动画逐格改色给。** 底色排成左浅右深的固定梯度时，
+ * 最左那格 `#ddd6fe` 已经贴着白底，动画再怎么改它都动不了多少，左半边等于没有动效。
+ * 跑完那条静止梯度是另一回事，见下面 `.run-strip.done`。
+ *
+ * 每格的星点按 `--x` 往左挪自己那一段，五格连起来是同一条星河穿过缝隙。
+ * 改格宽或缝宽时 `--x` 的 12px 要跟着改（格宽 + 缝宽）。
+ *
+ * 高度取偶数：这一格在 16px 高的行里居中，7px 会落在 4.5px 上，读数条随正文
+ * 流动时那半像素每帧朝不同方向取整，方块相对文字上下跳。
+ */
+.run-galaxy {
+  display: flex;
+  gap: 4px;
+  height: 8px;
+}
+.run-galaxy > span {
+  --x: calc(var(--i) * 12px);
+  position: relative;
+  overflow: hidden;
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: #ede9fe;
+  /* 必须 `linear`。缓动函数是按相邻两个关键帧算的，六个色站就顿六次，
+     颜色走走停停。 */
+  animation: run-blocks 1.8s linear infinite;
+  animation-delay: calc(var(--i) * 0.18s);
+}
+/*
+ * `--i` 是这一格的序号：决定它取整条星河的哪一段、动画错开多少。
+ *
+ * 星点数逐格递增 1 1 2 2 3（左疏右密）：每格的星点贴图就是格子本身（8×8），
+ * 一块贴图里画了几颗就永远看得见几颗——**贴图宽必须等于格宽**，
+ * 宽了就会随流动时多时少，那样数不出递减。
+ */
+.run-galaxy > span:nth-child(1) {
+  --i: 0;
+}
+.run-galaxy > span:nth-child(2) {
+  --i: 1;
+}
+.run-galaxy > span:nth-child(3) {
+  --i: 2;
+}
+.run-galaxy > span:nth-child(4) {
+  --i: 3;
+}
+.run-galaxy > span:nth-child(5) {
+  --i: 4;
+}
+/*
+ * 走的是四个色站，不是同一个紫的明暗——明暗只有深浅两头，中间几档分不出来，
+ * 五格读成两块。四档整体比 `.run-strip.done` 那条静止梯度淡一级，
+ * 档与档的间距不变：**要调深浅就四档一起挪，单挪一两档会把层级压没。**
+ *
+ * **错开量必须是周期的十分之一，且加深段占四成周期。** 五格正好铺满加深段，
+ * 深的那一格往右走、后面拖一条依次变浅的尾；错开量再大，头尾接不上，
+ * 条上会同时出现两处深的。
+ *
+ * 六成周期是静息，五格全停在最浅那一档——一鼓一息，跟左栏会话行的 `.conv-run`
+ * 同一个节奏（那边是纯色改透明度，这边是走色站）。没有静息段的话整条一直在动，
+ * 反而看不出在动。
+ */
+@keyframes run-blocks {
+  0%,
+  60%,
+  100% {
+    background-color: #ede9fe;
+  }
+  10% {
+    background-color: #c4b5fd;
+  }
+  20% {
+    background-color: #8b5cf6;
+  }
+  30% {
+    background-color: #6d28d9;
+  }
+  40% {
+    background-color: #8b5cf6;
+  }
+  50% {
+    background-color: #c4b5fd;
+  }
+}
+.run-galaxy > span::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-repeat: repeat;
+  background-size: 8px 8px;
+  background-position: calc(var(--x) * -1) 0;
+  animation: run-stars 2.1s linear infinite;
+}
+.run-galaxy > span:nth-child(1)::before {
+  background-image: radial-gradient(
+    circle at 4px 4.2px,
+    rgba(255, 255, 255, 0.92) 0 0.6px,
+    transparent 0.95px
+  );
+}
+.run-galaxy > span:nth-child(2)::before {
+  background-image: radial-gradient(
+    circle at 2.6px 5.4px,
+    rgba(255, 255, 255, 0.93) 0 0.6px,
+    transparent 0.95px
+  );
+}
+.run-galaxy > span:nth-child(3)::before {
+  background-image:
+    radial-gradient(circle at 2.7px 5.5px, rgba(255, 255, 255, 0.95) 0 0.6px, transparent 0.95px),
+    radial-gradient(circle at 6.1px 2.5px, rgba(250, 249, 255, 0.9) 0 0.55px, transparent 0.9px);
+}
+.run-galaxy > span:nth-child(4)::before {
+  background-image:
+    radial-gradient(circle at 2.1px 6.2px, rgba(255, 255, 255, 0.95) 0 0.6px, transparent 0.95px),
+    radial-gradient(circle at 5.6px 2.4px, rgba(250, 249, 255, 0.9) 0 0.55px, transparent 0.9px);
+}
+.run-galaxy > span:nth-child(5)::before {
+  background-image:
+    radial-gradient(circle at 2.3px 2.2px, rgba(255, 255, 255, 0.96) 0 0.65px, transparent 1px),
+    radial-gradient(circle at 4.4px 5.9px, rgba(250, 249, 255, 0.92) 0 0.55px, transparent 0.9px),
+    radial-gradient(circle at 6.8px 3.4px, rgba(244, 242, 255, 0.9) 0 0.6px, transparent 0.95px);
+}
+/* 跑完停成一条由浅入深的静止梯度——和跑着时那个纯色底不是同一种表达：
+   那条梯度不需要有变暗的余地，它不动。 */
+.run-strip.done .run-galaxy {
+  opacity: 0.58;
+}
+.run-strip.done .run-galaxy > span {
+  background:
+    linear-gradient(90deg, #ddd6fe 0%, #a78bfa 30%, #7c3aed 62%, #5b21b6 100%) calc(var(--x) * -1) 0
+    / 56px 8px;
+  opacity: 1;
+  animation: none;
+}
+.run-strip.done .run-galaxy > span::before {
+  animation-play-state: paused;
+}
+/* 位移量取贴图宽的整数倍（3 × 8px），不整除的话每圈接缝处星点会跳一下。 */
+@keyframes run-stars {
+  to {
+    background-position: calc(var(--x) * -1 + 24px) 0;
+  }
+}
+
+.run-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.run-metric {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+/* 耗时预留 ch 位宽：配合固定一位小数与 tabular-nums，秒数逐跳时右侧读数零位移。 */
+.run-elapsed {
+  min-width: 4.5ch;
+}
+.run-cost {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+/* 非正常停止的原因用警告色——它比任何读数都重要，但排在末位（见 RunStatusBar）：
+   排在最前会把后面几格读数整体右推，出错的那一轮就和正常的那些轮对不齐。 */
+.run-strip.abnormal
+/* 跑着的时候这一格说「在干什么」，跑完说「为什么停」——同一个位置、同一种语义，
+   所以和 .run-reason 一个样式。 */
+.run-live {
+  color: var(--text-tertiary);
+}
+/* 不加粗：这一行是读数条，其余几格都是常规字重，只有它粗一档会读成标题。
+   它的显眼由颜色负责，不需要再叠一层字重。 */
+.run-reason {
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+/* 关掉动效时不留一条忽明忽暗的虚线：五格恒定半亮，仍然说明「这一轮在跑」。 */
+@media (prefers-reduced-motion: reduce) {
+  .run-galaxy > span,
+  .run-galaxy > span::before {
+    animation: none;
+  }
+  .run-galaxy > span {
+    opacity: 0.5;
+  }
+}
+
+/* ── 编排图卡 ──
+ *
+ * 一张按依赖分层的图：同一层并排（它们真的在并行跑），层与层之间一条竖线。
+ * **不画箭头**——节点一多，箭头会把图糊成一团线，而「谁等谁」分层已经说清了。
+ *
+ * 卡本身不围盒子，形状与折叠体一致：这一列里唯一的实心色块要留给别处。 */
+.wf-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--s-2) 0;
+  padding: var(--s-3) var(--s-4) var(--s-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+.wf-card.failed {
+  border-color: var(--danger-soft);
+}
+/* 目标一行，压一档灰：图上每个节点说的是「谁做什么」，这一行说的是「为了什么」。
+   **只给一行**：它是这张图的名字，不是任务书；长了截断，展开体里有全文。 */
+.wf-goal {
+  margin-bottom: var(--s-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+/* 图本体。层竖着排，层间那段空白是留给连线的——连线是绝对定位的 SVG，
+   不占布局，间距小了折线就贴着方块走。 */
+.wf-graph {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+/* 只派了一件事时三格横着摆：竖排要占三行约 180px，横排一行 44px，
+   而三格加两段间距约 600px——`.transcript-inner` 是 760px 宽，卡内放得下。 */
+.wf-graph.across {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+}
+/* 连线。`overflow: visible` 是必需的：折线的横段可能落在盒子边界上。 */
+.wf-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.wf-edges path {
+  fill: none;
+  stroke: var(--border-default);
+  stroke-width: 1;
+}
+/* 走向一个正在跑的节点的那几段线在流动：这张图上「进程走到哪了」就靠它。
+   位移必须等于一个虚线周期（4 + 4），否则每圈接不上，看着像抖一下。
+   必须 `linear`：缓动会让它走走停停，读起来像卡住了。 */
+.wf-edges path.live {
+  stroke: var(--accent);
+  stroke-dasharray: 4 4;
+  animation: wf-edge 0.7s linear infinite;
+}
+@keyframes wf-edge {
+  to {
+    stroke-dashoffset: -8;
+  }
+}
+/* 关掉动效时线停下，仍是那串虚线：它说的是「这一段在跑」，不是装饰。 */
+@media (prefers-reduced-motion: reduce) {
+  .wf-edges path.live {
+    animation: none;
+  }
+}
+/* 同一层的节点并排且居中：它们真的在并行跑，左对齐会让右边空出一大片。 */
+.wf-layer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-3);
+}
+/* 一个节点：点开它那条子会话。状态只走底色与边框，不加图标——
+   一排小图标读起来像一排开关，而这里每个节点只有「点开」这一个动作。
+   外部 CLI 节点没有子会话，那种 disabled。 */
+.wf-node {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /*
+   * **所有节点等宽，这一条不是审美是几何。**
+   *
+   * 一层是 `justify-content: center`，居中的是整行不是行里那个中间的节点：
+   * 中间节点的中线等于容器中线，只在它左右两边等宽时才成立。宽度跟着内容走的话，
+   * 耗时多一位数字（5.5s → 53.0s）就让那一层的中线偏出去几个像素，
+   * 因此上面下来的竖线和下面进节点的竖线错开一截，看起来像线断了。
+   */
+  width: 160px;
+  max-width: 100%;
+  padding: 6px var(--s-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.wf-node:not(.session):not(:disabled):hover {
+  background: var(--bg-hover);
+}
+.wf-node:disabled {
+  cursor: default;
+}
+.wf-node.working,
+.wf-node.spawned {
+  border-color: var(--accent);
+}
+.wf-node.session.waiting_review {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wf-node.done {
+  background: var(--bg-inset);
+}
+.wf-node.failed {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+/* 等着跑的那些压暗：它们在图上是为了让人看见全貌，不是当前的焦点。 */
+.wf-node.waiting,
+.wf-node.skipped {
+  opacity: 0.5;
+}
+/* 两端那两格是这条会话自己：交出去、收回来。
+   虚线边框把「这一格点不开」说在形上，不靠一句文案。
+   宽度跟着内容——它各自独占一层，中线本来就是容器中线，不受等宽那条几何约束。 */
+.wf-node.session {
+  width: auto;
+  border-style: dashed;
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+  cursor: default;
+}
+/* 主行：节点 id。一张图里区分谁是谁的就是它，所以它是主的。 */
+.wf-node-name {
+  max-width: 100%;
+  font-weight: 500;
+}
+/* 次行：执行者 + 耗时。同一张图里常常四个节点都是同一个执行者，压一档。 */
+.wf-node-who {
+  display: flex;
+  gap: var(--s-2);
+  align-items: baseline;
+  max-width: 100%;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+/* 耗时只在跑完之后有。等宽数字：一列节点的耗时要能竖着比。 */
+.wf-node-time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+/* 失败原因。图上那圈红边说的是「失败了」，这一行说的是为什么，
+   所以它不截断——截断之后剩下的半句话答不了那个问题。 */
+.wf-error {
+  margin-top: var(--s-3);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}

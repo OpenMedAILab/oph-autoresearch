@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "qywork 桌面外壳所需的最小权限集。这里只授给 WebView 里的 JS——Rust 侧调用不经这层 ACL，所以能删的都删了，见 README 段注释。",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}

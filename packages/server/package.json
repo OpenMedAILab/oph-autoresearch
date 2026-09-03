@@ -1,0 +1,20 @@
+{
+  "name": "@qywork/server",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@qywork/agent": "workspace:*",
+    "@qywork/ai": "workspace:*",
+    "@qywork/core": "workspace:*",
+    "@qywork/mcp": "workspace:*",
+    "@qywork/plugins": "workspace:*",
+    "@qywork/runtime": "workspace:*",
+    "@qywork/store": "workspace:*",
+    "@qywork/team": "workspace:*",
+    "@qywork/tools": "workspace:*"
+  }
+}

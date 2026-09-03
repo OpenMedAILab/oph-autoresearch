@@ -1,0 +1,1278 @@
+/* 右侧面板：文件树、预览、变更记录。
+ *
+ * 由 `../app.css` 按固定顺序引入——**顺序即层叠**，不要单独 import 这个文件。 */
+
+/* ── 右侧面板 ──
+ *
+ * 它在标题栏**下面**那一行，和会话区并排——不是从窗口顶端整列切下来。
+ * 后者会把顶栏截短，窗口按钮被挤进窗口中央。
+ *
+ * 底色跟会话区一致：两者是同一张纸的两栏，中间只需要一条分隔线。 */
+.side-panel {
+  grid-column: 3;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-app);
+  /* 拖拽把手按它定位。 */
+  position: relative;
+}
+
+/*
+ * 拖宽用的把手：压在左边框上，12px 的命中区覆盖边线两侧。
+ *
+ * 分隔线由面板边框绘制，把手只在 hover、键盘焦点和拖动时加深。
+ */
+.panel-grip {
+  position: absolute;
+  left: -6px;
+  top: 0;
+  bottom: 0;
+  z-index: 20;
+  width: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: col-resize;
+  touch-action: none;
+}
+.panel-grip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  background: transparent;
+}
+.panel-grip:hover::after,
+.panel-grip:focus-visible::after,
+.panel-grip:active::after {
+  background: var(--accent);
+}
+
+/* 标签行不再顶到窗口上沿，安全区由顶栏那一行占掉了，这里不用再让。
+ *
+ * 底色比面板正文低一档：这条横带是「几页纸的上沿」，选中那一格换回正文底色，
+ * 因此它和下面的内容连成同一张。`align-items: stretch` 是这套的前提——标签
+ * 必须自己撑满整条横带，缩在中间的话「连成一张」无从谈起。
+ * 也因此**左右内距归零**：内距改由标签自己带，否则第一格和横带左沿之间会
+ * 露出一段和正文不同色的缝。 */
+.side-head {
+  display: flex;
+  align-items: stretch;
+  height: var(--header-h);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+  flex: none;
+}
+
+/* 页签条：固定的那几格 + 可多开的那些页。
+   开多了横向滚，**不换行**：这条横带的高度是 `--header-h`，换行会把它顶开、
+   把下面的内容整块推下去。滚动条不画——它只有一行高，画出来占掉的正是文字的地方；
+   普通鼠标的纵向滚轮由 `SidePanel` 换成横向位移。 */
+.side-tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.side-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * 浏览器式页签：选中靠**顶上那条线**加换回正文底色，不靠一块圆角高亮。
+ *
+ * 圆角高亮读起来是「一颗被按下去的按钮」，而这几格是并排的页——形状要说的是
+ * 「现在翻开的是这一页」。方角是同一件事的另一半：圆角一上，页签和它下面的
+ * 内容之间就断开了，选中态白给。
+ */
+.side-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 0 var(--s-3);
+  border-radius: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+/* 相邻两格之间一条短竖线，上下各留 8px——不留的话它和横带的下边框接上，
+   几格看着像被框成了一排格子。 */
+.side-tab + .side-tab::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--s-2);
+  bottom: var(--s-2);
+  width: 1px;
+  background: var(--border-subtle);
+}
+/* 选中那一格两侧不画：它的底色已经和邻居不同，再补一条线等于把翻开的这一页
+   又框回一个盒子里。 */
+.side-tab.active::before,
+.side-tab.active + .side-tab::before {
+  display: none;
+}
+/* 选中态不吃 hover 底色：那层半透明会把它压回横带的灰，指针一划过去就像
+   选中丢了。 */
+.side-tab:not(.active):hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+/*
+ * 选中态三件事：顶上 2px 的线、换回正文底色、把横带的下边框在这一格盖掉。
+ *
+ * 第三件用向下的 box-shadow，不用 `margin-bottom: -1px`——负外边距会把这一格
+ * 整体往下拽 1px，各格的文字基线随之错开一档。
+ * 线用 `--text-primary` 而不是 `--accent`：这条横带上已经有底色在说「选中」，
+ * 再上一个彩色就是第二处彩。
+ */
+.side-tab.active {
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-weight: 500;
+  box-shadow:
+    inset 0 2px 0 var(--text-primary),
+    0 1px 0 var(--bg-app);
+}
+
+/* 可关掉的那些页签：名字一颗按钮、× 一颗按钮，外面套一个盒子（button 套 button
+   是非法 HTML）。选中态与 hover 仍然画在外层，所以这里只改内距——
+   `.side-tab` 那份左右各 var(--s-3) 会把 × 推到离页签右沿很远的地方。 */
+.side-tab.closable {
+  padding: 0 2px 0 0;
+  gap: 2px;
+}
+/* 名字那颗：颜色、字重跟着外层走，它只负责点击区和截断。
+   **文字要套一层 span 才截得断**：这颗是 flex 容器，直接放的文字是匿名 flex item，
+   `text-overflow` 对它不生效。 */
+.tab-name {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  max-width: 128px;
+  padding: 0 var(--s-2) 0 var(--s-3);
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: inherit;
+}
+/* × 比通用的 icon-btn 小一圈：出厂 28px 在 36px 高的横带里几乎顶满，
+   看起来像页签里嵌了一颗独立的按钮。常驻不淡入——只在 hover 时出现的话，
+   触屏上没有 hover 这一步。 */
+.tab-close {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-tertiary);
+}
+
+/* 右侧的按钮：新开预览 / 放大（/ 窄屏的关闭）。
+   它们竖直居中，**不跟着页签撑满整条**——按钮撑满会读成第六、第七个页签。 */
+.side-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  padding: 0 var(--s-2);
+}
+/* 关闭默认不出现：开合由顶栏那一个开关说了算，这里再放一颗就是同一件事的
+   第二个入口。窄屏另说——那里面板盖住了顶栏，见 utility.css。 */
+.panel-close-btn {
+  display: none;
+}
+
+/*
+ * 右侧带读数的滚动列表预留滚动条槽。
+ *
+ * 不预留的代价是：内容一超过一屏，那条 12px 的经典滚动条就地从内容宽里切走
+ * ——行被压窄、右对齐的读数（变更列表的 `+N −M`）被压进滚动条底下，而滚动条
+ * 出现/消失那一下整列还会横向跳一格。
+ *
+ * 文件树不在这里：它上面有一个固定宽度的搜索框，`stable` 会在没有滚动条时也永久
+ * 挖掉右侧 12px，导致文件选中横条明显比搜索框短。树在实际溢出时再由浏览器占槽。
+ * 用 `stable` 而不是 `stable both-edges`：下面两列都是左对齐的行，左边再留一道空槽
+ * 只是白占面板本来就不宽的横向空间。
+ */
+.change-list,
+.preview-board {
+  scrollbar-gutter: stable;
+}
+
+.side-body {
+  flex: 1;
+  /* 同 .transcript：不写 0 的话这一块会把整个面板撑破，overflow 形同虚设。 */
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 固定的那几格与可多开的那些页共用的一叠。
+   看板打开时整叠**藏起来而不卸载**（理由见 SidePanel 里那段注释），所以它需要一个
+   自己的容器——直接把 hidden 挂到 `.side-body` 上会把看板也一起藏了。 */
+.side-stack {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.side-stack.hidden {
+  display: none;
+}
+/* 可多开的那些页：**全都在 DOM 里，只有当前那一页显示。**
+   藏起来的那几页里 xterm 量不到字符宽高，`syncSize` 会自己跳过，切回来时
+   ResizeObserver 补上。**不要为了「让它们都量得到」改成绝对定位堆叠**：那样每一页
+   都在后台按整块面板的尺寸排版，开几页就是几倍的重排。 */
+.tab-pane {
+  display: none;
+  flex: 1;
+  min-height: 0;
+}
+.tab-pane.active {
+  display: flex;
+  flex-direction: column;
+}
+/* 子会话页：一条跑完的子 agent 会话的回放。会话流那些行的样式是全局的，
+   这里只负责给它一个能滚的盒子与左右留白——不套 `.transcript-inner` 的
+   760px 居中，面板本来就窄，再居中会挤成一条。 */
+.child-cv {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: var(--s-3) var(--s-4) var(--s-6);
+  overflow-y: auto;
+}
+.child-cv-todos {
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.child-cv-section-title {
+  margin-bottom: var(--s-2);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* 外部 CLI 页：一段只读的流。等宽字，长行照样折——面板本来就窄，
+   不折的话跑完之后显示的那段终态产出（一整段话）会齐刷刷跑出右边界，
+   要横着拖才看得到第二个字。 */
+.cli-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--s-3) var(--s-4);
+  overflow: auto;
+}
+.cli-out {
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 那一页的代码还在下载时的占位。**同样尺寸的空壳**，不是转圈也不是文案：
+   这一格的位置已经留好了，占位块只要把它占住（同 App.tsx 里那段）。 */
+.pane-loading {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── 新开预览看板 ──
+   长在面板正文里，不是浮层，所以这里没有定位、边框、投影那一套。
+   竖直居中：清单只有几行，顶头贴着页签会读成第二排页签。 */
+.preview-board {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 2px;
+  padding: var(--s-3) var(--s-2);
+}
+/* **行宽有上限，不跟着面板长。** 面板可以被拉宽、还能放大到大半屏，行不封顶的话
+   标签留在最左、右尾的「未接入」被推到几百像素之外，中间是一条空白——
+   眼睛要横扫过去才能把两者对上。 */
+.board-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  max-width: 420px;
+  padding: var(--s-2) var(--s-3);
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+.board-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+/* 后端还没接上的那几行：点不动，而且**看起来就点不动**。
+   只压暗不禁用的话，点下去没有任何反馈，看起来像配置错了。 */
+.board-item:disabled {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.board-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.board-tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--bg-hover);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* ── 终端 ──
+   底色与前景由 xterm 自己按主题设（见 TerminalPanel 的 applyTheme），这里只管
+   撑满与滚动。**不要在这里写 background**：写了就是第二处主题来源，
+   切主题时会出现「外框已经暗了、字符网格还白着」的一圈边。 */
+.terminal-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term-slot {
+  flex: 1;
+  min-height: 0;
+  padding: var(--s-2) var(--s-3);
+  overflow: hidden;
+}
+/* 只给宿主满高。**不要再往 `.xterm` / `.xterm-screen` 上加 `height: 100%`**：
+   那两层的高度由 xterm 按行数 × 行高自己算，强行拉满之后字符网格之外会多出
+   一块余数——而 xterm 自带的 `.xterm-viewport { background-color: #000 }`
+   正好把那块余数画成一条黑带。行数由 `fit()` 决定，容器满高就够了。 */
+.term-host {
+  height: 100%;
+}
+/* 那条黑底是 xterm 给 macOS 滚动条留的老补丁，在亮色主题下就是一条黑边。
+   透明即可：字符网格的底色由主题画在 screen 上，露出来的是面板底色。
+
+   **别在这里写 `::-webkit-scrollbar`。** xterm 6 的滚动条不是原生的，是搬过来的
+   VS Code 浮层滚动条（`.xterm-scrollable-element > .scrollbar > .slider`），
+   写在视口上的原生滚动条规则一行都不会生效。滑块颜色由 xterm 主题的
+   `scrollbarSlider*` 三档决定，默认就是前景色的 20% / 40% / 50%，和本仓的边框色
+   基本重合，所以不另外指定——多指定一次就是第二处主题来源。 */
+.term-host .xterm-viewport {
+  background-color: transparent;
+}
+/* 滚动条常驻，不淡出。
+ *
+ * xterm 6 搬的是 VS Code 那套浮层滚动条，默认 `Auto`——停手 800ms 就淡到
+ * opacity 0，因此它「一会有一会没有」，而侧边这块面板正是用来来回翻历史的。
+ *
+ * **判据必须是 `.fade` 而不是「一律常驻」。** 实测：有回滚时滑块 78px，
+ * 无条件常驻看着正好；但**没有回滚可翻**时滑块被算成整条轨道（574px），
+ * 会画出一条从头到尾的灰块——那是在说一件不成立的事。而 `.fade` 只在
+ * 「本来该显示、现在正在淡出」时才挂上，没内容可滚的那种不带它。
+ */
+.term-host .xterm-scrollable-element > .scrollbar.vertical.fade,
+.term-host .xterm-scrollable-element > .scrollbar.vertical.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.term-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+/* ── 浏览器预览 ── */
+
+.web-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 地址栏。**高度写死，不由内容撑**（B9）：里面那颗刷新键的出没不能把下面的页面
+   顶上顶下——用户正瞄着页面里的目标。 */
+.web-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 var(--s-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.web-url {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-xs);
+  background: var(--bg-app);
+  font-size: var(--fs-sm);
+}
+/* **不给它 background。** 被预览的页面自己画底色，浏览器对没画底色的文档默认铺白；
+   这里补一层的话，深色主题下会把那种页面的黑字压在深色底上，直接读不出来。
+   iframe 出厂带一圈边框，去掉——这块地方左右已经有面板的分隔线。 */
+.web-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+}
+
+/* ── 文件：内容 + 树 ── */
+
+/*
+ * 一块面板里两栏：**树在左，文件内容在右**。
+ *
+ * 树宽度固定，内容占剩下的全部——树是索引，正文才是要读的部分。整块面板的宽度
+ * 由用户拖左边沿改（`.panel-grip`），两块并排必然要求这个。
+ */
+.file-browser {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: row;
+}
+.file-tree-col {
+  flex: none;
+  width: 208px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* 没开文件时树占满整块面板——固定 208px 会在左边留一大片空白。 */
+.file-tree-col:only-child {
+  flex: 1;
+  width: auto;
+}
+
+/*
+ * 行密排，**不留行间距**。
+ *
+ * 这一列是索引，不是正文：几十行文件名之间各留 2px，一屏就少装五六行，而
+ * 「一眼扫完一个目录」正是它存在的理由。行高压到 20px（12px 字 + 1.5 行距 +
+ * 上下 1px），和资源管理器一档。
+ */
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* 与左侧会话列表一致：相邻状态底色之间露出 2px 背景，不粘成一整块。 */
+  gap: 2px;
+}
+/* li 里装的是「本行 + 展开后的子树」，所以它自己也得排成一列。 */
+.tree li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* 只给仍含目录的分支画层级线。纯文件列表已经是末级，继续拉线会像多出一层。 */
+.tree:not(.tree-top):not(.tree-terminal) {
+  position: relative;
+}
+.tree:not(.tree-top):not(.tree-terminal)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--tree-guide-left);
+  width: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+}
+/* 树自己滚，根目录行和搜索框不跟着走——它们是这一列的常驻头部。 */
+.tree.tree-top {
+  flex: 1;
+  overflow-y: auto;
+  /* 选中横条与上方搜索框的 6px 外边界完全共线。 */
+  padding: 0 6px var(--s-2);
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  /* 每行只有一个 13px 主图标位；图标与名称保持 4px。 */
+  gap: 4px;
+  width: 100%;
+  /* 左内距被行内样式按层级覆盖（`depth * 6 + 2`）。初始图标贴近搜索框左边界，
+     后续每一级最左侧的可见图标只递进 6px。 */
+  padding: 1px var(--s-2);
+  border-radius: var(--r-xs);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  text-align: left;
+}
+.tree-item svg {
+  flex: none;
+}
+/*
+ * 目录用箭头，文件用类型图标，两者共用一个 13px 主图标位。常规目录不再叠加
+ * 文件夹图标，否则同一行会多出一列，层级起点与名称列都会失去连续关系。
+ */
+.tree-chevron-slot,
+.tree-node-icon,
+.file-type-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+}
+.file-type-icon {
+  /* 类型靠字形区分，颜色保持和原文件图标一致的中性灰。 */
+  --file-icon-tone: var(--text-tertiary);
+  color: var(--file-icon-tone);
+}
+.file-type-icon > span {
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--file-icon-tone) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--file-icon-tone) 24%, transparent);
+  font-family: var(--font-ui);
+  font-size: 6px;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: -0.35px;
+}
+.file-type-icon[data-file-kind="json"] > span,
+.file-type-icon[data-file-kind="style"] > span,
+.file-type-icon[data-file-kind="markup"] > span {
+  background: transparent;
+  box-shadow: none;
+  font-size: 8px;
+}
+.tree-item:not(.selected):hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+/*
+ * 选中 = **最后点过的那一行**（`FileBrowser` 的 `selected`），一直亮着。
+ *
+ * 底色是 `--bg-active`，**和左栏会话选中的那一档是同一个灰**——「点中的那一行」
+ * 全应用一种灰，不为这棵树另调一档（更深的那档实测偏重，整列读起来发灰）。
+ */
+.tree-item.selected {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+/*
+ * 根目录行：项目名 + 四颗按钮（新建文件 / 新建文件夹 / 刷新 / 全部折叠）。
+ *
+ * **四颗按钮长在这一行上，不另起一条工具条。** 单独一条细带子会在搜索框和树之间
+ * 插一层横条，而这四颗做的事全都发生在这个根之下。
+ *
+ * 根只负责展开和操作，不参与文件/目录选中；hover 只由整行容器画一层。
+ */
+.tree-root {
+  flex: none;
+  display: flex;
+  align-items: center;
+  /* 与搜索框同为 6px 外边界，灰色横条和输入框严格等宽。 */
+  margin: 0 6px;
+  border-radius: var(--r-xs);
+}
+.tree-root:hover {
+  background: var(--bg-hover);
+}
+.tree-root-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 11px 箭头在 13px 槽内还自带路径留白；这里 2px 后，实际箭头线条距左边约 5.6px，
+     与右侧 14px 折叠图标在 20px 按钮中的约 5.8px 视觉留白对称。 */
+  padding-left: 2px;
+}
+/* `.tree-item:not(.selected):hover` 会给标题按钮再画一层，所以带上根容器提升优先级：
+   标题自身透明，只保留 `.tree-root:hover` 那一层完整灰底。 */
+.tree-root .tree-root-name:hover {
+  background: none;
+  color: var(--text-secondary);
+}
+.tree-root-acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+/* 四颗树操作与 20px 的文件行同高；全局 28px 命中盒放在这里会把图标组撑散。 */
+.tree-root-acts .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+
+.tree-search {
+  flex: none;
+  margin: 6px 6px 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-xs);
+  background: var(--bg-app);
+  font-size: var(--fs-sm);
+}
+
+/*
+ * 就地输入名字的那一行（新建、改名共用）。
+ *
+ * 它**占据树里的一行**，缩进和同层的行一致：建在哪里，输入框就出现在哪里。
+ * 错误正文接在输入框后面，不另开提示条——那会把下面的树整体推下去。
+ */
+.tree-edit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.tree-edit-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 1px var(--s-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-xs);
+  background: var(--bg-app);
+  font-size: var(--fs-sm);
+}
+.tree-edit-error {
+  flex: 0 1 auto;
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
+/*
+ * 右键菜单。**自带一整条规则**，不与项目行那个菜单共用选择器（B8）——共用过一次，
+ * 代价是删掉其中一个浮层时把另一个的定位、边框、底色、投影一起带走。
+ *
+ * `position: fixed` + 指针坐标：它跟着鼠标，不跟着某个容器。
+ */
+.tree-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 176px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-md);
+}
+.tree-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px var(--s-2);
+  border-radius: var(--r-xs);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+.tree-menu-item:hover {
+  background: var(--bg-hover);
+}
+.tree-menu-item.danger {
+  color: var(--danger);
+}
+.tree-menu-sep {
+  margin: 4px 2px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* 搜索命中：扁平一列，整条路径可见（树里显示的是名字，这里必须是路径，
+   否则五个同名文件分不出哪个是哪个）。 */
+.tree-hits {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 6px var(--s-2);
+}
+/* 树上方的一句话：搜索没命中、命中过多、树取不回来。
+   横排是给最后那一种用的——它后面跟着一颗「重试」，不排成一行的话按钮会掉到
+   下一行的最左边，看着像和这句话没关系。 */
+.tree-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  padding: 4px var(--s-3);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* ── 打开的文件 ──
+ *
+ * 这一族样式给的是**主内容区**那块文件视图（`FileView`），不是这块面板；
+ * 它留在这个文件里是因为 `.preview-note` / `.preview-loading` 同时被这块面板与
+ * 配对面板用着，把家族拆到两个文件反而更难找。
+ *
+ * `.preview` 是 `.main` 这个纵向 flex 的一个子项，和输入区上下排：
+ * **必须是 `flex: 1` + `min-height: 0`**，写 `height: 100%` 会把输入区顶出窗口。
+ */
+.preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* 它和树是横向并排的 flex 兄弟：不写 0 的话里面的代码块能把它顶得比面板还宽。 */
+  min-width: 0;
+}
+/* 分隔线画在内容那块的左沿——它只在开着文件时存在，所以不会出现一条
+   孤零零贴在面板边上的线。
+   **必须排在上面那条之后**：选择器更具体，写在前面的话「后面的覆盖前面的」这条
+   在读的人眼里就不成立了（biome 的 `noDescendingSpecificity` 拦的正是这个形状）。 */
+.file-browser > .file-tree-col + .preview {
+  border-left: 1px solid var(--border-subtle);
+}
+/*
+ * 标题条 31px，**底沿和树那一列的搜索框对齐**（搜索框 6px 上外边距 + 25px 高 = 31，
+ * 那 25 是 2+2 内距 + 上下 1px 边框 + 19px 行盒，实测出来的，别按 24 算）。
+ * 两块并排，头部不齐会读成两个错层的窗口。
+ *
+ * 高度会被里面那颗关闭键顶起来：`.icon-btn` 出厂 28px，加上下内距就是 44。
+ * 所以这里把它压到 20px——**只在这一条里压**，那个尺寸别处还在用。
+ */
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 31px;
+  padding: 0 var(--s-1) 0 var(--s-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  flex: none;
+}
+.preview-head .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+.preview-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  background: var(--bg-app);
+}
+.preview-foot {
+  flex: none;
+  padding: 4px var(--s-3);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+.preview-note {
+  padding: var(--s-6);
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.preview-loading {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 40% 100%;
+  animation: sweep 1.1s var(--ease) infinite;
+}
+@keyframes sweep {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+.preview-media {
+  display: block;
+  max-width: 100%;
+  margin: var(--s-4) auto;
+}
+.preview-audio {
+  display: block;
+  width: calc(100% - var(--s-8));
+  margin: var(--s-6) auto;
+}
+.preview-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+.code-view {
+  height: 100%;
+}
+
+/* ── 会话变更记录 ──
+ *
+ * 密度跟文件树对齐：同一块面板里的两张列表，行高不一样会被读成两套控件。
+ * 行高 20px、图标与文字 4px、行之间不留缝。 */
+.change-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* 表头固定，只有清单滚：滚走之后「一共改了多少」就看不见了。
+   高度取 31px，和文件那一页的路径条同一档——两页切来切去不跳。 */
+.change-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  flex: none;
+  height: 31px;
+  padding: 0 var(--s-3);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.change-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--s-1) 4px var(--s-2);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.change-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 1px var(--s-2);
+  border-radius: var(--r-xs);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  text-align: left;
+}
+.change-row svg {
+  flex: none;
+}
+.change-gone {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+/* 「改了几次」压暗：它是次要读数，不该和增删数抢眼。 */
+.change-times {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 展开之后：这个文件的每一次改动，按先后。
+   左缩进跟着 `.change-row` 的内边距走：8（行内边距）+ 11（折叠符号）+ 4（间距）
+   = 23 是文件图标的位置，再留 2px，竖线才不贴着符号。改行内边距时这里要跟着改。 */
+.change-edits {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0 0 0 25px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.change-edit {
+  border-left: 1px solid var(--border-subtle);
+  padding-left: var(--s-2);
+}
+.edit-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+.edit-no {
+  font-variant-numeric: tabular-nums;
+}
+/* 工具名占满中间，增删数就落在行尾——不用后代选择器去推那一段。 */
+.edit-tool {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/*
+ * 那一次的正文：编辑是红绿两段，整份写出是写进去的那份内容。
+ * **自带一条完整规则**，不与会话流里那份 diff 共用选择器——
+ * 共用过一次的代价是删掉一处把另一处的底色、边框、字号一起带走。
+ *
+ * 高度封顶后自己滚：一次改动可以是几百行，撑开的话上面那些行全被顶出视野。
+ */
+.change-body {
+  margin: 2px 0 4px;
+  padding: 4px var(--s-2);
+  max-height: 200px;
+  overflow: auto;
+  border-radius: var(--r-xs);
+  background: var(--bg-inset);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.change-body .add {
+  color: var(--success);
+}
+.change-body .del {
+  color: var(--danger);
+}
+/* 选中的行不吃 hover 底色（同文件树那条）。 */
+.change-row:not(.selected):hover {
+  background: var(--bg-hover);
+}
+/* 选中 = 文件那一页正开着它。灰与文件树、会话列表同一档。 */
+.change-row.selected {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+/* 路径占满中间，增删数钉在行尾不收缩。 */
+.change-path {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.change-delta {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.change-delta .add {
+  color: var(--success);
+}
+.change-delta .del {
+  color: var(--danger);
+}
+
+/* ── 运行 ──
+ *
+ * 三段：合计钉在顶、轮次清单独占滚动、账本入口钉在底。中间那段滚多远，
+ * 「一共多少钱」都还在眼前——同 `.change-head` 固定表头的理由。 */
+.run-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+/*
+ * **内容定宽，不跟着面板长。**
+ *
+ * 这一页是一张读数卡加一列轮次：拉宽只会把金额推到几百像素外，读一行要横扫过去。
+ * 面板可以拖宽，那是给文件页和变更页用的。
+ *
+ * 宽度取面板能拖到的最窄那一档（`--panel-min-w`，由 `App.tsx` 从 `PANEL_MIN` 写下来）：
+ * 按最窄排，任何更宽的面板都装得下，样式表里也不必再抄一个数。
+ * `max-width` 兜住窗口被挤到比它还窄的情形——那时网格给的宽度小于下限。
+ */
+.run-col {
+  flex: none;
+  width: var(--panel-min-w);
+  max-width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.run-load {
+  padding: var(--s-3);
+}
+
+/* 合计。金额跟在「本会话」右边同一行，不另起一行也不放大——它和读数卡里那六个数
+   是同一层的读数，拉成 20px 会把这块头部压成一张海报。
+   全页只有三档字号：14 给读数、12 给清单、11 给元信息与表。 */
+.run-sum {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+}
+.run-sum-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+.run-sum-scope {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.run-sum-cost {
+  margin-left: auto;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 读数卡：三列两行，格与格之间只留间距不画线——六个数本来就是一组，
+   画上格线就成了一张需要横竖对着读的表。
+   **列数钉死 3，不用 auto-fit**：面板宽度是拖出来的，auto-fit 会在某些宽度上
+   排出 4 + 2 那种缺一角的形状。 */
+.run-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s-3) var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+.run-stat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* 名字在值上面：先知道这是什么，再读数。反过来的话六个数字先糊成一片。 */
+.run-stat-label {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.run-stat-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+/* 轮次清单。**行间不画分隔线**：密度对齐同一块面板里的文件树与变更清单，
+   一行一条 hover 高亮就够，横线会把二十行切成二十格。 */
+.run-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  list-style: none;
+  margin: 0;
+  /* 右内边距为 0：金额列右缩的 12px 由预留的轨道宽单独凑出，与上面合计那行的
+     12px 右内距同线；左边这 4px 是悬停底色的让位，文字的 12px 由行内边距补齐。 */
+  padding: var(--s-1) 0 var(--s-2) var(--s-1);
+}
+/* 这一栏不画滑块，但轨道宽照留：收掉这 12px 会让金额列随行数多少左右移。
+   滑块只能设成透明，不能把轨道宽归零——`scrollbar-gutter` 预留的就是轨道宽，
+   归零后槽也跟着没了。
+   两套写法必须互斥，理由见 base.css 那段。 */
+.run-list::-webkit-scrollbar-thumb,
+.run-list::-webkit-scrollbar-thumb:hover {
+  background: transparent;
+}
+@supports not selector(::-webkit-scrollbar) {
+  .run-list {
+    scrollbar-color: transparent transparent;
+  }
+}
+/* 收起的行只有三格：什么时候、出没出事、贵不贵。模型名、步数、耗时、token
+   都在展开区——它们是选中之后才要的，印在这里就是把档案摊在目录页上。 */
+.run-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  min-height: 28px;
+  padding: 0 0 0 var(--s-2);
+  border: none;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.run-row:hover {
+  background: var(--bg-hover);
+}
+/* 不属于任何一轮的那一笔：没有展开区，所以不可点，也不给 hover。 */
+.run-row.static {
+  cursor: default;
+}
+.run-row.static:hover {
+  background: none;
+}
+/* 折叠符号那一列的占位——少了它，非轮次那几行的时间会比上下两行往左跑 18px。 */
+.run-gap {
+  flex: none;
+  width: 10px;
+}
+.run-row > svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.run-when {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+/* 模型名与步数耗时：与时间同一行，低一档字号——同一层级不等于同一份分量。
+   模型名是唯一长度不可控的一段，所以只有它可以被压缩。 */
+.run-model {
+  flex: 0 1 auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+.run-meta {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+/* **不让位**：它只有几个字，而且是这一行里唯一说「出事了」的一格，截成「模型…」
+   等于没说。这一行的压缩额度全给模型名。 */
+.run-mark {
+  flex: none;
+  white-space: nowrap;
+  padding: 0 5px;
+  border-radius: var(--r-xs);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+/* 全页唯一的彩就在这里：出事的那一轮。正常态不给绿色，命中低也不给橙色。 */
+.run-mark.bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.run-money {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 展开区。里面只有那张逐请求表。
+
+   **形状与会话流里的折叠体（`.fold-body`）一致**：一条左竖线表达从属，不围盒子。
+   同一个应用里「展开看细节」只该有一种样子；在这里砌一个圆角灰块，它就成了这一列
+   里唯一的实心色块。竖线到正文的 10px 照 `.fold-body` 取；外边距由下面那条算式定。
+
+   **左缩进 26px 是算出来的，不是描出来的**：轮次行是 8（行内边距）+ 10（折叠符号）
+   + 8（间距）= 26px 起排时间。表比这个数小就会顶在标题左边，看上去不属于这一行。
+
+   **上边不留空**：竖线从轮次行底下就起，表头紧跟着它那一行。上下各留一档的话，
+   行和表之间空出十几个像素，看着像两块不相干的内容。
+
+   横向滚的是它自己：里面只有表，滚它就是滚表。 */
+.run-detail {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 var(--s-1) 14px;
+  padding: 2px 10px 4px;
+  border-left: 2px solid var(--border-subtle);
+  overflow-x: auto;
+}
+/* 数字列右对齐并等宽。这张表是拿来和中转站后台逐行对的，位数对不齐就没法扫。
+
+   **整张表走次级灰**，和会话流折叠体里的正文一档。不给的话它继承正文色（近黑），
+   而这块面板从标题到读数全是灰的，这几十个数字就成了整列里唯一扎眼的一块。
+   表头再低一档（`--text-tertiary`），列名与账仍分得开。 */
+.run-req {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.run-req th,
+.run-req td {
+  padding: 3px 4px;
+  text-align: right;
+  white-space: nowrap;
+}
+/* 表头压在最淡一档并加粗半档：它和数据同字号同行高，不这样分层就只是又一行数字。
+   内边距与数据行同值：表头单独加高的话，它和第一行之间会比行距宽出一截。
+   横线画在表头下面，**两端与数据的两端重合**——左端落在「请求」上，
+   右端落在「结果」上；行与行之间不画线，那会把表切成格子。 */
+.run-req th {
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+/* 首末两列贴着表的两边，不再往里缩：缩了，横线两端就比数据宽出一截。 */
+.run-req th:first-child,
+.run-req td:first-child {
+  padding-left: 0;
+  text-align: left;
+  color: var(--text-tertiary);
+}
+.run-req th:last-child,
+.run-req td:last-child {
+  padding-right: 0;
+}
+/* provider 的原话长度不可控（`completed:max_output_tokens`），截断，全文留在 title 里。 */
+.run-req-out {
+  max-width: 9ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+}
+/* 账本入口。高度对齐文件页与变更页的那条横带——同一块面板里的几条横带不该各一个高。 */
+.run-ledger {
+  flex: none;
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 31px;
+  padding: 0 var(--s-3);
+  border: none;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.run-ledger:hover {
+  background: var(--bg-hover);
+}
+.run-ledger-label {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+.run-ledger-cost {
+  margin-left: auto;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.run-ledger > svg {
+  flex: none;
+  color: var(--text-tertiary);
+}

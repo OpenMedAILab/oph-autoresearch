@@ -1,0 +1,16 @@
+{
+  "name": "@qywork/tools",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@qywork/agent": "workspace:*",
+    "@qywork/ai": "workspace:*",
+    "@qywork/core": "workspace:*",
+    "@silvia-odwyer/photon-node": "0.3.4",
+    "unpdf": "^1.8.1"
+  }
+}
