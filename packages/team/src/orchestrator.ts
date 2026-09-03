@@ -440,6 +440,10 @@ export class TeamOrchestrator {
   private composePrompt(role: Role, task: string): string {
     const parts = [role.systemPrompt]
     if (this.config.rules?.shared) parts.push(this.config.rules.shared)
+    if (role.modules?.length) parts.push(`你负责的能力模块：${role.modules.join('、')}`)
+    if (role.skills?.length) {
+      parts.push(`开始执行前，先用 read_skill 依次读取这些技能：${role.skills.join('、')}`)
+    }
     parts.push(task)
     return parts.filter(Boolean).join('\n\n')
   }

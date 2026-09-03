@@ -14,7 +14,7 @@
  * 或者那家的凭证文件在。
  */
 
-import { access } from 'node:fs/promises'
+import { access, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import type { CliAgent } from './types.ts'
@@ -178,7 +178,7 @@ export async function detectClis(env: NodeJS.ProcessEnv = process.env): Promise<
   const home = homedir()
   const found: DetectedCli[] = []
   for (const k of KNOWN) {
-    const path = await resolveOnPath(k.bin, env)
+    const path = await resolveInstalledCli(k.bin, env, env === process.env)
     if (!path) continue
     found.push({
       id: k.id,
@@ -196,6 +196,53 @@ export async function detectClis(env: NodeJS.ProcessEnv = process.env): Promise<
     })
   }
   return found
+}
+
+/**
+ * 桌面程序从开始菜单启动时拿到的 PATH 可能不包含当前已安装
+ * CLI 自动刷新；Windows 的 Store/应用执行别名甚至不一定是一个可 `access()` 的文件。
+ * 因此生产探测在 PATH 之外补几处标准用户级安装目录。测试传入的隔离 env 不走补全，
+ * 避免测试机真实安装的软件混进结果。
+ */
+async function resolveInstalledCli(
+  bin: string,
+  env: NodeJS.ProcessEnv,
+  includeUserLocations: boolean,
+): Promise<string | null> {
+  const direct = await resolveOnPath(bin, env)
+  if (direct || !includeUserLocations) return direct
+
+  const home = homedir()
+  const local = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+  const roaming = env.APPDATA ?? join(home, 'AppData', 'Roaming')
+  const candidates = [
+    join(roaming, 'npm'),
+    join(home, '.local', 'bin'),
+    join(home, '.bun', 'bin'),
+    join(home, '.cargo', 'bin'),
+    join(local, 'Microsoft', 'WinGet', 'Links'),
+    join(local, 'Microsoft', 'WindowsApps'),
+  ]
+  const augmented = { ...env, PATH: candidates.join(delimiter) }
+  const standard = await resolveOnPath(bin, augmented)
+  if (standard) return standard
+
+  // Codex 桌面版自带可非交互调用的 codex.exe，但 WindowsApps 的执行别名本身
+  // 可能不可枚举。只为同名 CLI 查已安装包的资源目录，不扫描或读取任何凭证。
+  if (process.platform === 'win32' && bin === 'codex') {
+    const appRoot = join(env.ProgramFiles ?? 'C:\\Program Files', 'WindowsApps')
+    const entries = await readdir(appRoot, { withFileTypes: true }).catch(() => [])
+    const packages = entries
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('OpenAI.Codex_'))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse()
+    for (const pkg of packages) {
+      const executable = join(appRoot, pkg, 'app', 'resources', 'codex.exe')
+      if (await exists(executable)) return executable
+    }
+  }
+  return null
 }
 
 /** 按 id 取一条识别结果，给编排与工具用。没装或不认识的返回 undefined。 */
@@ -223,7 +270,9 @@ async function hasCredentials(k: KnownCli, home: string, env: NodeJS.ProcessEnv)
  * 相对名字会让子进程继承一次 PATH 查找，结果可能与这里探到的不是同一个文件。
  */
 async function resolveOnPath(bin: string, env: NodeJS.ProcessEnv): Promise<string | null> {
-  const dirs = (env.PATH ?? env.Path ?? '').split(delimiter).filter(Boolean)
+  const dirs = [...new Set([env.PATH, env.Path].filter(Boolean).join(delimiter).split(delimiter))]
+    .map((dir) => dir.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean)
   const exts =
     process.platform === 'win32'
       ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)

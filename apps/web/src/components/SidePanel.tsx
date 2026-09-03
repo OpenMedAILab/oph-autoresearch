@@ -20,6 +20,7 @@ import { clamp, diffFrom, firstString } from '../lib/step-view.ts'
 import {
   absPath,
   activePanelTab,
+  centerView,
   client,
   closePanel,
   closePanelTab,
@@ -34,6 +35,7 @@ import {
   panelWidth,
   resizePanel,
   revealWorkspace,
+  setCenterView,
   setOpenFile,
   setSidePanel,
   sidePanel,
@@ -314,6 +316,29 @@ export default function SidePanel() {
                 </button>
               )}
             </For>
+            <span class="side-tab-divider" aria-hidden="true" />
+            <button
+              class="side-tab research-tab"
+              classList={{ active: centerView() === 'workflow' }}
+              type="button"
+              aria-label="研究流程"
+              title="研究流程"
+              aria-pressed={centerView() === 'workflow'}
+              onClick={() => setCenterView('workflow')}
+            >
+              流程
+            </button>
+            <button
+              class="side-tab research-tab"
+              classList={{ active: centerView() === 'ssh' }}
+              type="button"
+              aria-label="SSH 数据"
+              title="SSH 数据"
+              aria-pressed={centerView() === 'ssh'}
+              onClick={() => setCenterView('ssh')}
+            >
+              SSH
+            </button>
             {/*
              * 可多开的那些页接在固定的那几格后面，各自带一颗 ×。
              *

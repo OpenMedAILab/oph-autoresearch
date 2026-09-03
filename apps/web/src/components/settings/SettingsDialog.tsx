@@ -23,6 +23,12 @@ const PluginsPanel = lazy(() =>
 const SchedulesPanel = lazy(() =>
   import('../SchedulesPanel.tsx').then((m) => ({ default: m.SchedulesPanel })),
 )
+const RemoteAccessSettings = lazy(() =>
+  import('./RemoteAccessSettings.tsx').then((m) => ({ default: m.RemoteAccessSettings })),
+)
+const SshSettings = lazy(() =>
+  import('./SshSettings.tsx').then((m) => ({ default: m.SshSettings })),
+)
 
 /**
  * 系统设置弹窗。左边类目、右边内容，盖在会话上面。
@@ -123,6 +129,12 @@ export function SettingsDialog() {
                     </Match>
                     <Match when={settingsPage() === 'schedules'}>
                       <SchedulesPanel />
+                    </Match>
+                    <Match when={settingsPage() === 'remote'}>
+                      <RemoteAccessSettings />
+                    </Match>
+                    <Match when={settingsPage() === 'ssh'}>
+                      <SshSettings />
                     </Match>
                   </Switch>
                 </Suspense>

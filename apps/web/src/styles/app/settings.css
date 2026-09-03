@@ -663,6 +663,21 @@ textarea.code-area::placeholder {
   border-radius: var(--r-lg);
   overflow: hidden;
 }
+.model-discovery-actions {
+  min-width: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.model-discovery-actions > span {
+  max-width: 320px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .model-row {
   padding: var(--s-2) var(--s-4);
   min-width: 0;
@@ -681,6 +696,280 @@ textarea.code-area::placeholder {
 }
 .model-row-main .icon-btn {
   margin-left: auto;
+}
+
+/* SSH：一张连接卡就是一条完整安全边界，根目录与只读开关不拆到别处。 */
+.ssh-profile-list {
+  display: grid;
+  gap: 12px;
+}
+
+.ssh-profile-card {
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+}
+
+.ssh-profile-head,
+.ssh-options {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ssh-profile-name {
+  min-width: 0;
+  flex: 1;
+  font-weight: 650;
+}
+
+.ssh-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.ssh-form-grid label,
+.ssh-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.ssh-form-grid label.wide {
+  grid-column: 1 / -1;
+}
+
+.ssh-options {
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
+.ssh-options label:first-child {
+  flex-direction: row;
+  align-items: center;
+}
+
+.ssh-profile-card + .ssh-profile-card {
+  margin-top: 0;
+}
+
+.ssh-workspace-list {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+
+.ssh-workspace-row {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 0.9fr) minmax(120px, 1.1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 8px 11px;
+}
+
+.ssh-workspace-row + .ssh-workspace-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ssh-workspace-row > svg {
+  color: var(--accent);
+}
+
+.ssh-workspace-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.ssh-workspace-main strong,
+.ssh-workspace-main code,
+.ssh-workspace-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ssh-workspace-main code,
+.ssh-workspace-path {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.settings-actions {
+  display: flex;
+  gap: var(--s-2);
+  margin-top: var(--s-4);
+}
+
+/* 远程接入：浏览器配对与 IM 通道共用一张控制面，不把每个平台做成孤立设置页。 */
+.remote-access-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.remote-access-section {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+}
+
+.remote-access-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 50px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.remote-access-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.remote-access-heading span {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.pair-inline {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 14px;
+}
+
+.pair-inline .pair-qr {
+  width: 150px;
+  flex: none;
+}
+
+.pair-inline-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.channel-catalog {
+  display: grid;
+}
+
+.channel-row + .channel-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.channel-row-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 7px 12px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.channel-row-main:hover {
+  background: var(--bg-hover);
+}
+
+.channel-row-main > span:nth-child(2) {
+  display: grid;
+  gap: 2px;
+}
+
+.channel-row-main strong {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.channel-row-main small,
+.channel-row-main em {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.channel-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.channel-status[data-state="configured"] {
+  background: var(--success);
+}
+
+.channel-status[data-state="missing_credential"] {
+  background: var(--warning);
+}
+
+.channel-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 29px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+}
+
+.channel-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.channel-form label.wide {
+  grid-column: 1 / -1;
+}
+
+.channel-form input,
+.channel-form select,
+.channel-form textarea {
+  max-width: none;
+}
+
+.channel-form .channel-enabled {
+  display: flex;
+  align-items: center;
+  justify-content: start;
+  align-self: end;
+}
+
+.channel-remove {
+  align-self: end;
+  justify-self: end;
+}
+
+.remote-access-section > .pair-hint {
+  margin: 9px 12px 11px;
+}
+
+.remote-channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.remote-channel-actions span {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.remote-channel-actions span.bad {
+  color: var(--danger);
 }
 .model-id {
   flex: none;

@@ -37,6 +37,8 @@ const [writeError, setWriteError] = createSignal<string | null>(null)
 const [busy, setBusy] = createSignal(false)
 
 let started = false
+let queuedWrites = 0
+let writeQueue: Promise<void> = Promise.resolve()
 
 export const config = () => payload()?.config ?? null
 export const configPath = () => payload()?.path ?? ''
@@ -93,17 +95,30 @@ export async function replaceConfig(
   if (!optimistic) return
   // 乐观：控件先反映用户的操作，不然点一下要等一个来回才动。
   setPayload({ ...prev, config: optimistic })
+  queuedWrites++
   setBusy(true)
-  try {
-    const fresh = await loadServerConfig()
-    const next = edit(fresh.config)
-    setPayload(next ? await saveServerConfig(next) : fresh)
-    setWriteError(null)
-  } catch (e) {
-    // 失败必须回滚到服务端真值，否则界面显示的是一个从未落盘的值。
-    setWriteError(explainApiError(e, '保存失败'))
-    await reloadConfig()
-  } finally {
-    setBusy(false)
+
+  const commit = async () => {
+    try {
+      // 每个改动都在前一个完成后再读真值。这样连续的「建接口 → 填 Key → 加模型」
+      // 不会并发读取同一份旧配置，再由最后返回的请求把前面的改动覆盖掉。
+      const fresh = await loadServerConfig()
+      const next = edit(fresh.config)
+      const saved = next ? await saveServerConfig(next) : fresh
+      // 后面还有乐观改动时不拿这一份较旧回声盖界面；最后一笔负责对齐服务端。
+      if (queuedWrites === 1) setPayload(saved)
+      setWriteError(null)
+    } catch (e) {
+      setWriteError(explainApiError(e, '保存失败'))
+      // 只有队尾失败才回滚。后面还有改动时，它会重新读取服务端并继续提交。
+      if (queuedWrites === 1) await reloadConfig()
+    } finally {
+      queuedWrites--
+      setBusy(queuedWrites > 0)
+    }
   }
+
+  const pending = writeQueue.then(commit, commit)
+  writeQueue = pending.catch(() => undefined)
+  return pending
 }

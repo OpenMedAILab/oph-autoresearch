@@ -17,6 +17,7 @@ import { createScheduleTool, deleteScheduleTool, listSchedulesTool } from './sch
 import { globTool, grepTool } from './search.ts'
 import { makeShellTool } from './shell.ts'
 import { moveSkillTool, readSkillTool, writeSkillTool } from './skills.ts'
+import { sshListTool, sshReadTool, sshRunTool } from './ssh.ts'
 import { writeTodosTool } from './todos.ts'
 import { webFetchTool, webSearchTool } from './web.ts'
 
@@ -96,6 +97,26 @@ export { redactSecrets, scrubEnv } from './secrets.ts'
 export { DEFAULT_ENV_ALLOW, resolveCommandTimeout } from './shell.ts'
 // 技能：runtime/session.ts 扫索引，server/api 列给设置页
 export { SKILLS_SUBDIR, type SkillMeta, scanAllSkills, scanSkills } from './skills.ts'
+// SSH：服务端配置/文件 API 与 Agent 工具共用同一份实现和路径边界。
+export {
+  connectSshCommand,
+  inspectSshDirectory,
+  listSshFiles,
+  loadSshProfiles,
+  parseSshCommand,
+  readSshBinary,
+  readSshOfficeText,
+  readSshText,
+  resolveSshPath,
+  type SshCommandTarget,
+  type SshConnectionAuth,
+  type SshEntry,
+  type SshProfile,
+  saveSshProfiles,
+  sshCommandProfile,
+  sshConfigPath,
+  testSshProfile,
+} from './ssh.ts'
 // 外部工具按需加载：runtime/session.ts 量一次决定全量常驻还是进池子；
 // server/api 只取静态规格，它不建池
 export {
@@ -140,6 +161,9 @@ export function registerBuiltinTools(
     updateGoalTool,
     webFetchTool,
     webSearchTool,
+    sshListTool,
+    sshReadTool,
+    sshRunTool,
     readMemoryTool,
     writeMemoryTool,
     deleteMemoryTool,

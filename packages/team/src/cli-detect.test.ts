@@ -63,4 +63,10 @@ describe('外部 CLI 识别', () => {
     const dir = await fakeBin('claude')
     expect(await findCli('nope', { PATH: dir, PATHEXT: '.CMD' })).toBeUndefined()
   })
+
+  test('Windows 风格的 PATH 引号不会让已安装 CLI 消失', async () => {
+    const dir = await fakeBin('claude')
+    const [found] = await detectClis({ PATH: `"${dir}"`, PATHEXT: '.CMD' })
+    expect(found?.id).toBe('claude')
+  })
 })

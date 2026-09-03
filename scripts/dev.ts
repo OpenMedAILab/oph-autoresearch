@@ -33,12 +33,16 @@ import { randomBytes } from 'node:crypto'
 import { watch } from 'node:fs'
 import { join } from 'node:path'
 import { dataPath } from '@oph-autoresearch/runtime'
+import { buildSshAskpass } from './build-ssh-askpass.ts'
 import { createReloadSupervisor, isSourceChange } from './reload-supervisor.ts'
 
 const ROOT = join(import.meta.dir, '..')
 const PORT = Number(process.env.OPH_AUTORESEARCH_PORT ?? 7717)
 /** 每次开发会话现生成一个。不写死在仓库里——那就是一个入库的凭证。 */
 const TOKEN = process.env.OPH_AUTORESEARCH_TOKEN ?? randomBytes(24).toString('hex')
+
+// Tauri dev 也会校验 externalBin；密码认证时 sidecar 还需要实际调用这枚小工具。
+const SSH_ASKPASS_PATH = await buildSshAskpass()
 
 /** 那个端口上有没有一个**能应答的** oph-autoresearch。用来等就绪，不用来判占用。 */
 async function answers(port: number): Promise<boolean> {
@@ -90,7 +94,12 @@ if (!(await bindable(PORT))) {
   process.exit(1)
 }
 
-const env = { ...process.env, OPH_AUTORESEARCH_TOKEN: TOKEN, OPH_AUTORESEARCH_PORT: String(PORT) }
+const env = {
+  ...process.env,
+  OPH_AUTORESEARCH_TOKEN: TOKEN,
+  OPH_AUTORESEARCH_PORT: String(PORT),
+  OPH_SSH_ASKPASS_PATH: SSH_ASKPASS_PATH,
+}
 
 /**
  * 用**正在跑的这个 bun**，不写裸名 `bun`。

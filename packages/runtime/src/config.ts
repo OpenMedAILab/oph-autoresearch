@@ -602,7 +602,17 @@ export function collectSecrets(cfg: OphConfig): { values: string[] } {
  * 返回空数组 = 配置至少能发出第一个请求。它不验证 key 是否有效——那只有 provider
  * 能回答，本地假装验证只会多一层猜。
  */
-export function diagnoseConfig(cfg: OphConfig): string[] {
+/**
+ * 只校验配置的结构与引用完整性。
+ *
+ * 设置页必须允许先建接口、挂模型，最后再填凭证。把「现在能不能立刻发请求」
+ * 混进保存闸门，会让一份尚在编辑中的配置永远无法补完整：默认接口没有 key 时，
+ * 连新增模型这种与凭证无关的操作也会收到 422 并回滚。
+ */
+export function diagnoseConfigStructure(
+  cfg: OphConfig,
+  options: { allowIncompleteActive?: boolean } = {},
+): string[] {
   const problems: string[] = []
 
   /*
@@ -679,6 +689,25 @@ export function diagnoseConfig(cfg: OphConfig): string[] {
     )
     return problems
   }
+
+  if (!stored.models[cfg.active.model]) {
+    if (!options.allowIncompleteActive) {
+      problems.push(
+        `默认模型 "${cfg.active.model}" 不在接口 "${cfg.active.provider}" 的模型列表中。\n` +
+          `  请在该接口下添加模型，或把 active.model 改为已有模型。`,
+      )
+    }
+  }
+
+  return problems
+}
+
+export function diagnoseConfig(cfg: OphConfig): string[] {
+  const problems = diagnoseConfigStructure(cfg)
+
+  // 结构已经无效时不再叠加凭证提示；先修正 active 指针才有明确的凭证归属。
+  const stored = cfg.providers[cfg.active.provider]
+  if (!stored || problems.length) return problems
 
   const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?)(:|\/|$)/i.test(stored.baseUrl ?? '')
   if (!stored.apiKey && !local) {

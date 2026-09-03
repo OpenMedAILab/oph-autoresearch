@@ -1,6 +1,6 @@
 import { createEffect, createSignal, lazy, onCleanup, onMount, Show, Suspense } from 'solid-js'
 import { Composer } from './components/Composer.tsx'
-import { ResearchLaunchpad } from './components/ResearchLaunchpad.tsx'
+import { ResearchWorkspace } from './components/ResearchWorkspace.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
 import { Tooltip } from './components/Tooltip.tsx'
 import { Transcript } from './components/Transcript.tsx'
@@ -19,6 +19,7 @@ const SettingsDialog = lazy(() =>
 import { IconCheck, IconChevron, IconDownload, IconPanel } from './components/Icons.tsx'
 import { WindowControls } from './components/WindowControls.tsx'
 import {
+  centerView,
   client,
   exportActiveConversation,
   loadConversations,
@@ -265,6 +266,7 @@ export function App() {
       <main
         class="main"
         classList={{
+          'detail-view': centerView() !== 'chat',
           empty:
             transcript().length === 0 &&
             view().history.loading !== 'initial' &&
@@ -274,19 +276,12 @@ export function App() {
         {/* 面板放大时正文整块卸载，不是用 CSS 藏起来：`display: none` 会把
             滚动容器的 scrollTop 清成 0，还原时用户落在几百条之前的开头，而
             重新挂载会走一遍「贴底」的初始态，还原就停在最新那条上。 */}
-        <Show when={!panelMaximized()}>
-          <Show
-            when={
-              transcript().length === 0 &&
-              view().history.loading !== 'initial' &&
-              view().history.error === null
-            }
-            fallback={<Transcript />}
-          >
-            <ResearchLaunchpad />
+        <Show when={centerView() === 'chat'} fallback={<ResearchWorkspace />}>
+          <Show when={!panelMaximized()}>
+            <Transcript />
           </Show>
+          <Composer />
         </Show>
-        <Composer />
       </main>
 
       {/*
@@ -319,6 +314,9 @@ export function App() {
 }
 
 function activeTitle(): string {
+  const detail = centerView()
+  if (detail === 'workflow') return '当前研究流程'
+  if (detail === 'ssh') return 'SSH 研究数据'
   const id = state.activeConversation
   return state.conversations.find((c) => c.id === id)?.title || '新研究任务'
 }

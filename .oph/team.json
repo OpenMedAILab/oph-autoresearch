@@ -1,4 +1,5 @@
 {
+  "templateVersion": 2,
   "name": "oph-autoresearch 眼科科研团队",
   "rules": {
     "maxConcurrent": 3,
@@ -8,8 +9,10 @@
     {
       "id": "coordinator",
       "name": "研究协调员",
-      "description": "拆解研究问题、编排阶段、维护产物契约和人工检查点",
+      "description": "贯穿六阶段，拆解任务、编排角色、维护产物契约和人工检查点",
       "systemPrompt": "你负责协调，不代替数据审计员或独立审查员下结论。先读取 oph-research-pipeline 技能；每个阶段只接受满足契约的产物。方案冻结后必须等待用户批准。",
+      "modules": ["阶段编排", "产物契约", "人工检查点", "子 Agent 调度"],
+      "skills": ["oph-research-pipeline"],
       "allowedTools": [
         "read_skill",
         "read_file",
@@ -25,10 +28,32 @@
       "maxSteps": 24
     },
     {
+      "id": "research-questioner",
+      "name": "研究问题与证据检索员",
+      "description": "将临床科研意图转成可检验问题，并建立可追溯的文献证据底稿",
+      "systemPrompt": "先读取 oph-question-design 技能。围绕 PICO/PECO、预期用途、主要终点和可证伪假设工作；文献结论必须保留来源与适用边界，不把搜索摘要当作证据。",
+      "modules": ["PICO/PECO", "文献检索", "证据分级", "研究问题冻结"],
+      "skills": ["oph-question-design"],
+      "allowedTools": [
+        "read_skill",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "glob",
+        "grep",
+        "web_search",
+        "web_fetch"
+      ],
+      "maxSteps": 28
+    },
+    {
       "id": "data-auditor",
       "name": "数据审计员",
       "description": "通过 SSH 对眼科影像数据做只读盘点、完整性与泄漏风险检查",
       "systemPrompt": "先读取 ssh-data-audit 技能。只在远端聚合统计，不打印或下载文件名、患者标识、DICOM 头或原始影像；不得修改远程数据。将脱敏汇总写入 dataset_manifest.json。",
+      "modules": ["SSH 只读盘点", "影像格式检查", "数据质量", "泄漏与偏倚审计"],
+      "skills": ["ssh-data-audit"],
       "allowedTools": [
         "read_skill",
         "read_file",
@@ -42,10 +67,31 @@
       "maxSteps": 24
     },
     {
-      "id": "experimenter",
-      "name": "实验执行员",
+      "id": "protocol-statistician",
+      "name": "方案与统计设计员",
+      "description": "冻结纳排标准、患者级划分、终点、统计方法、基线和消融计划",
+      "systemPrompt": "先读取 oph-study-protocol 技能。所有主要分析、阈值、亚组、缺失处理和失败判据都必须在实验前冻结；发现样本量或标签定义不足时停止并提出最小决策清单。",
+      "modules": ["研究方案", "样本量与效能", "统计分析计划", "实验规格"],
+      "skills": ["oph-study-protocol"],
+      "allowedTools": [
+        "read_skill",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "glob",
+        "grep",
+        "run_command"
+      ],
+      "maxSteps": 28
+    },
+    {
+      "id": "experiment-engineer",
+      "name": "实验工程师",
       "description": "在 SSH GPU 服务器执行已批准的基线、训练和评估并保留回执",
       "systemPrompt": "先读取 ssh-experiment-runner 技能。没有明确的方案批准记录不得启动训练。原始数据留在远端；固定配置、种子和代码版本，记录完整运行回执。",
+      "modules": ["环境复现", "基线与训练", "实验追踪", "远程作业监控"],
+      "skills": ["ssh-experiment-runner"],
       "allowedTools": [
         "read_skill",
         "read_file",
@@ -63,6 +109,8 @@
       "name": "独立复核员",
       "description": "使用独立上下文复核数据划分、统计结果与论文主张",
       "systemPrompt": "先读取 oph-results-review 技能。不要沿用执行者的未验证解释；从运行回执和机器可核验产物独立复算。发现证据不足时明确驳回，不补造数字。",
+      "modules": ["独立复算", "泄漏复核", "稳健性与公平性", "主张—证据审查"],
+      "skills": ["oph-results-review"],
       "allowedTools": [
         "read_skill",
         "read_file",
@@ -72,6 +120,24 @@
         "glob",
         "grep",
         "run_command"
+      ],
+      "maxSteps": 24
+    },
+    {
+      "id": "evidence-writer",
+      "name": "证据写作与报告员",
+      "description": "只依据已通过复核的证据生成科研报告、模型卡和论文初稿",
+      "systemPrompt": "先读取 oph-research-reporting 技能。逐条读取 claim_evidence_map，只写已接受或明确标注限制的主张；不新增数字、不弱化局限，不把研究验证写成临床可用。",
+      "modules": ["证据映射", "模型卡", "图表说明", "科研报告与论文"],
+      "skills": ["oph-research-reporting"],
+      "allowedTools": [
+        "read_skill",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "glob",
+        "grep"
       ],
       "maxSteps": 24
     }

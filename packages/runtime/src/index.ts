@@ -19,6 +19,7 @@ export {
   configPath,
   dataPath,
   diagnoseConfig,
+  diagnoseConfigStructure,
   isWorkspaceTrusted,
   loadConfig,
   type ModelRef,

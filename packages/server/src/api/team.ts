@@ -48,6 +48,8 @@ export const handleTeamApi: ApiHandler = async (url, req, d) => {
         id: r.id,
         name: r.name,
         description: r.description,
+        ...(r.modules?.length ? { modules: r.modules } : {}),
+        ...(r.skills?.length ? { skills: r.skills } : {}),
         ...(r.model ? { model: r.model } : {}),
       })),
       rules: team.rules,

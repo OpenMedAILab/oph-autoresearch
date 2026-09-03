@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { OphConfig } from '@oph-autoresearch/runtime'
@@ -218,5 +218,75 @@ describe('读盘时机', () => {
       if (prev === undefined) delete process.env.OPH_AUTORESEARCH_HOME
       else process.env.OPH_AUTORESEARCH_HOME = prev
     }
+  })
+})
+
+describe('保存中的不完整配置', () => {
+  test('没有 API Key 时仍能添加模型，凭证问题只在运行前诊断', async () => {
+    const current = cfg()
+    delete current.providers.main!.apiKey
+    const incoming = redactConfig(current)
+    incoming.providers.main!.models['research-model'] = {}
+
+    const merged = mergeConfig(current, incoming)
+    const { diagnoseConfig, diagnoseConfigStructure } = await import('@oph-autoresearch/runtime')
+    expect(diagnoseConfigStructure(merged)).toEqual([])
+    expect(diagnoseConfig(merged).some((p) => p.includes('API Key'))).toBe(true)
+  })
+
+  test('从模型列表为空的迁移配置添加模型时，自动修复 active 并持久化', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'oph-invalid-model-'))
+    const prev = process.env.OPH_AUTORESEARCH_HOME
+    process.env.OPH_AUTORESEARCH_HOME = home
+    try {
+      const current: OphConfig = {
+        active: { provider: 'anthropic', model: 'claude-opus-5' },
+        providers: {
+          anthropic: {
+            kind: 'openai_chat_completions',
+            baseUrl: 'https://platform.deepseek.com',
+            apiKey: 'sk-existing-secret',
+            models: {},
+          },
+        },
+      }
+      await writeFile(join(home, 'config.json'), JSON.stringify(current), 'utf8')
+      const incoming = redactConfig(current)
+      incoming.providers.anthropic!.models['deepseek-chat'] = {}
+
+      const url = new URL('http://127.0.0.1/api/config')
+      const d = { config: current } as unknown as ApiDeps
+      const response = await handleConfigApi(
+        url,
+        new Request(url.href, {
+          method: 'PUT',
+          body: JSON.stringify({ config: incoming }),
+        }),
+        d as never,
+      )
+
+      expect(response?.status).toBe(200)
+      expect(d.config.active).toEqual({ provider: 'anthropic', model: 'deepseek-chat' })
+      expect(d.config.providers.anthropic?.apiKey).toBe('sk-existing-secret')
+      const persisted = JSON.parse(await readFile(join(home, 'config.json'), 'utf8')) as OphConfig
+      expect(persisted.active).toEqual({ provider: 'anthropic', model: 'deepseek-chat' })
+      expect(persisted.providers.anthropic?.models['deepseek-chat']).toEqual({})
+      expect(persisted.providers.anthropic?.apiKey).toBe('sk-existing-secret')
+    } finally {
+      if (prev === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+      else process.env.OPH_AUTORESEARCH_HOME = prev
+    }
+  })
+
+  test('没有任何模型时也能先保存接口信息，运行诊断仍会拦截', async () => {
+    const current: OphConfig = {
+      active: { provider: 'anthropic', model: 'claude-opus-5' },
+      providers: {
+        anthropic: { kind: 'openai_chat_completions', models: {} },
+      },
+    }
+    const { diagnoseConfig, diagnoseConfigStructure } = await import('@oph-autoresearch/runtime')
+    expect(diagnoseConfigStructure(current, { allowIncompleteActive: true })).toEqual([])
+    expect(diagnoseConfig(current).some((p) => p.includes('默认模型'))).toBe(true)
   })
 })

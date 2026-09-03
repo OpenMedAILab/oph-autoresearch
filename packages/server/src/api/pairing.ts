@@ -2,10 +2,43 @@
 
 import { encodePairingUrl } from '@oph-autoresearch/core'
 import { lanCandidates } from '../pairing.ts'
+import {
+  loadRemoteChannels,
+  REMOTE_CHANNEL_CATALOG,
+  remoteChannelStatus,
+  remoteChannelsPath,
+  saveRemoteChannels,
+} from '../remote-channels.ts'
 import { type ApiHandler, json } from './types.ts'
 
 export const handlePairingApi: ApiHandler = async (url, req, d) => {
   const p = url.pathname
+
+  if (p === '/api/remote-channels' && req.method === 'GET') {
+    const channels = await loadRemoteChannels()
+    return json({
+      path: remoteChannelsPath(),
+      catalog: REMOTE_CHANNEL_CATALOG,
+      channels,
+      statuses: channels.map(remoteChannelStatus),
+    })
+  }
+
+  if (p === '/api/remote-channels' && req.method === 'PUT') {
+    const body = (await req.json().catch(() => null)) as { channels?: unknown } | null
+    try {
+      const channels = await saveRemoteChannels(body?.channels)
+      return json({
+        ok: true,
+        path: remoteChannelsPath(),
+        catalog: REMOTE_CHANNEL_CATALOG,
+        channels,
+        statuses: channels.map(remoteChannelStatus),
+      })
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 422)
+    }
+  }
 
   if (p === '/api/pairing/lan' && req.method === 'POST') {
     const body = (await req.json().catch(() => ({}))) as { enabled?: boolean }

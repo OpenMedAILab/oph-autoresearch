@@ -5,6 +5,7 @@ import {
   IconBrain,
   IconCanvas,
   IconClock,
+  IconGlobe,
   IconPackage,
   IconPlug,
   IconSettings,
@@ -25,7 +26,7 @@ import {
  *
  * 不要按「这台机器怎么跑 / agent 带着什么」分类，**那条线分不开**：
  * 「权限与沙箱」两边都算，而「工具」在上组、同样产出工具的 MCP 与插件在下组。
- * 「手机接入」现在并进「通用」——它是应用怎么被访问，不是 agent 的能力模块。
+ * 远程接入同时包含浏览器和机器人通道，配置量已足够形成独立操作台。
  */
 interface Item {
   id: SettingsPage
@@ -74,6 +75,18 @@ const GROUPS: Item[][] = [
       desc: '为模型贡献工具，全局安装对所有项目生效，重启后加载',
     },
     { id: 'schedules', label: '定时任务', icon: IconClock },
+    {
+      id: 'remote',
+      label: '远程接入',
+      icon: IconGlobe,
+      desc: '浏览器配对与机器人遥控统一进入现有会话、权限和审计链',
+    },
+    {
+      id: 'ssh',
+      label: 'SSH 服务器',
+      icon: IconTerminal,
+      desc: '认证使用系统 SSH config / ssh-agent',
+    },
     { id: 'team', label: 'Agent Team', icon: IconUsers, desc: '多角色编排，作用域为当前项目' },
   ],
 ]

@@ -62,7 +62,11 @@ export interface PanelTab {
  * 同时成立，谁盖过谁只能靠每个调用点自觉，那就是第二本账。
  */
 export type PanelPage = PanelView | { tab: string }
-export const [sidePanel, setSidePanel] = createSignal<PanelPage | null>(null)
+export const [sidePanel, setSidePanel] = createSignal<PanelPage | null>('todos')
+
+/** 中央工作区以 Agent 对话为主；右侧入口只在用户点选后临时切换到研究详情。 */
+export type CenterView = 'chat' | 'workflow' | 'ssh'
+export const [centerView, setCenterView] = createSignal<CenterView>('chat')
 
 const [tabs, setTabs] = createSignal<readonly PanelTab[]>([])
 
@@ -397,6 +401,8 @@ export type SettingsPage =
   | 'mcp'
   | 'plugins'
   | 'schedules'
+  | 'remote'
+  | 'ssh'
 export const [settingsPage, setSettingsPage] = createSignal<SettingsPage | null>(null)
 
 /** 打开设置。不带参数回到「通用」——它是唯一不需要前置知识的类目。 */

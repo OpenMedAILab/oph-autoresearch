@@ -225,6 +225,8 @@ export interface TeamRoleRow {
   id: string
   name: string
   description: string
+  modules?: string[]
+  skills?: string[]
   /** 不填就跟着当前会话的模型。 */
   model?: string
 }

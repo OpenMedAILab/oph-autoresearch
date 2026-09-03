@@ -331,6 +331,8 @@ export async function loadTeamConfig(workspaceRoot: string): Promise<WorkspaceTe
       name: String(r.name ?? id),
       description: String(r.description ?? ''),
       systemPrompt: String(r.systemPrompt ?? ''),
+      ...(Array.isArray(r.modules) ? { modules: r.modules.map(String) } : {}),
+      ...(Array.isArray(r.skills) ? { skills: r.skills.map(String) } : {}),
       ...(r.provider ? { provider: String(r.provider) } : {}),
       ...(r.model ? { model: String(r.model) } : {}),
       ...(r.effort ? { effort: r.effort as NonNullable<Role['effort']> } : {}),

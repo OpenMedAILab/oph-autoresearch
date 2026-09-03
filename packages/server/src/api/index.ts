@@ -24,7 +24,9 @@ import { handleMemoryApi } from './memory.ts'
 import { handlePairingApi } from './pairing.ts'
 import { handlePluginsApi } from './plugins.ts'
 import { handleProbeApi } from './probe.ts'
+import { handleProviderModelsApi } from './provider-models.ts'
 import { handleSchedulesApi } from './schedules.ts'
+import { handleSshApi } from './ssh.ts'
 import { handleTeamApi } from './team.ts'
 import type { ApiDeps, ApiHandler, ApiRequestDeps } from './types.ts'
 import { json } from './types.ts'
@@ -59,8 +61,10 @@ const HANDLERS: ApiHandler[] = [
   handlePairingApi,
   handleWorkspaceApi,
   handleConfigApi,
+  handleProviderModelsApi,
   handleProbeApi,
   handleSchedulesApi,
+  handleSshApi,
   handleMemoryApi,
   handleMcpApi,
   handleExtrasApi,

@@ -95,7 +95,7 @@ export default function FileView(props: { path: string; refresh?: number }) {
   )
 }
 
-function CodeView(props: { content: string; path: string }) {
+export function CodeView(props: { content: string; path: string }) {
   let host!: HTMLDivElement
   let view: EditorView | null = null
   let mountedPath: string | null = null

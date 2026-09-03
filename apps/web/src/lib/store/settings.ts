@@ -338,6 +338,21 @@ export function probeModel(provider: string, model: string): Promise<ProbeResult
   })
 }
 
+export interface ProviderModelDiscovery {
+  models: string[]
+}
+
+/** 只提交接口名与非敏感的 URL 草稿；鉴权凭证由服务端从配置中读取。 */
+export function discoverProviderModels(
+  provider: string,
+  baseUrl?: string,
+): Promise<ProviderModelDiscovery> {
+  return client.api<ProviderModelDiscovery>('/api/provider-models', {
+    method: 'POST',
+    body: JSON.stringify({ provider, ...(baseUrl ? { baseUrl } : {}) }),
+  })
+}
+
 /**
  * 当前项目，外加**这里有没有待决定的事**。
  *

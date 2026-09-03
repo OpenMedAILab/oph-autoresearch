@@ -11,6 +11,7 @@
 
 import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { buildSshAskpass } from './build-ssh-askpass.ts'
 
 const ROOT = join(import.meta.dir, '..')
 const OUT_DIR = join(ROOT, 'apps/desktop/src-tauri/bin')
@@ -72,7 +73,7 @@ async function main(): Promise<number> {
 
   const proc = Bun.spawn(
     [
-      'bun',
+      process.execPath,
       'build',
       ENTRY,
       '--compile',
@@ -108,6 +109,7 @@ async function main(): Promise<number> {
     return 1
   }
   process.stdout.write(`自检通过：oph ${reported}\n`)
+  await buildSshAskpass()
   return 0
 }
 

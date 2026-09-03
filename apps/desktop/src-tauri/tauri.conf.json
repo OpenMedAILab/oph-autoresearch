@@ -41,7 +41,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["bin/oph"],
+    "externalBin": ["bin/oph", "bin/oph-ssh-askpass"],
     "macOS": {
       "minimumSystemVersion": "11.0"
     },

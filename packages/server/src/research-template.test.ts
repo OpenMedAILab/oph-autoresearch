@@ -19,14 +19,18 @@ async function tempWorkspace(): Promise<string> {
 }
 
 describe('眼科科研工作区模板', () => {
-  test('初始化出四个技能、四个职责角色与研究目录', async () => {
+  test('初始化出六阶段技能、职责角色与研究目录', async () => {
     const root = await tempWorkspace()
     const result = ensureResearchWorkspace(root)
 
-    expect(result.created).toHaveLength(6)
+    expect(result.created).toHaveLength(10)
+    expect(result.updated).toEqual([])
     expect((await scanSkills(root)).map((skill) => skill.name).sort()).toEqual([
+      'oph-question-design',
       'oph-research-pipeline',
+      'oph-research-reporting',
       'oph-results-review',
+      'oph-study-protocol',
       'ssh-data-audit',
       'ssh-experiment-runner',
     ])
@@ -35,27 +39,69 @@ describe('眼科科研工作区模板', () => {
     expect(team.error).toBeNull()
     expect(team.roles.map((role) => role.id)).toEqual([
       'coordinator',
+      'research-questioner',
       'data-auditor',
-      'experimenter',
+      'protocol-statistician',
+      'experiment-engineer',
       'independent-reviewer',
+      'evidence-writer',
     ])
     expect(
       team.roles.every((role) => role.provider === undefined && role.model === undefined),
     ).toBe(true)
+    expect(team.roles.every((role) => role.modules?.length && role.skills?.length)).toBe(true)
     expect(await readFile(join(root, 'research', 'README.md'), 'utf8')).toContain('原始影像')
+    expect(await readFile(join(root, 'research', 'OPEN_SOURCE_STACK.md'), 'utf8')).toContain(
+      'OpenJiuwen',
+    )
   })
 
-  test('重复初始化不覆盖用户已经修改的角色配置', async () => {
+  test('旧配置保留自定义字段，并只补缺失角色、模块和技能', async () => {
     const root = await tempWorkspace()
     ensureResearchWorkspace(root)
     const teamPath = join(root, '.oph', 'team.json')
-    await writeFile(teamPath, '{"roles":[],"custom":true}\n', 'utf8')
+    await writeFile(
+      teamPath,
+      `${JSON.stringify({
+        name: '我的科研团队',
+        custom: true,
+        roles: [
+          {
+            id: 'coordinator',
+            name: '自定义协调员',
+            systemPrompt: '保留我的提示词',
+            model: 'deepseek-chat',
+          },
+          { id: 'custom-role', name: '自定义角色', modules: ['自定义模块'], skills: [] },
+        ],
+      })}\n`,
+      'utf8',
+    )
 
     const result = ensureResearchWorkspace(root)
 
     expect(result.created).toEqual([])
-    expect(result.existing).toHaveLength(6)
-    expect(await readFile(teamPath, 'utf8')).toBe('{"roles":[],"custom":true}\n')
+    expect(result.existing).toHaveLength(10)
+    expect(result.updated).toEqual(['.oph/team.json'])
+    const migrated = JSON.parse(await readFile(teamPath, 'utf8'))
+    expect(migrated.name).toBe('我的科研团队')
+    expect(migrated.custom).toBe(true)
+    expect(migrated.templateVersion).toBe(2)
+    expect(migrated.roles).toHaveLength(8)
+    expect(migrated.roles[0]).toMatchObject({
+      id: 'coordinator',
+      name: '自定义协调员',
+      systemPrompt: '保留我的提示词',
+      model: 'deepseek-chat',
+    })
+    expect(migrated.roles[0].modules.length).toBeGreaterThan(0)
+    expect(migrated.roles[0].skills).toEqual(['oph-research-pipeline'])
+    expect(migrated.roles[1]).toEqual({
+      id: 'custom-role',
+      name: '自定义角色',
+      modules: ['自定义模块'],
+      skills: [],
+    })
   })
 
   test('仓库自带的科研配置与新工作区模板保持一致', async () => {
@@ -64,9 +110,13 @@ describe('眼科科研工作区模板', () => {
     const repositoryRoot = resolve(import.meta.dir, '../../..')
 
     for (const relativePath of result.created) {
-      expect(await readFile(join(repositoryRoot, relativePath), 'utf8')).toBe(
-        await readFile(join(root, relativePath), 'utf8'),
-      )
+      const repository = await readFile(join(repositoryRoot, relativePath), 'utf8')
+      const generated = await readFile(join(root, relativePath), 'utf8')
+      if (relativePath === '.oph/team.json') {
+        expect(JSON.parse(repository)).toEqual(JSON.parse(generated))
+      } else {
+        expect(repository).toBe(generated)
+      }
     }
   })
 })

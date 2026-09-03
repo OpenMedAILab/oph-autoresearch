@@ -31,6 +31,10 @@ export interface Role {
   description: string
   /** 追加到该角色系统提示词的约束。 */
   systemPrompt: string
+  /** 这个角色负责的稳定能力域，用于编排与界面说明，不直接授予工具权限。 */
+  modules?: string[]
+  /** 开始任务前必须按需读取的项目技能名。 */
+  skills?: string[]
   /** 用哪个接口（config.providers 的键）。不填用当前生效的。 */
   provider?: string
   model?: string

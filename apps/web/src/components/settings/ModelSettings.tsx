@@ -1,7 +1,9 @@
 import { PROVIDER_KINDS, type ProviderKind } from '@oph-autoresearch/core'
 import { createSignal, For, Show } from 'solid-js'
 import {
+  discoverProviderModels,
   ensureModelCatalog,
+  explainApiError,
   modelCatalog,
   modelCatalogError,
   modelCatalogLoading,
@@ -73,6 +75,10 @@ export function ModelSettings() {
   /** 每个模型最近一次探测的结果，键是模型 id。**不落盘**——它描述的是「刚才那一下」。 */
   const [probes, setProbes] = createSignal<Record<string, ProbeResult | { error: string }>>({})
   const [probing, setProbing] = createSignal<string | null>(null)
+  const [newModel, setNewModel] = createSignal('')
+  const [discovering, setDiscovering] = createSignal(false)
+  const [discoveryMessage, setDiscoveryMessage] = createSignal<string | null>(null)
+  let baseUrlInput!: HTMLInputElement
 
   const names = () => Object.keys(config()?.providers ?? {})
   const current = () => {
@@ -153,6 +159,8 @@ export function ModelSettings() {
     void replaceConfig((cur) => {
       const owner = cur.providers[provider]
       if (!owner || id in owner.models) return null
+      const activeOwner = cur.providers[cur.active.provider]
+      const activeIsValid = Boolean(activeOwner?.models[cur.active.model])
       return {
         ...cur,
         providers: {
@@ -161,7 +169,9 @@ export function ModelSettings() {
         },
         // 这个接口本来一个模型都没有 = 它还没法用。挂上第一个就切过去，
         // 省掉一次「加完了怎么还没生效」。
-        ...(Object.keys(owner.models).length === 0 ? { active: { provider, model: id } } : {}),
+        ...(!activeIsValid || Object.keys(owner.models).length === 0
+          ? { active: { provider, model: id } }
+          : {}),
       }
     })
   }
@@ -220,6 +230,37 @@ export function ModelSettings() {
       }))
     } finally {
       setProbing(null)
+    }
+  }
+
+  const discoverModels = async (provider: string, baseUrl: string) => {
+    setDiscovering(true)
+    setDiscoveryMessage(null)
+    try {
+      const result = await discoverProviderModels(provider, baseUrl)
+      await replaceConfig((cur) => {
+        const owner = cur.providers[provider]
+        if (!owner) return null
+        const models = { ...owner.models }
+        for (const id of result.models) models[id] ??= {}
+        const activeOwner = cur.providers[cur.active.provider]
+        const activeIsValid = Boolean(activeOwner?.models[cur.active.model])
+        return {
+          ...cur,
+          providers: {
+            ...cur.providers,
+            [provider]: { ...owner, baseUrl, models },
+          },
+          ...(!activeIsValid && result.models[0]
+            ? { active: { provider, model: result.models[0] } }
+            : {}),
+        }
+      })
+      setDiscoveryMessage(`已从接口同步 ${result.models.length} 个模型`)
+    } catch (error) {
+      setDiscoveryMessage(explainApiError(error, '模型列表获取失败'))
+    } finally {
+      setDiscovering(false)
     }
   }
 
@@ -314,6 +355,7 @@ export function ModelSettings() {
 
                       <Field label="Base URL">
                         <input
+                          ref={baseUrlInput}
                           type="text"
                           placeholder="留空用官方默认"
                           value={p().baseUrl ?? ''}
@@ -343,6 +385,19 @@ export function ModelSettings() {
                   <section class="settings-block">
                     <div class="settings-block-head">
                       <h3>模型</h3>
+                      <div class="model-discovery-actions">
+                        <Show when={discoveryMessage()}>
+                          {(message) => <span title={message()}>{message()}</span>}
+                        </Show>
+                        <button
+                          class="btn-ghost sm"
+                          type="button"
+                          disabled={discovering()}
+                          onClick={() => void discoverModels(name(), baseUrlInput.value.trim())}
+                        >
+                          {discovering() ? '正在获取…' : '从 URL 获取模型'}
+                        </button>
+                      </div>
                     </div>
 
                     <div class="model-list">
@@ -398,13 +453,30 @@ export function ModelSettings() {
                       <div class="model-row add">
                         <input
                           type="text"
-                          placeholder="模型 ID，回车添加"
+                          placeholder="输入模型 ID"
+                          value={newModel()}
+                          onInput={(e) => setNewModel(e.currentTarget.value)}
                           onKeyDown={(e) => {
                             if (e.key !== 'Enter') return
-                            addModel(name(), e.currentTarget.value.trim())
-                            e.currentTarget.value = ''
+                            const id = newModel().trim()
+                            if (!id) return
+                            addModel(name(), id)
+                            setNewModel('')
                           }}
                         />
+                        <button
+                          class="btn-primary sm"
+                          type="button"
+                          disabled={!newModel().trim() || configBusy()}
+                          onClick={() => {
+                            const id = newModel().trim()
+                            if (!id) return
+                            addModel(name(), id)
+                            setNewModel('')
+                          }}
+                        >
+                          添加模型
+                        </button>
                       </div>
                     </div>
                   </section>

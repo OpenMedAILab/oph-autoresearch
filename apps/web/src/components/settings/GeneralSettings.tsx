@@ -10,7 +10,6 @@ import {
   theme,
   workspace,
 } from '../../lib/store/index.ts'
-import PairPanel from '../PairPanel.tsx'
 import { ConfigStatus } from './ConfigStatus.tsx'
 import { config, configError, configPath, ensureConfig, reloadConfig } from './configStore.ts'
 import { LoadState } from './LoadState.tsx'
@@ -117,10 +116,7 @@ function EnvironmentRows() {
  *
  * 这一页最容易长成一个杂物间——什么都不好归类就丢进来。这里的判据是
  * **改的是这个应用本身，不是 agent 的某个模块**：长什么样、这台机器缺不缺依赖、
- * 配置和会话存在哪、别的设备怎么连进来。
- *
- * 手机接入按这条判据落在这里：它是「这个应用怎么被访问」，和主题、安装位置同类，
- * 而不是 agent 带着的一项能力——后者全在「模块」那一页里。
+ * 配置和会话存在哪。
  *
  * 模型和命令边界各自成页：它们条目多、改一次要读一段说明，混在这里会把
  * 上面几样淹掉。
@@ -202,11 +198,6 @@ export function GeneralSettings() {
           </div>
         </section>
       </Show>
-
-      <section class="settings-block">
-        <h3 class="settings-block-head">手机接入</h3>
-        <PairPanel />
-      </section>
 
       <Show when={config()}>
         <ConfigStatus />

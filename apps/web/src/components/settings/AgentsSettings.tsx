@@ -7,7 +7,7 @@ import {
   loadTeamRaw,
   saveTeamRaw,
 } from '../../lib/store/index.ts'
-import { IconPencil, IconTrash } from '../Icons.tsx'
+import { IconPencil, IconRefresh, IconTrash } from '../Icons.tsx'
 import { LoadState } from './LoadState.tsx'
 import { EmptyBox, EntryCard, Section } from './Page.tsx'
 
@@ -41,6 +41,8 @@ interface RoleJson {
   name?: string
   description?: string
   systemPrompt?: string
+  modules?: string[]
+  skills?: string[]
   provider?: string
   model?: string
   maxSteps?: number
@@ -56,6 +58,8 @@ interface RoleForm {
   name: string
   description: string
   systemPrompt: string
+  modules: string
+  skills: string
   model: string
   maxSteps: string
 }
@@ -139,6 +143,8 @@ export default function AgentsSettings() {
       name: r.name ?? '',
       description: r.description ?? '',
       systemPrompt: r.systemPrompt ?? '',
+      modules: (r.modules ?? []).join('\n'),
+      skills: (r.skills ?? []).join('\n'),
       model: r.model ?? '',
       maxSteps: r.maxSteps === undefined ? '' : String(r.maxSteps),
     })
@@ -160,6 +166,8 @@ export default function AgentsSettings() {
         name: f.name.trim() || id,
         description: f.description.trim(),
         systemPrompt: f.systemPrompt,
+        ...(lines(f.modules).length ? { modules: lines(f.modules) } : {}),
+        ...(lines(f.skills).length ? { skills: lines(f.skills) } : {}),
         ...(f.model.trim() ? { model: f.model.trim() } : {}),
         ...(f.maxSteps.trim() ? { maxSteps: steps } : {}),
       }
@@ -227,7 +235,14 @@ export default function AgentsSettings() {
                             </button>
                           </>
                         }
-                      />
+                      >
+                        <Show when={r.modules?.length || r.skills?.length}>
+                          <div class="entry-extra">
+                            <Show when={r.modules?.length}>模块：{r.modules?.join(' · ')}</Show>
+                            <Show when={r.skills?.length}>技能：{r.skills?.join(' · ')}</Show>
+                          </div>
+                        </Show>
+                      </EntryCard>
                     )}
                   </For>
                 </div>
@@ -238,6 +253,28 @@ export default function AgentsSettings() {
               {(f) => (
                 <Section title={`编辑 ${f().name || f().id}`}>
                   <div class="setting-rows">
+                    <div class="setting-row stack">
+                      <div class="setting-row-text">
+                        <span class="setting-row-label">职责模块</span>
+                        <span class="setting-row-hint">一行一个，用于编排时说明能力边界</span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={f().modules}
+                        onInput={(e) => setRoleForm({ ...f(), modules: e.currentTarget.value })}
+                      />
+                    </div>
+                    <div class="setting-row stack">
+                      <div class="setting-row-text">
+                        <span class="setting-row-label">必读技能</span>
+                        <span class="setting-row-hint">一行一个，任务开始前自动提示角色读取</span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={f().skills}
+                        onInput={(e) => setRoleForm({ ...f(), skills: e.currentTarget.value })}
+                      />
+                    </div>
                     <div class="setting-row stack">
                       <div class="setting-row-text">
                         <span class="setting-row-label">标识</span>
@@ -333,7 +370,15 @@ export default function AgentsSettings() {
 
             {/* 外部 CLI 这一段**没有增删改**：它整条来自本机探测。
                 能显示的只有「装在哪、接没接入」，两样都不是用户在这里填的。 */}
-            <Section title="外部 CLI" desc="本机独立进程，凭证与沙箱各自独立。">
+            <Section
+              title="外部 CLI"
+              desc="直接调用本机原生客户端及其模型；凭证与沙箱各自独立。"
+              actions={
+                <button class="btn-ghost sm" type="button" onClick={() => void refetchClis()}>
+                  <IconRefresh size={12} /> 重新探测
+                </button>
+              }
+            >
               <Show
                 when={loaded(clis)}
                 fallback={<LoadState error={clis.error} onRetry={() => void refetchClis()} />}
@@ -379,4 +424,15 @@ export default function AgentsSettings() {
       </Show>
     </>
   )
+}
+
+function lines(value: string): string[] {
+  return [
+    ...new Set(
+      value
+        .split('\n')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ]
 }

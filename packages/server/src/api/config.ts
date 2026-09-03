@@ -12,6 +12,7 @@ import {
   configNotices,
   configPath,
   diagnoseConfig,
+  diagnoseConfigStructure,
   loadConfig,
   type OphConfig,
   type StoredProvider,
@@ -68,6 +69,19 @@ export function mergeConfig(current: OphConfig, incoming: RedactedConfig): OphCo
   return { ...current, ...incoming, providers }
 }
 
+/**
+ * 设置页允许先配接口、再挂模型。若旧配置的 active 已经悬空，在保存时优先指向
+ * 第一个真实存在的模型，避免迁移残留让每一次设置写入都被拒绝。
+ */
+export function repairActiveModel(cfg: OphConfig): OphConfig {
+  if (cfg.providers[cfg.active.provider]?.models[cfg.active.model]) return cfg
+  for (const [provider, entry] of Object.entries(cfg.providers)) {
+    const model = Object.keys(entry.models)[0]
+    if (model) return { ...cfg, active: { provider, model } }
+  }
+  return cfg
+}
+
 export const handleConfigApi: ApiHandler = async (url, req, d) => {
   const p = url.pathname
 
@@ -99,8 +113,10 @@ export const handleConfigApi: ApiHandler = async (url, req, d) => {
   if (p === '/api/config' && req.method === 'PUT') {
     const body = (await req.json().catch(() => null)) as { config?: RedactedConfig } | null
     if (!body?.config) return json({ error: 'bad request', message: '缺少 config' }, 400)
-    const merged = mergeConfig(d.config, body.config)
-    const problems = diagnoseConfig(merged)
+    const merged = repairActiveModel(mergeConfig(d.config, body.config))
+    // 设置过程允许暂时没有 API Key；这里只拦会把配置结构写坏的值。
+    // 真正开始运行时仍由 diagnoseConfig 做完整的可运行性检查。
+    const problems = diagnoseConfigStructure(merged, { allowIncompleteActive: true })
     // 有致命问题就不落盘。写进去再让 CLI 起不来，比拒绝保存糟得多。
     if (problems.length) return json({ error: 'invalid', problems }, 422)
     await saveConfig(merged)
