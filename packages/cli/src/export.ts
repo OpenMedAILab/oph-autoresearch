@@ -1,16 +1,16 @@
 /**
- * `qy export` —— 把一个会话导出成 markdown 或 json。
+ * `oph export` —— 把一个会话导出成 markdown 或 json。
  *
- *   qy export                      列出会话供选择
- *   qy export <会话 id>            导出成 markdown 到 stdout
- *   qy export <会话 id> --json     导出成 json（完整，不裁剪）
- *   qy export <会话 id> -o out.md  写文件
+ *   oph export                      列出会话供选择
+ *   oph export <会话 id>            导出成 markdown 到 stdout
+ *   oph export <会话 id> --json     导出成 json（完整，不裁剪）
+ *   oph export <会话 id> -o out.md  写文件
  */
 
 import { writeFile } from 'node:fs/promises'
-import type { ConversationId } from '@qywork/core'
-import { dataPath, exportConversation } from '@qywork/runtime'
-import { listRecentConversations, Store } from '@qywork/store'
+import type { ConversationId } from '@oph-autoresearch/core'
+import { dataPath, exportConversation } from '@oph-autoresearch/runtime'
+import { listRecentConversations, Store } from '@oph-autoresearch/store'
 
 const DIM = '\x1b[2m'
 const RESET = '\x1b[0m'
@@ -40,7 +40,7 @@ export async function runExport(args: string[]): Promise<number> {
           `  ${c.id}  ${DIM}${new Date(c.updatedAt).toISOString().slice(0, 16).replace('T', ' ')}${RESET}  ${c.title || '未命名'}\n`,
         )
       }
-      process.stderr.write(`\n${DIM}用法：qy export <会话 id> [--json] [-o 文件]${RESET}\n`)
+      process.stderr.write(`\n${DIM}用法：oph export <会话 id> [--json] [-o 文件]${RESET}\n`)
       return 1
     }
 

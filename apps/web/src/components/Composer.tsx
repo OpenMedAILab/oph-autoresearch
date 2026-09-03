@@ -1,4 +1,4 @@
-import type { Attachment, ContextGroup, FollowUp, Goal } from '@qywork/core'
+import type { Attachment, ContextGroup, FollowUp, Goal } from '@oph-autoresearch/core'
 import {
   attachmentTypeOf,
   baseNameOf,
@@ -6,7 +6,7 @@ import {
   isInlineImage,
   mimeOf,
   toPosixPath,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { buildCommands, type Command, matchSlash } from '../lib/commands.ts'
 import { matchesMention, mentionQuery, replaceMention } from '../lib/composer-suggestions.ts'
@@ -613,7 +613,7 @@ export function Composer() {
    * 拿不到源路径的那条：剪贴板里只有位图，或者浏览器不给绝对路径。
    *
    * 这一份字节除了内存里没有第二处，所以落盘是**第一次**存储不是第二次。
-   * 落点是 `~/.qywork/attachments/<会话id>/`，删会话时整个目录一起走。
+   * 落点是 `~/.oph-autoresearch/attachments/<会话id>/`，删会话时整个目录一起走。
    *
    * 失败**逐个报**并继续处理其余的：一张图太大不该让另外三张也白选。
    */

@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { currentBranch, switchTo } from './git.ts'
 
 async function repoWithCommit(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'qy-git-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-git-'))
   const run = (...args: string[]) => Bun.spawnSync(['git', ...args], { cwd: dir })
   run('init', '-q', '-b', 'main', '.')
   run('config', 'user.email', 't@t')
@@ -42,7 +42,7 @@ describe('当前分支名', () => {
   })
 
   test('不是仓库回 null', async () => {
-    expect(await currentBranch(await mkdtemp(join(tmpdir(), 'qy-nogit-')))).toBeNull()
+    expect(await currentBranch(await mkdtemp(join(tmpdir(), 'oph-nogit-')))).toBeNull()
   })
 })
 
@@ -77,7 +77,7 @@ describe('这台机器上没装 git', () => {
  */
 describe('切不过去时说人话', () => {
   async function dirtyBlocked(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-git-sw-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-git-sw-'))
     const run = (...args: string[]) => Bun.spawnSync(['git', ...args], { cwd: dir })
     run('init', '-q', '-b', 'main', '.')
     run('config', 'user.email', 't@t')
@@ -106,7 +106,7 @@ describe('切不过去时说人话', () => {
   })
 
   test('没有这条分支时不去跑 git', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-git-none-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-git-none-'))
     Bun.spawnSync(['git', 'init', '-q', '-b', 'main', '.'], { cwd: dir })
     const r = await switchTo(dir, '--output=pwned')
     expect(r.ok).toBe(false)

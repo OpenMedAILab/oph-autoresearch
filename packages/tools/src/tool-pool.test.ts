@@ -8,9 +8,9 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { ToolContext, ToolSpec } from '@qywork/agent'
-import { ToolRegistry } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext, ToolSpec } from '@oph-autoresearch/agent'
+import { ToolRegistry } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import {
   EXTERNAL_SCHEMA_BUDGET_TOKENS,
   externalSchemaTokens,

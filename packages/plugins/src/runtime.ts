@@ -2,8 +2,8 @@
  * 用什么进程跑插件，以及能不能真的把它关起来。
  *
  * **为什么不能用 `process.execPath`。** 之前插件宿主默认拿 `process.execPath` 当运行时。开发时那是
- * `bun`，一切正常；**而发布产物是 Bun 编译出来的单文件二进制，`process.execPath` 就是 `qy.exe` 本
- * 身**。拿它去跑 `qy <插件入口>` 的结果是「未知命令」+ 用法说明，插件启动即退出。
+ * `bun`，一切正常；**而发布产物是 Bun 编译出来的单文件二进制，`process.execPath` 就是 `oph.exe` 本
+ * 身**。拿它去跑 `oph <插件入口>` 的结果是「未知命令」+ 用法说明，插件启动即退出。
  *
  * 后果是：插件在开发机上正常，装了包的用户那里**一个都起不来**，
  * 而这条路径在本机怎么测都测不出来。和「打包之后工作区落在 Program Files」
@@ -208,7 +208,7 @@ export function resolvePluginRuntime(req: RuntimeRequest): PluginRuntime {
   }
 
   // 4. 宿主自己——**只有它确实是个 JS 运行时时**。
-  //    编译后的单文件二进制里 execPath 是 qy 自己，拿它跑插件只会打出用法说明。
+  //    编译后的单文件二进制里 execPath 是 oph 自己，拿它跑插件只会打出用法说明。
   const self = basename(process.execPath).toLowerCase()
   if (self.startsWith('node') || self.startsWith('bun')) {
     return {

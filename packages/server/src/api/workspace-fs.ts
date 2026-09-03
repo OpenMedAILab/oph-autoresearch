@@ -7,7 +7,7 @@
  * （那是入参问题，不该以 500 的面貌出现在界面上）。每条的特殊之处写在它自己头上。
  */
 
-import { resolveInWorkspace } from '@qywork/tools'
+import { resolveInWorkspace } from '@oph-autoresearch/tools'
 import {
   createEntry,
   deleteEntry,

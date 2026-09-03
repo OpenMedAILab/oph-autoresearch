@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    qywork_lib::run()
+    oph_autoresearch_lib::run()
 }

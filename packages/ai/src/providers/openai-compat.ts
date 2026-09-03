@@ -48,7 +48,7 @@ export class OpenAICompatAdapter implements LlmAdapter {
    */
   get transmits(): { effort: boolean; video: boolean } {
     // 判据只有 `effortIsTransmittable` 一份，与 `buildReasoning` 实际发的字段同源。
-    // 恒 true 会让 `qy probe` 的 effort 探针在发不出该字段的模型上全部假通过。
+    // 恒 true 会让 `oph probe` 的 effort 探针在发不出该字段的模型上全部假通过。
     return { effort: effortIsTransmittable(this.spec), video: true }
   }
   readonly spec: ModelSpec
@@ -250,7 +250,7 @@ export class OpenAICompatAdapter implements LlmAdapter {
        * 也不是这里写死。xAI 的 Chat Completions 明确使用 `x-grok-conv-id` 请求头，
        * 已在上面的请求选项分支发送；不能同时再塞一份 Responses 才用的 body 字段。
        *
-       * **`qy probe` 不探这一项，这是有意的。** 探针只能发几次请求看命中——
+       * **`oph probe` 不探这一项，这是有意的。** 探针只能发几次请求看命中——
        * 而上面那段实测正说明：不确定的路线上，几次请求给出的是随机结果。
        * 探出「可用」再写回目录，等于把一次偶然结果固化成结论：两次相同的小请求
        * 判出 rolling，真实会话仍然不命中。

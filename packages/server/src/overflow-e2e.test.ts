@@ -28,10 +28,10 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AgentLoop, ToolRegistry } from '@qywork/agent'
-import { buildAdapter } from '@qywork/ai'
-import type { AgentEvent, RunId } from '@qywork/core'
-import { makeSummarizer, RuntimeCompaction } from '@qywork/runtime'
+import { AgentLoop, ToolRegistry } from '@oph-autoresearch/agent'
+import { buildAdapter } from '@oph-autoresearch/ai'
+import type { AgentEvent, RunId } from '@oph-autoresearch/core'
+import { makeSummarizer, RuntimeCompaction } from '@oph-autoresearch/runtime'
 import {
   appendMessage,
   ContentStore,
@@ -40,7 +40,7 @@ import {
   listMessages,
   Store,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 function sse(events: { type: string; [k: string]: unknown }[]): string {
   return `${events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n`).join('\n')}\n`
@@ -112,7 +112,7 @@ let store: Store
 let content: ContentStore
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'qywork-overflow-'))
+  dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-overflow-'))
   const dbPath = join(dir, 'overflow.sqlite3')
   store = new Store({ path: dbPath })
   content = new ContentStore(contentPathFor(dbPath))

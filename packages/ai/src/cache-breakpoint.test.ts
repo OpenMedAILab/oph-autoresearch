@@ -4,7 +4,7 @@
  * 覆盖范围：`providers/anthropic.ts` 的 `buildMessages` 断点落点，
  * 以及 `WireMessage.cacheBreakpoint` 这条协议差异在兼容路径上的**惰性**。
  *
- * **这一组要挡的是什么。** 在此之前 qywork 只有一个断点、打在系统提示词末尾，所以缓存住的只有
+ * **这一组要挡的是什么。** 在此之前 oph-autoresearch 只有一个断点、打在系统提示词末尾，所以缓存住的只有
  * 工具 schema + 系统提示词（约 1.8k）——**消息历史每一轮都在全价重付**。
  * 而这条只对 Anthropic 成立：兼容协议的前缀缓存由服务端自动做
  * （DeepSeek 的 `prompt_cache_hit_tokens` 就是它），请求体里没有这个位置。

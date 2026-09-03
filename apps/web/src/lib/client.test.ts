@@ -1,18 +1,23 @@
 /**
- * 连接层的重连语义。覆盖 `lib/client.ts` 的 `QyClient`。
+ * 连接层的重连语义。覆盖 `lib/client.ts` 的 `OphClient`。
  *
  * 这个文件存在本身就是一条记录：这块逻辑之前**一直没有测试**，理由是
  * 「要真 WebSocket 才能跑」。那是把「这块难测」当成了「不用测」——
  * 而它出过一个 bug：协议版本对不上时无限重连，界面显示成「N 秒后重试」，
  * 一个永远不会好的稍后重试。
  *
- * 现在 `QyClient` 的第二个参数是接缝（接入点 + socket 工厂），
+ * 现在 `OphClient` 的第二个参数是接缝（接入点 + socket 工厂），
  * 生产路径走默认实现，这里传一个假 socket。
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { AgentEvent, CommandRejectedFrame, ConversationId, EventEnvelope } from '@qywork/core'
-import { QyClient, type SocketLike } from './client.ts'
+import type {
+  AgentEvent,
+  CommandRejectedFrame,
+  ConversationId,
+  EventEnvelope,
+} from '@oph-autoresearch/core'
+import { OphClient, type SocketLike } from './client.ts'
 
 class FakeSocket implements SocketLike {
   readonly sent: string[] = []
@@ -46,7 +51,7 @@ function client(token = 'tk') {
   const rejected: CommandRejectedFrame[] = []
   const resyncs: number[] = []
   const busy: ConversationId[][] = []
-  const c = new QyClient(
+  const c = new OphClient(
     {
       onEvent: (f) => frames.push(f),
       onState: (state, detail) => states.push({ state, ...(detail ? { detail } : {}) }),

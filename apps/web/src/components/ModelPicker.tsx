@@ -1,4 +1,4 @@
-import type { EffortLevel } from '@qywork/core'
+import type { EffortLevel } from '@oph-autoresearch/core'
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import {
   activeModel,

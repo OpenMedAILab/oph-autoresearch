@@ -36,7 +36,7 @@ interface PluginsPayload {
 /**
  * 插件。
  *
- * **不分层。** 只有 `~/.qywork/plugins/` 一个目录。插件贡献的是工具、预览器、供应商——
+ * **不分层。** 只有 `~/.oph-autoresearch/plugins/` 一个目录。插件贡献的是工具、预览器、供应商——
  * 那些是这个 agent 的能力，不是某个仓库的内容。分层的代价是同一个插件在两个
  * 仓库里各存一份、各自升级。「这个项目要不要加载它」是开关，不是第二份拷贝。
  *
@@ -44,7 +44,7 @@ interface PluginsPayload {
  * 任何可安装内容的页面，就是把空壳换个名字再造一遍。所以这里只做 **已安装**——它有真实
  * 数据源，而「市场」没有。
  *
- * **与 `qy plugins` 同源。** 走的是同一个 `loadExtensions`，所以命令行与界面对「装了什么、隔离到什
+ * **与 `oph plugins` 同源。** 走的是同一个 `loadExtensions`，所以命令行与界面对「装了什么、隔离到什
  * 么程度」不会给出两种答案。两套读法迟早分叉，而分叉的那一刻没有人会发现。
  *
  * **失败的也要列。** 装失败的插件是最需要被看到的：只列成功的，「放进去了却没出现」就完全无从查起。
@@ -59,7 +59,7 @@ function dirName(dir: string): string {
 
 /** 「新增」递给模型的话头。不自动发送——用户可以改了再发。 */
 const NEW_PLUGIN =
-  '我们一起来做一个插件吧。先说明插件在 qywork 里怎么加载、跑在哪、能拿到什么权限，目录里要有哪些文件；然后问我这个插件要提供什么工具。'
+  '我们一起来做一个插件吧。先说明插件在 oph-autoresearch 里怎么加载、跑在哪、能拿到什么权限，目录里要有哪些文件；然后问我这个插件要提供什么工具。'
 
 export function PluginsPanel() {
   const [data, { refetch }] = createResource(() => client.api<PluginsPayload>('/api/plugins'))

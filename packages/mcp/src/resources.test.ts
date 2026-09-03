@@ -9,7 +9,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { CLIENT_PROTOCOL_VERSION, KNOWN_VERSION_LIST } from './client.ts'
 import { loadMcpServers, parseMcpConfig, unsupportedCapabilities } from './load.ts'
 
@@ -109,7 +109,7 @@ process.stdin.on('data', (c) => {
 }
 
 async function load(s: ServerShape) {
-  const dir = await mkdtemp(join(tmpdir(), 'qywork-mcp-res-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-mcp-res-'))
   const entry = join(dir, 'server.mjs')
   await writeFile(entry, serverSource(s), 'utf8')
   const logs: string[] = []
@@ -289,7 +289,7 @@ function ctx() {
  * 协议版本协商。
  *
  * 2026-07-28 把**能力声明从 `initialize` 挪到了 `server/discover`**。
- * 这不是一条可以「以后再说」的版本差异：qywork 是否注册 resource 工具、
+ * 这不是一条可以「以后再说」的版本差异：oph-autoresearch 是否注册 resource 工具、
  * 是否报「声明了没接的能力」，全都读 `capabilities`。只读 initialize 的话，
  * 一个现代 server 上那个字段是空的——因此**一个工具都不注册、也不报错**，
  * 正是上一组刚修掉的那个静默失败，换个版本原样复发。

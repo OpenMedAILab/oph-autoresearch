@@ -9,7 +9,7 @@ import { IconFolder, IconPlus } from './Icons.tsx'
  * 存在的目录」——名字只能取目录名，也没法先建一个空目录再开始。这里把两件事分开：**名字是项目
  * 的，路径是它落在哪**。
  *
- * **源文件夹可以留空。** 留空就在 `~/.qywork/workspaces/<名称>/` 建一个新的。会话挂的是项目 id，
+ * **源文件夹可以留空。** 留空就在 `~/.oph-autoresearch/workspaces/<名称>/` 建一个新的。会话挂的是项目 id，
  * 不是路径——所以以后改名字不会丢会话。
  *
  * **选目录只有桌面端有。** 系统目录选择器是外壳能力，浏览器拿不到。那边这颗按钮不渲染（B5），
@@ -93,7 +93,7 @@ export function NewProjectDialog(props: {
               class="np-input"
               type="text"
               value={name()}
-              placeholder={folder() ? '留空就用文件夹名' : '例如：青学研上'}
+              placeholder={folder() ? '留空就用文件夹名' : '例如：视网膜病变分级研究'}
               onInput={(e) => setName(e.currentTarget.value)}
             />
           </label>
@@ -114,7 +114,7 @@ export function NewProjectDialog(props: {
                     </button>
                   </Show>
                   {/* 边界声明留全（B7）：不写的话「留空会发生什么」没有任何提示。 */}
-                  <span class="np-hint">留空就在 qywork 的数据目录下新建一个</span>
+                  <span class="np-hint">留空就在 oph-autoresearch 的数据目录下新建一个</span>
                 </div>
               }
             >

@@ -7,7 +7,7 @@ import {
   listResourcesForRun,
   Store,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { collectResourceGarbage, RuntimeSink } from './sink.ts'
 
 const enc = new TextEncoder()

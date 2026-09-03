@@ -17,7 +17,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
-import type { EffortLevel } from '@qywork/core'
+import type { EffortLevel } from '@oph-autoresearch/core'
 import { effortIsTransmittable, type ModelSpec } from '../catalog.ts'
 import { classifyProviderError, namelessToolCall } from '../errors.ts'
 import {

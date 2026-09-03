@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { ConversationId } from '@qywork/core'
+import type { ConversationId } from '@oph-autoresearch/core'
 import {
   appendMessage,
   appendStep,
@@ -16,7 +16,7 @@ import {
   settleToolStep,
   updateRunUsage,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import pkg from '../package.json' with { type: 'json' }
 import { collect, exportConversation, exportConversationDiagnostics } from './archive.ts'
 
@@ -277,9 +277,9 @@ describe('诊断导出', () => {
       },
     })
     const parsed = JSON.parse(text)
-    expect(parsed.kind).toBe('qywork.session-diagnostic')
+    expect(parsed.kind).toBe('oph-autoresearch.session-diagnostic')
     expect(parsed.schemaVersion).toBe(5)
-    expect(parsed.exportedBy).toMatchObject({ name: 'qywork', version: pkg.version })
+    expect(parsed.exportedBy).toMatchObject({ name: 'oph-autoresearch', version: pkg.version })
     expect(parsed.provider).toMatchObject({
       name: 'p',
       kind: 'openai_chat_completions',

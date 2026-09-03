@@ -12,7 +12,7 @@
  * index.lock，否则用户在终端里 `git commit` 会随机失败。
  */
 
-import { collectProcess } from '@qywork/tools'
+import { collectProcess } from '@oph-autoresearch/tools'
 
 async function git(
   cwd: string,

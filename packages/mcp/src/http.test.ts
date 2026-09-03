@@ -307,7 +307,7 @@ describe('批量加载里的 http server', () => {
       {
         servers: {
           remote: { transport: 'http', url: URL_ },
-          nope: { command: 'qywork-绝对不存在', args: [] },
+          nope: { command: 'oph-autoresearch-绝对不存在', args: [] },
         },
         error: null,
       },

@@ -12,7 +12,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ContentBlock, WireMessage } from '@qywork/ai'
+import type { ContentBlock, WireMessage } from '@oph-autoresearch/ai'
 import { condenseMessage } from './compaction.ts'
 import { envelopeResult, materialize, toolResultContent } from './loop.ts'
 
@@ -22,7 +22,7 @@ const PNG = Buffer.from(
 )
 
 async function fixture(): Promise<{ path: string }> {
-  const dir = await mkdtemp(join(tmpdir(), 'qywork-img-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-img-'))
   const path = join(dir, 'shot.png').replaceAll('\\', '/')
   await writeFile(path, PNG)
   return { path }
@@ -209,7 +209,7 @@ describe('materialize', () => {
   })
 
   test('支持视频时只在请求副本中读取路径', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qywork-video-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-video-'))
     const path = join(dir, 'clip.mp4').replaceAll('\\', '/')
     const bytes = Buffer.from('native-video')
     await writeFile(path, bytes)

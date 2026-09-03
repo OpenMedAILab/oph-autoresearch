@@ -21,7 +21,7 @@ import type {
   TokenDensity,
   WireMessage,
   WireToolCall,
-} from '@qywork/ai'
+} from '@oph-autoresearch/ai'
 import {
   computeCost,
   estimateJson,
@@ -31,7 +31,7 @@ import {
   estimateSchemas,
   estimateText,
   ProviderError,
-} from '@qywork/ai'
+} from '@oph-autoresearch/ai'
 import type {
   ActionDescriptor,
   AgentEvent,
@@ -47,14 +47,14 @@ import type {
   RunUsage,
   StopReason,
   ToolOutcomeWire,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import {
   emptyBreakdown,
   emptyOmitted,
   envelopeHeadTokens,
   newBatchId,
   reconcileBreakdown,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import type { CompactionOutcome } from './compaction.ts'
 import { stepStamp } from './compaction.ts'
 import { drainUntil, EventQueue } from './event-queue.ts'
@@ -991,7 +991,7 @@ export class AgentLoop {
           if (occupancy > softLimit(adapter.spec)) {
             compactedAt = transcript.length
             process.stderr.write(
-              `[qy] 发送前检查触发压缩：占用约 ${occupancy}，软阈值 ${softLimit(adapter.spec)}
+              `[oph] 发送前检查触发压缩：占用约 ${occupancy}，软阈值 ${softLimit(adapter.spec)}
 `,
             )
             yield { type: 'compaction', runId: input.runId, phase: 'started' }
@@ -1073,7 +1073,7 @@ export class AgentLoop {
         // 但必须**说出来**——缓存失效本身是完全静默的，不报就永远没人知道。
         const drift = this.audit.observe(input.cacheKey ?? input.runId, req.system)
         if (drift)
-          process.stderr.write(`[qy] ${describeDrift(drift)}
+          process.stderr.write(`[oph] ${describeDrift(drift)}
 `)
 
         /*
@@ -1432,7 +1432,7 @@ export class AgentLoop {
              */
             const raw = (err as { cause?: unknown }).cause
             process.stderr.write(
-              `[qy] 请求失败 turn=${step} retry=${retryIndex} code=${code} errno=${String(
+              `[oph] 请求失败 turn=${step} retry=${retryIndex} code=${code} errno=${String(
                 (raw as { code?: unknown })?.code ?? '-',
               )} events=${providerEvents} silent=${Math.round(silentMs / 1000)}s | ${
                 raw instanceof Error ? raw.message : pe.message
@@ -1580,7 +1580,7 @@ export class AgentLoop {
            */
           if (total >= adapter.spec.contextWindow) {
             process.stderr.write(
-              `[qy] provider 静默截断：自报输入 ${total} 顶到窗口 ${adapter.spec.contextWindow}` +
+              `[oph] provider 静默截断：自报输入 ${total} 顶到窗口 ${adapter.spec.contextWindow}` +
                 NEWLINE,
             )
             compactedAt = -1

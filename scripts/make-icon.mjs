@@ -18,10 +18,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, '.tmp', 'icon', 'source.png')
 
 /*
- * 标识：圆角方块里的终端提示符 `>QY`。笔画端点全部 round，与界面图标集同一套规则
+ * 标识：圆角方块里的终端提示符 `>OPH`。笔画端点全部 round，与界面图标集同一套规则
  * （24 网格、圆端点）。深底浅字：小尺寸下（任务栏 16px）实心底比线稿更容易辨认。
  *
- * QY 两个字母用描边路径画，不用 <text>：字体是本机资源，换台机器渲染出的字形不同，
+ * OPH 三个字母用描边路径画，不用 <text>：字体是本机资源，换台机器渲染出的字形不同，
  * 图标就跟着变。Q 是整圆加一段尾巴，Y 是两条斜臂加一根竖干。
  */
 const SVG = `

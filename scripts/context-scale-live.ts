@@ -13,10 +13,10 @@
 
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { buildAdapter, estimateMessages } from '@qywork/ai'
-import type { AgentEvent, ConversationId, EventEnvelope, RunId } from '@qywork/core'
-import { envelopeHeadTokens } from '@qywork/core'
-import type { ModelRef, QyConfig } from '@qywork/runtime'
+import { buildAdapter, estimateMessages } from '@oph-autoresearch/ai'
+import type { AgentEvent, ConversationId, EventEnvelope, RunId } from '@oph-autoresearch/core'
+import { envelopeHeadTokens } from '@oph-autoresearch/core'
+import type { ModelRef, OphConfig } from '@oph-autoresearch/runtime'
 import {
   buildHistory,
   contextPanel,
@@ -24,8 +24,8 @@ import {
   makeSummarizer,
   RuntimeCompaction,
   resolveModel,
-} from '@qywork/runtime'
-import { serve } from '@qywork/server'
+} from '@oph-autoresearch/runtime'
+import { serve } from '@oph-autoresearch/server'
 import {
   getConversation,
   latestTodos,
@@ -33,7 +33,7 @@ import {
   listRuns,
   listSteps,
   Store,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 const WS_DIR = join(import.meta.dir, '..', '.tmp', 'smoke-ws', 'context-scale')
 const DB = join(WS_DIR, 'context-scale.sqlite3')
@@ -43,7 +43,7 @@ const RUN_TIMEOUT_MS = 240_000
 /** 第四段要模型逐个读的文件数。多几个才凑得出可折单元。 */
 const NOTES = 8
 /** 只写在第一份被折叠的工具结果里，重启后不能从召回问题本身抄答案。 */
-const RECALL_MARKER = 'QYWORK-RESTART-7429'
+const RECALL_MARKER = 'OPH_AUTORESEARCH-RESTART-7429'
 
 let failures = 0
 function check(label: string, ok: boolean, detail?: unknown): void {
@@ -272,7 +272,7 @@ function repeatedOpeners(text: string): [string, number][] {
   return [...count].filter(([, times]) => times > 1)
 }
 
-async function runFor(store: Store, config: QyConfig, ref: ModelRef): Promise<void> {
+async function runFor(store: Store, config: OphConfig, ref: ModelRef): Promise<void> {
   // 每个模型都从「没装 MCP」起步，否则第二个模型的第一阶段就已经带着它了。
   await rm(join(WS_DIR, '.agents', 'mcp.json'), { force: true })
   const mcpEntry = join(WS_DIR, 'mcp-fixture.mjs')
@@ -554,7 +554,7 @@ async function runFor(store: Store, config: QyConfig, ref: ModelRef): Promise<vo
     const warmed = await turn(
       live,
       conv,
-      '仍然不要读取文件或调用工具。只回答：刚才召回的口令是否仍是 QYWORK-RESTART-7429？',
+      '仍然不要读取文件或调用工具。只回答：刚才召回的口令是否仍是 OPH_AUTORESEARCH-RESTART-7429？',
     )
     const warmRequests = listProviderRequests(store, warmed.runId)
     const warmCached = warmRequests

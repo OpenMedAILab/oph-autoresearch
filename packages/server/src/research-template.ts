@@ -1,7 +1,7 @@
 /**
  * oph-autoresearch 工作区模板。
  *
- * 模板在服务端内嵌，而不是运行时从源码目录读取：发布后的 `qy` 是单文件 sidecar，
+ * 模板在服务端内嵌，而不是运行时从源码目录读取：发布后的 `oph` 是单文件 sidecar，
  * 源码旁的 assets 不一定存在。初始化只补缺失文件，绝不覆盖医生或研究者已经修改的内容。
  */
 
@@ -261,7 +261,7 @@ const RESEARCH_README = `# 研究产物
 `
 
 const TEMPLATE_FILES: Readonly<Record<string, string>> = {
-  '.qy/team.json': TEAM_CONFIG,
+  '.oph/team.json': TEAM_CONFIG,
   '.agents/skills/oph-research-pipeline/SKILL.md': PIPELINE_SKILL,
   '.agents/skills/ssh-data-audit/SKILL.md': DATA_AUDIT_SKILL,
   '.agents/skills/ssh-experiment-runner/SKILL.md': EXPERIMENT_SKILL,

@@ -109,7 +109,7 @@ const MODULES: Module[] = [
       {
         label: 'additionalDirectories',
         text: () =>
-          '工作区之外额外可读写的目录，软链接按真实路径判。.qy 与 .agents 由文件工具拦，shell 不拦；full 模式下这一层不设。',
+          '工作区之外额外可读写的目录，软链接按真实路径判。.oph 与 .agents 由文件工具拦，shell 不拦；full 模式下这一层不设。',
       },
       {
         label: 'envAllowList',

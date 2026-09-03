@@ -29,7 +29,7 @@ import {
   type SafetyOptions,
   safeFetch,
   spawnGuarded,
-} from '@qywork/tools'
+} from '@oph-autoresearch/tools'
 
 /** 单次 fs.read 的上限。插件不该用它读大文件——那是 read_resource 的事。 */
 const MAX_READ_BYTES = 4 * 1024 * 1024
@@ -44,11 +44,11 @@ const MAX_STORAGE_BYTES = 2 * 1024 * 1024
 /** fs.list 单次返回的条目上限。 */
 const MAX_LIST_ENTRIES = 2000
 
-export const PLUGIN_DATA_DIR = '.qy/plugin-data'
+export const PLUGIN_DATA_DIR = '.oph/plugin-data'
 
 export interface CapabilityOptions {
   workspaceRoot: string
-  /** 插件私有存储根。默认 `<workspaceRoot>/.qy/plugin-data`。 */
+  /** 插件私有存储根。默认 `<workspaceRoot>/.oph/plugin-data`。 */
   storageRoot?: string
   /** 出网策略，与 web_fetch 共用同一套 SSRF 闸。 */
   netPolicy?: SafetyOptions

@@ -9,9 +9,9 @@
  * 打包时出自同一次构建。完整理由写在 `HelloFrame` 的注释里。
  */
 
-import type { EventEnvelope, HelloFrame, HelloOkFrame } from '@qywork/core'
-import type { QyConfig } from '@qywork/runtime'
-import { detectSandbox } from '@qywork/tools'
+import type { EventEnvelope, HelloFrame, HelloOkFrame } from '@oph-autoresearch/core'
+import type { OphConfig } from '@oph-autoresearch/runtime'
+import { detectSandbox } from '@oph-autoresearch/tools'
 import type { ServerWebSocket } from 'bun'
 import pkg from '../package.json' with { type: 'json' }
 import { probeEnvironment } from './api/host.ts'
@@ -33,7 +33,7 @@ export function handleHello(
     token: string
     unsubscribers: Map<string, () => void>
     /** 传的是运行中的那一份（`/api/config` 的 PUT 会就地改它），不是启动时的快照。 */
-    config: QyConfig
+    config: OphConfig
     /** 报「此刻哪几条会话在跑」的那份权威，见 `busyConversations`。 */
     runs: RunManager
     /**

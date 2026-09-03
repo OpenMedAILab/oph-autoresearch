@@ -1,5 +1,5 @@
 /**
- * 连接层：那一个 `QyClient`，以及把服务端事件折进 `state` 的 `applyEvent`。
+ * 连接层：那一个 `OphClient`，以及把服务端事件折进 `state` 的 `applyEvent`。
  *
  * 会话投影（`reloadActiveConversation` 及其两个折叠助手）也在这里，
  * 而不是在 `actions.ts`：**断线重连后补不上缺口时要整段重拉**，
@@ -20,10 +20,10 @@ import type {
   RunUsage,
   StopReason,
   ToolOutcomeWire,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import { createEffect, createRoot } from 'solid-js'
 import { produce } from 'solid-js/store'
-import { QyClient } from '../client.ts'
+import { OphClient } from '../client.ts'
 import { createFramer, createPacer } from '../stream-pace.ts'
 import {
   dropView,
@@ -36,7 +36,7 @@ import {
 } from './state.ts'
 import { panelTabs, tabConversationId, workspace } from './ui.ts'
 
-export const client = new QyClient({
+export const client = new OphClient({
   onState: (s, detail) => setState({ connection: s, connectionDetail: detail ?? '' }),
   onCapabilities: (caps) => setState('capabilities', caps),
   // 握手带的忙闲快照直接整表替换：它是服务端此刻的全部，不是一条增量。
@@ -52,7 +52,7 @@ export const client = new QyClient({
 /*
  * 热更新换掉这个模块之前，把旧连接关干净。
  *
- * vite 会重新执行整个模块，因此有了第二个 `QyClient`，而上一份那条 WebSocket 还连着。
+ * vite 会重新执行整个模块，因此有了第二个 `OphClient`，而上一份那条 WebSocket 还连着。
  * 服务端按连接注册订阅者（`handshake.ts` 拿 `ws.data.id` 做 key），两条连接就是两份
  * 同样的事件流，回调的却是同一个 store——正文每个 token 显示两遍，末尾出现两条读数条。
  * 改一次代码多一条连接，越用越多。

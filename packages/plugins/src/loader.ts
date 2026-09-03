@@ -10,12 +10,12 @@
  * 边界的确切范围见 host.ts 顶部。简而言之：宿主的环境与进程内对象一定挡住；
  * 文件系统与网络**取决于运行时**——node 20+ 给沙箱、node 22.15+ 再给出网闸，
  * bun 上两样都没有。所以隔离状态是**两个分开上报的布尔值**，
- * 不是一句「有沙箱」。用 `qy plugins` 可以直接看当前是哪种。
+ * 不是一句「有沙箱」。用 `oph plugins` 可以直接看当前是哪种。
  */
 
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { sanitizeToolName, type ToolSpec } from '@qywork/agent'
+import { sanitizeToolName, type ToolSpec } from '@oph-autoresearch/agent'
 import { checkPermission, PluginHost } from './host.ts'
 import {
   ManifestError,
@@ -43,7 +43,7 @@ export function pluginToolName(pluginId: string, tool: string): string {
  *
  * **必须走这里，不要自己拼 `${id}__`。** 注册名消毒过，一个 id 带点的插件
  * （清单推荐反向域名，`com.example` 是常态）拿原始 id 拼前缀一条都匹配不上，
- * 表现是 `qy plugins` 报「0 个工具」而工具全都在。
+ * 表现是 `oph plugins` 报「0 个工具」而工具全都在。
  */
 export function pluginToolPrefix(pluginId: string): string {
   return sanitizeToolName(`${pluginId}__`)
@@ -125,7 +125,7 @@ export async function loadPlugins(
 }
 
 async function loadOne(dir: string, options: LoadOptions): Promise<LoadedPlugin> {
-  const manifestPath = join(dir, 'qywork.plugin.json')
+  const manifestPath = join(dir, 'oph-autoresearch.plugin.json')
   const raw = await readFile(manifestPath, 'utf8')
   let parsed: unknown
   try {

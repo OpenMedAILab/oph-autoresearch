@@ -25,7 +25,7 @@ import type {
   TodoItem,
   ToolOutcomeWire,
   WorkflowProjection,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import { createStore, produce } from 'solid-js/store'
 import type { ConnectionState } from '../client.ts'
 

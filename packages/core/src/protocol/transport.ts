@@ -100,7 +100,7 @@ export interface ServerCapabilities {
   // 前端按 `isDesktopShell()` 判有没有。握手是服务端对客户端的声明，
   // 拿它去报一件服务端不知情的事，报出来的必然是猜的。
   // 插件 / 外部 CLI / MCP 三份清单也不在这里，理由是**它们不是进程级的**：
-  // 编排与 MCP 配在项目目录下（`.qy/team.json`、`.agents/mcp.json`），而一条连接
+  // 编排与 MCP 配在项目目录下（`.oph/team.json`、`.agents/mcp.json`），而一条连接
   // 横跨用户同时开着的所有项目。报在握手里等于「A 项目的编排显示在 B 项目上」，
   // 而且只有重连时才更新。各自的设置页按项目现取，不经这里。
   /**
@@ -111,11 +111,11 @@ export interface ServerCapabilities {
    * 边界不一样。`'none'` 时 `reason` 说得出为什么、下一步怎么办。
    *
    * 这条必须进握手：桌面端和手机端上，用户唯一能知道「命令跑在什么边界里」
-   * 的地方就是界面——而 `qy config` 他们看不到。
+   * 的地方就是界面——而 `oph config` 他们看不到。
    */
   sandbox: { backend: string; active: boolean; reason: string }
   /**
-   * 这台机器上装没装齐 qywork 要用的外部程序。**每一条都对应一处真实的
+   * 这台机器上装没装齐 oph-autoresearch 要用的外部程序。**每一条都对应一处真实的
    * `Bun.spawn`**，不是一张「环境检查」的装饰清单：
    * bash → `run_command`，git → 版本面板，rg → 搜索加速，node → 插件运行时。
    *

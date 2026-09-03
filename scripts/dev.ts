@@ -3,7 +3,7 @@
 /**
  * 开发编排：两端都从源码跑，两端都自动重载。
  *
- * **为什么要有这个脚本。** 桌面外壳跑的是**预编译的 `bin/qy`**（`externalBin`），因此改了
+ * **为什么要有这个脚本。** 桌面外壳跑的是**预编译的 `bin/oph`**（`externalBin`），因此改了
  * `packages/server` 之后不重编就完全看不出来——而且症状会伪装成前端 bug。实测形状：旧二
  * 进制里没有某条 POST 路由，前端抛出来的是一句 `Cannot read properties of undefined (reading 'id')
  * `。
@@ -13,7 +13,7 @@
  *
  * - sidecar：直接跑 `packages/cli/src/index.ts`，源码变了由本脚本换进程（见下）。
  * - 前端：vite 自己的 HMR，由 `tauri dev` 的 `beforeDevCommand` 拉起。
- * - 外壳：`sidecar::from_env()` 看见 `QYWORK_TOKEN` + `QYWORK_PORT` 就复用外部
+ * - 外壳：`sidecar::from_env()` 看见 `OPH_AUTORESEARCH_TOKEN` + `OPH_AUTORESEARCH_PORT` 就复用外部
  *   sidecar，不再自己 spawn（`apps/desktop/src-tauri/src/lib.rs`）。
  *
  * 两端都从同一棵源码树跑，「客户端和服务端不是同一批出的」在开发路径上不再可能。
@@ -21,7 +21,7 @@
  * **换代码的判据是「文件变了，且手上没有 run」。** 不要换回 `bun --watch`：它的判据只有文件 mtime，
  * 对「这个进程手上有没有活」一无所知，因此保存一次源码就把正在跑的那一轮从中间掐断。实测形状：
  * 账本里三条 run 因此中断，其中两条停在工具执行期间，整轮不可信（`recoverStaleRuns` 判
- * `internal_guard`）。agent 改 qywork 自己的源码时更糟：它写完第一个文件就把自己重启了，
+ * `internal_guard`）。agent 改 oph-autoresearch 自己的源码时更糟：它写完第一个文件就把自己重启了，
  * 剩下的还没写。
  *
  * 判据换成两条之后，两个场景都对：跑着的那一轮跑完才换代码，换完下一轮就是新代码。
@@ -32,15 +32,15 @@ import { Database } from 'bun:sqlite'
 import { randomBytes } from 'node:crypto'
 import { watch } from 'node:fs'
 import { join } from 'node:path'
-import { dataPath } from '@qywork/runtime'
+import { dataPath } from '@oph-autoresearch/runtime'
 import { createReloadSupervisor, isSourceChange } from './reload-supervisor.ts'
 
 const ROOT = join(import.meta.dir, '..')
-const PORT = Number(process.env.QYWORK_PORT ?? 7717)
+const PORT = Number(process.env.OPH_AUTORESEARCH_PORT ?? 7717)
 /** 每次开发会话现生成一个。不写死在仓库里——那就是一个入库的凭证。 */
-const TOKEN = process.env.QYWORK_TOKEN ?? randomBytes(24).toString('hex')
+const TOKEN = process.env.OPH_AUTORESEARCH_TOKEN ?? randomBytes(24).toString('hex')
 
-/** 那个端口上有没有一个**能应答的** qywork。用来等就绪，不用来判占用。 */
+/** 那个端口上有没有一个**能应答的** oph-autoresearch。用来等就绪，不用来判占用。 */
 async function answers(port: number): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/health`, {
@@ -73,24 +73,24 @@ async function bindable(port: number): Promise<boolean> {
 /**
  * 端口被占就直接说，不静默换一个——换了 WebView 手里那份 base 就是错的。
  *
- * 两种占用分开说，因为下一步不一样：有 qywork 在跑 → 先停掉那一个（两个进程抢
+ * 两种占用分开说，因为下一步不一样：有 oph-autoresearch 在跑 → 先停掉那一个（两个进程抢
  * 同一份 SQLite 的 WAL 锁）；绑不上又没人应答 → 是更早留下的后台进程仍持有那份
- * 监听句柄（`qy serve` 现在把命令挂在 runner 底下，不会再产生新的），
+ * 监听句柄（`oph serve` 现在把命令挂在 runner 底下，不会再产生新的），
  * 收掉它即可。
  */
 if (!(await bindable(PORT))) {
   process.stderr.write(
     (await answers(PORT))
-      ? `端口 ${PORT} 已被另一个 qywork 实例占用。请先停止该实例，或设置 QYWORK_PORT=<其它端口> 后重试。
+      ? `端口 ${PORT} 已被另一个 oph-autoresearch 实例占用。请先停止该实例，或设置 OPH_AUTORESEARCH_PORT=<其它端口> 后重试。
 `
       : `端口 ${PORT} 被一个不响应的进程占用，通常是此前遗留的后台进程仍持有监听句柄，` +
-          `netstat 显示的 PID 可能已经不存在。请结束该进程，或设置 QYWORK_PORT=<其它端口> 后重试。
+          `netstat 显示的 PID 可能已经不存在。请结束该进程，或设置 OPH_AUTORESEARCH_PORT=<其它端口> 后重试。
 `,
   )
   process.exit(1)
 }
 
-const env = { ...process.env, QYWORK_TOKEN: TOKEN, QYWORK_PORT: String(PORT) }
+const env = { ...process.env, OPH_AUTORESEARCH_TOKEN: TOKEN, OPH_AUTORESEARCH_PORT: String(PORT) }
 
 /**
  * 用**正在跑的这个 bun**，不写裸名 `bun`。
@@ -116,7 +116,7 @@ function spawnAgent(): ReturnType<typeof Bun.spawn> {
       '--parent-pid',
       String(process.pid),
       // **不传 --cwd**：传了就等于把这个仓库登记成项目，而开发态不要这个默认
-      // （用户拿到的第一个项目会是 qywork 的源码树）。不传则由服务端决定——
+      // （用户拿到的第一个项目会是 oph-autoresearch 的源码树）。不传则由服务端决定——
       // 账本里有项目就用最近打开的，一个都没有才建默认工作区。
     ],
     { cwd: ROOT, env, stdout: 'inherit', stderr: 'inherit', stdin: 'ignore' },
@@ -171,7 +171,7 @@ process.stderr.write('[dev] sidecar 就绪，正在启动桌面外壳\n')
  * **账本是唯一真源**，只读打开，不写任何行——不为这件事新开一条接口或一本账。
  * `owner_pid` 就是 sidecar 自己的 pid（`recoverStaleRuns` 的 `isOrphan` 拿它跟
  * `process.pid` 比），所以这里问的确实是「**这个**进程手上有没有活」，
- * 而不是「机器上有没有人在跑」——那台机器上可能还有别的 qywork。
+ * 而不是「机器上有没有人在跑」——那台机器上可能还有别的 oph-autoresearch。
  *
  * 读不到（账本还没建、正在迁移、被独占）当作没有：那退化成改动之前的行为，不会更差。
  */
@@ -212,7 +212,7 @@ watch(join(ROOT, 'packages'), { recursive: true }, (_event, file) => {
 })
 
 /*
- * **不设 `QYWORK_WORKSPACE`。**
+ * **不设 `OPH_AUTORESEARCH_WORKSPACE`。**
  *
  * 它在 `resolve_workspace()`（`lib.rs`）里优先级最高，设了就等于每次启动都把
  * 这个仓库钉成当前项目——用户在应用里切走，下次启动又被切回来，而且仓库自己成了
@@ -229,7 +229,7 @@ const shell = Bun.spawn([BUN, 'run', '--cwd', join(ROOT, 'apps/desktop'), 'tauri
 })
 
 /**
- * 谁先退都把另一个收干净——留下的 qy 会占着端口和 SQLite 的 WAL 锁。
+ * 谁先退都把另一个收干净——留下的 oph 会占着端口和 SQLite 的 WAL 锁。
  *
  * **不杀更深的那一层。** sidecar 底下挂着模型用 `run_command` 起的后台进程
  * （`run.ps1 start` 那类服务），那是用户要的结果，不该因为开发环境退出而被收掉。

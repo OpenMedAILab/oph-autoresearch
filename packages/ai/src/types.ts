@@ -6,7 +6,7 @@
 
 // `ContextGroup` 的真源在 `core/domain/model.ts`。这里只转出去给 `_group` 用——
 // 分组口径必须与事件协议同一个类型，各写一份就是这次要清理的那个历史。
-import type { ContextGroup, EffortLevel, ProviderKind } from '@qywork/core'
+import type { ContextGroup, EffortLevel, ProviderKind } from '@oph-autoresearch/core'
 import type { ModelSpec, SpecOverride } from './catalog.ts'
 
 // ─────────────────────────────── 配置 ───────────────────────────────
@@ -50,7 +50,7 @@ export interface ProviderProfile {
    * 模型库里这一条（窗口、上限、单价、思考档位）。**唯一的覆盖层**：
    * 目录 seed 之上只有它，`buildAdapter` 不再接第二条覆盖通道。
    *
-   * 落盘按「模型 id × 协议」两维索引（`runtime` 的 `QyConfig.catalog`），
+   * 落盘按「模型 id × 协议」两维索引（`runtime` 的 `OphConfig.catalog`），
    * 因为同一个模型换条协议能力就不同；这里拿到的已经是选中的那一条。
    */
   spec?: SpecOverride
@@ -83,7 +83,7 @@ export interface ChatRequest {
  * 这次请求实际申报的输出上限。`null` = 整个字段不发，由端点用自己的默认。
  *
  * **`null` 由调用方说了算，不由规格说了算。** 规格没测过（`spec` 为 `null`）
- * 而调用方给了具体数时，照发那个数——`qy probe` 的探针正是这一档，它靠
+ * 而调用方给了具体数时，照发那个数——`oph probe` 的探针正是这一档，它靠
  * `maxOutputTokens: 16` 把每次探测压到几乎不要钱，按规格改判成不申报的话，
  * 每跑一次探针都会拿到一整篇回答。
  */

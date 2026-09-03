@@ -10,7 +10,7 @@
  * |---|---|---|---|
  * | `builtin` | 随程序发布 | 没人 | 不可见 |
  * | `project` | 工作区 `.agents/` | 用户 · AI 默认写这里 | 可见 |
- * | `global` | `~/.qywork/` | 用户 · AI 仅在明确指定时写 | 可见 |
+ * | `global` | `~/.oph-autoresearch/` | 用户 · AI 仅在明确指定时写 | 可见 |
  *
  * **项目层不叫「用户层」。** 它是工作区里的那一份，跟着仓库走；跟着人走的是
  * `global`。两个词在别处含义相反（家目录那层通常才叫 user），沿用会让读代码的人
@@ -22,8 +22,8 @@
  * 内置那层**今天还没有内容**（`roots.builtin` 为 null）。它不出现在任何界面上
  * ——本来就不可见——所以这不是 B5 说的空壳：空壳的定义是「界面上有、背后没有」。
  *
- * **为什么项目层是 `.agents/` 而不是 `.qy/`。** `.agents/` 是跨客户端约定（agentskills.io）。别的
- * CLI 读不到 `~/.qywork/`，但读得到工作区里这一份——「换个 CLI 也能用」这件事只有这一层做得到。
+ * **为什么项目层是 `.agents/` 而不是 `.oph/`。** `.agents/` 是跨客户端约定（agentskills.io）。别的
+ * CLI 读不到 `~/.oph-autoresearch/`，但读得到工作区里这一份——「换个 CLI 也能用」这件事只有这一层做得到。
  * **但它不是万能**：认这条约定的客户端才读得到，各家私有目录的一律读不到。
  *
  * **解析规则只能有一份。** 设置页列出来的那条，必须就是 agent 真正加载的那条。所以加载器和界面**共
@@ -46,18 +46,18 @@ export interface ScopeRoots {
   builtin: string | null
   /** `<workspaceRoot>/.agents`。 */
   project: string
-  /** `~/.qywork`（`configDir()`）。 */
+  /** `~/.oph-autoresearch`（`configDir()`）。 */
   global: string
 }
 
 /**
- * 全局层的根：`~/.qywork`（`QYWORK_HOME` 可改）。
+ * 全局层的根：`~/.oph-autoresearch`（`OPH_AUTORESEARCH_HOME` 可改）。
  *
  * **这里是唯一的定义**，`runtime` 的 `configDir()` 调的就是它。配置文件和全局
  * 记忆 / 技能躺在同一棵树下，两处各算一遍路径必然在某次改环境变量时漂开。
  */
 export function globalScopeRoot(): string {
-  return process.env.QYWORK_HOME ?? join(homedir(), '.qywork')
+  return process.env.OPH_AUTORESEARCH_HOME ?? join(homedir(), '.oph-autoresearch')
 }
 
 /**

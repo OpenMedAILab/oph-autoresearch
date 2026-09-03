@@ -1,9 +1,9 @@
 /**
- * `qy doctor` —— 一屏看完本机上的当前状态。
+ * `oph doctor` —— 一屏看完本机上的当前状态。
  *
  * **为什么需要它。** 这些事实已经全都算得出来了，但**分散在四条命令和一个日志里**：
- * `qy config` 报配置与沙箱、`qy mcp` 报 MCP、`qy plugins` 报插件隔离、
- * `qy usage` 报花销。用户想回答「当前边界是什么 / 扩展是否都在运行」，
+ * `oph config` 报配置与沙箱、`oph mcp` 报 MCP、`oph plugins` 报插件隔离、
+ * `oph usage` 报花销。用户想回答「当前边界是什么 / 扩展是否都在运行」，
  * 得挨个跑一遍，还得自己把结论拼起来。
  *
  * 其中沙箱那条**只在出问题之后才有人查**：无内核边界是多数机器的默认状态，
@@ -13,7 +13,7 @@
  * 1. **不花钱、不发请求。** 一条要计费的体检命令，用户不会常跑，
  *    而不常跑的体检等于没有。所以这里只查本地事实：配置、沙箱、账本、
  *    MCP 与插件的连通性（那两个本来就要起子进程）。
- *    想实测端点能力是 `qy probe` 的事，不并进来。
+ *    想实测端点能力是 `oph probe` 的事，不并进来。
  * 2. **分级而不是打分。** 输出只有三种前缀：`✗` 阻断、`⚠` 要知道、`✓` 正常。
  *    合成一个「健康度 87 分」既不可操作也不可验证。
  * 3. **退出码只由 `✗` 决定。** `⚠` 不退非零：否则无内核沙箱的机器上退出码恒为非零。
@@ -34,9 +34,14 @@ import {
   MCP_CONFIG,
   resolveModel,
   toolNamePrefix,
-} from '@qywork/runtime'
-import { contentPathFor, type ModelFinishRate, providerFinishRates, Store } from '@qywork/store'
-import { detectSandbox } from '@qywork/tools'
+} from '@oph-autoresearch/runtime'
+import {
+  contentPathFor,
+  type ModelFinishRate,
+  providerFinishRates,
+  Store,
+} from '@oph-autoresearch/store'
+import { detectSandbox } from '@oph-autoresearch/tools'
 
 const DIM = '\x1b[2m'
 const RESET = '\x1b[0m'
@@ -159,7 +164,7 @@ async function checkConfig(): Promise<Line[]> {
     text: `权限模式 ${cfg.mode ?? 'auto'}`,
     detail:
       (cfg.mode ?? 'auto') === 'full'
-        ? '不裁决，全放行（凭证剥离与禁止改 .qy/ 仍然生效）'
+        ? '不裁决，全放行（凭证剥离与禁止改 .oph/ 仍然生效）'
         : '不弹窗，由硬边界 + 静态规则 + 分类器裁决',
   })
 
@@ -172,7 +177,7 @@ function checkSandbox(): Line[] {
   return [
     {
       // 没有内核边界是**警告不是失败**：绝大多数 Windows 机器都是这个状态，
-      // 判成 fail 会让 `qy doctor` 在那些机器上永远退非零，因此退出码失去意义。
+      // 判成 fail 会让 `oph doctor` 在那些机器上永远退非零，因此退出码失去意义。
       level: s.active ? 'ok' : 'warn',
       text: `${s.backend}（${where}）`,
       detail: s.reason,
@@ -268,7 +273,7 @@ async function checkStore(): Promise<Line[]> {
 }
 
 async function checkMcp(workspaceRoot: string): Promise<Line[]> {
-  // 加载日志在这里不收：它们是给 `qy mcp --tools` 逐行看的，
+  // 加载日志在这里不收：它们是给 `oph mcp --tools` 逐行看的，
   // 体检要的是结论。收了不打就是又一条「算出来没人消费」。
   const reg = await loadWorkspaceMcp(workspaceRoot, () => {})
   const out: Line[] = []
@@ -285,7 +290,7 @@ async function checkMcp(workspaceRoot: string): Promise<Line[]> {
       level: s.unsupported.length ? 'warn' : 'ok',
       text: `${s.name} · ${s.client.transportKind} · ${tools} 个工具`,
       ...(s.unsupported.length
-        ? { detail: `server 还声明了 qywork 未支持的能力：${s.unsupported.join('、')}` }
+        ? { detail: `server 还声明了 oph-autoresearch 未支持的能力：${s.unsupported.join('、')}` }
         : {}),
     })
   }

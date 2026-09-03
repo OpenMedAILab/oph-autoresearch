@@ -10,16 +10,16 @@
  * **接口定义在上层，实现由下层注入**（`SinkPort` 是同一个套路）。
  */
 
-import type { ConversationId } from '@qywork/core'
-import type { QyConfig } from '@qywork/runtime'
-import type { Store } from '@qywork/store'
+import type { ConversationId } from '@oph-autoresearch/core'
+import type { OphConfig } from '@oph-autoresearch/runtime'
+import type { Store } from '@oph-autoresearch/store'
 import type { EventBus } from '../bus.ts'
 import type { Pairing } from '../pairing.ts'
 import type { RunManager } from '../runs.ts'
 
 export interface ApiDeps {
   store: Store
-  config: QyConfig
+  config: OphConfig
   bus: EventBus
   runs: RunManager
   pairing: Pairing

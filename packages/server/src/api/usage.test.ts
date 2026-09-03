@@ -6,8 +6,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { UsageResponse } from '@qywork/core'
-import { recordUsage, Store } from '@qywork/store'
+import type { UsageResponse } from '@oph-autoresearch/core'
+import { recordUsage, Store } from '@oph-autoresearch/store'
 import type { ApiRequestDeps } from './types.ts'
 import { handleUsageApi } from './usage.ts'
 

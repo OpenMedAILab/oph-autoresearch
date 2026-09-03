@@ -1,6 +1,6 @@
 /** 配对与局域网开关。 */
 
-import { encodePairingUrl } from '@qywork/core'
+import { encodePairingUrl } from '@oph-autoresearch/core'
 import { lanCandidates } from '../pairing.ts'
 import { type ApiHandler, json } from './types.ts'
 

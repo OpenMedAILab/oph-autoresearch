@@ -28,7 +28,7 @@ describe('空 key 在本地就判定，不发请求', () => {
   })
 
   test('报错里带上该做什么', () => {
-    expect(grab(() => buildAdapter({ ...base, apiKey: '' })).message).toContain('qy init')
+    expect(grab(() => buildAdapter({ ...base, apiKey: '' })).message).toContain('oph init')
   })
 
   test('anthropic 同样适用', () => {

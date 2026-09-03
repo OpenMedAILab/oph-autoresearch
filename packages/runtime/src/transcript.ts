@@ -18,16 +18,22 @@
  * 就丢掉全部工具卡」。同一句话对模型侧一字不差地成立。
  */
 
-import { envelopeResult, stepStamp, toolResultContent } from '@qywork/agent'
-import type { ContentBlock, WireMessage, WireToolCall } from '@qywork/ai'
-import type { Attachment, ContextGroup, ConversationId, MessageId, Step } from '@qywork/core'
+import { envelopeResult, stepStamp, toolResultContent } from '@oph-autoresearch/agent'
+import type { ContentBlock, WireMessage, WireToolCall } from '@oph-autoresearch/ai'
+import type {
+  Attachment,
+  ContextGroup,
+  ConversationId,
+  MessageId,
+  Step,
+} from '@oph-autoresearch/core'
 import {
   listMessages,
   listRunContextSnapshots,
   listRuns,
   listSteps,
   type Store,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 /** 投影产物统一带的分组标记。工具结果的执行记录/正文二分在计量层做，不在这里拆。 */
 const GROUP: ContextGroup = 'executionRecords'

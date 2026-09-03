@@ -13,22 +13,22 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isWorkspaceTrusted, loadConfig } from '@qywork/runtime'
+import { isWorkspaceTrusted, loadConfig } from '@oph-autoresearch/runtime'
 import type { ApiRequestDeps } from './types.ts'
 import { handleWorkspaceApi } from './workspace.ts'
 
 const dirs: string[] = []
-const prevHome = process.env.QYWORK_HOME
+const prevHome = process.env.OPH_AUTORESEARCH_HOME
 
 beforeEach(async () => {
-  const home = await mkdtemp(join(tmpdir(), 'qywork-wshome-'))
+  const home = await mkdtemp(join(tmpdir(), 'oph-autoresearch-wshome-'))
   dirs.push(home)
-  process.env.QYWORK_HOME = home
+  process.env.OPH_AUTORESEARCH_HOME = home
 })
 
 afterEach(async () => {
-  if (prevHome === undefined) delete process.env.QYWORK_HOME
-  else process.env.QYWORK_HOME = prevHome
+  if (prevHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+  else process.env.OPH_AUTORESEARCH_HOME = prevHome
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -42,7 +42,7 @@ function call(root: string, path: string, init?: RequestInit): Promise<Response 
 
 /** 一个工作区。`mcp` 为空时不写 `.agents/mcp.json`。 */
 async function workspace(mcp?: unknown): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'qywork-wstrust-'))
+  const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-wstrust-'))
   dirs.push(root)
   if (mcp !== undefined) {
     await mkdir(join(root, '.agents'), { recursive: true })

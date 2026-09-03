@@ -5,8 +5,12 @@
  * 表现和「服务端正在处理」在界面上无法区分。
  */
 
-import type { ClientCommand, CommandRejectedFrame, CommandRejectReason } from '@qywork/core'
-import { getConversation, setConversationModel } from '@qywork/store'
+import type {
+  ClientCommand,
+  CommandRejectedFrame,
+  CommandRejectReason,
+} from '@oph-autoresearch/core'
+import { getConversation, setConversationModel } from '@oph-autoresearch/store'
 import type { ServerWebSocket } from 'bun'
 import type { CommandDeps, SocketData } from './deps.ts'
 import { compactConversation, resumeGoal, setGoal, startRun } from './run-control.ts'

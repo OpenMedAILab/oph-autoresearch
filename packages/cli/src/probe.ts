@@ -1,19 +1,19 @@
 /**
- * `qy probe` —— 实测一个供应商档案支持什么。
+ * `oph probe` —— 实测一个供应商档案支持什么。
  *
  * 内置目录只认得出自己认识的模型；接中转站、自建网关、刚发布的模型时，
  * 它回落到一组保守的猜测。保守是对的，但**没有任何办法验证那个猜测**——
  * 结果是：支持思考的端点从不开思考，不支持的又每次都 400，只能靠人试。
  *
- *   qy probe                  探当前生效的那个模型
- *   qy probe <模型名>         探指定模型（走它所属的接口）
- *   qy probe --save           把结果写回配置（不加这个只打印，不改配置）
+ *   oph probe                  探当前生效的那个模型
+ *   oph probe <模型名>         探指定模型（走它所属的接口）
+ *   oph probe --save           把结果写回配置（不加这个只打印，不改配置）
  *
  * 探测会**真的发几个请求**（每个一个字、最多 16 token），所以它只由用户显式触发。
  */
 
-import { describeProbe, probeModel, toTransportCapabilities } from '@qywork/ai'
-import { loadConfig, resolveModel, saveConfig } from '@qywork/runtime'
+import { describeProbe, probeModel, toTransportCapabilities } from '@oph-autoresearch/ai'
+import { loadConfig, resolveModel, saveConfig } from '@oph-autoresearch/runtime'
 
 const DIM = '\x1b[2m'
 const RESET = '\x1b[0m'

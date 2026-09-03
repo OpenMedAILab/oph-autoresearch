@@ -22,8 +22,8 @@
  * 而清单本身还要占约 30 token/条。所以只有超过阈值才转按需，见 `EXTERNAL_SCHEMA_BUDGET_TOKENS`。
  */
 
-import type { ToolRegistry, ToolSpec } from '@qywork/agent'
-import { estimateSchemas, type TokenDensity } from '@qywork/ai'
+import type { ToolRegistry, ToolSpec } from '@oph-autoresearch/agent'
+import { estimateSchemas, type TokenDensity } from '@oph-autoresearch/ai'
 
 /**
  * 外部工具 schema 的常驻预算。总量不超过它就照旧全量注册，超过才转按需。

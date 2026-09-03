@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { QyConfig } from '@qywork/runtime'
+import type { OphConfig } from '@oph-autoresearch/runtime'
 import { memberModel, memberOutcome, resolveModel } from './team-run.ts'
 
 const config = {
@@ -16,7 +16,7 @@ const config = {
     默认接口: { kind: 'openai', models: { 'm-default': {}, 'm-other': {} } },
     便宜接口: { kind: 'openai', models: { 'm-cheap': {}, 'm-cheaper': {} } },
   },
-} as unknown as QyConfig
+} as unknown as OphConfig
 
 const 父会话 = { provider: '便宜接口', model: 'm-cheap' }
 const 继承 = { inherit: 父会话 }
@@ -86,7 +86,7 @@ describe('点名的模型解析成一对', () => {
     const 撞名 = {
       active: { provider: 'a', model: 'same' },
       providers: { a: { models: { same: {} } }, b: { models: { same: {} } } },
-    } as unknown as QyConfig
+    } as unknown as OphConfig
     const r = resolveModel('same', 撞名)
     expect('error' in r && r.error).toContain('接口/模型')
   })

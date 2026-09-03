@@ -1,14 +1,14 @@
 # MCP：接入外部工具
 
-qywork 是 MCP **客户端**：把别人写的 MCP server 提供的工具接进来给模型用。
-配置在工作区的 `.agents/mcp.json`；全局那份放 `~/.qywork/mcp.json`，同名时项目层赢。
+oph-autoresearch 是 MCP **客户端**：把别人写的 MCP server 提供的工具接进来给模型用。
+配置在工作区的 `.agents/mcp.json`；全局那份放 `~/.oph-autoresearch/mcp.json`，同名时项目层赢。
 
 ```bash
-qy mcp            # 看每个 server 连没连上
-qy mcp --tools    # 连带列出它们提供哪些工具
+oph mcp            # 看每个 server 连没连上
+oph mcp --tools    # 连带列出它们提供哪些工具
 ```
 
-`qy mcp` 在有 server 连不上时退非零，可以直接当 CI 里的一条检查。
+`oph mcp` 在有 server 连不上时退非零，可以直接当 CI 里的一条检查。
 
 ---
 
@@ -94,7 +94,7 @@ MCP 工具注册名是 `mcp__<server>__<tool>`，权限 scope 是
 `"my.server"` 的话，工具是 `mcp__my_server__xxx`——但 `autoApprove` 匹配的是
 **权限 scope**（`execute:mcp:my.server/`），那里用的是原名。
 
-**默认每次调用都问。** 想少弹窗，在 `~/.qywork/config.json` 的 `autoApprove` 里
+**默认每次调用都问。** 想少弹窗，在 `~/.oph-autoresearch/config.json` 的 `autoApprove` 里
 加前缀：
 
 ```json
@@ -124,7 +124,7 @@ MCP 的工具定义里有 `annotations.readOnlyHint`，看起来正好能拿来�
 用不上。文本内容原样传，未知的内容块类型留 `[类型名]` 占位而不是丢掉。
 
 **`isError` 是工具失败，不是调用失败。** MCP 把工具自己的错误放在结果里而不是
-JSON-RPC error 里，就是为了让模型看得见失败详情并自己改参数重试。qywork 原样传下去，
+JSON-RPC error 里，就是为了让模型看得见失败详情并自己改参数重试。oph-autoresearch 原样传下去，
 只把状态标成 failure。
 
 **MCP 工具不并行。** 外部进程对并发的处理无从预知，并行的收益远小于
@@ -133,7 +133,7 @@ JSON-RPC error 里，就是为了让模型看得见失败详情并自己改参�
 **传输层失败时 `executed` 取 true。** 超时或进程退出的情况下，副作用到底发没发生
 是判定不了的，崩溃恢复和重试都依赖这个字段，只能往保守的方向报。
 
-**server 连不上不影响会话启动。** 失败逐条记录，`qy mcp` 和桌面端都能看到原因。
+**server 连不上不影响会话启动。** 失败逐条记录，`oph mcp` 和桌面端都能看到原因。
 Windows 上 `npx` 之类是 `.cmd`，走 shell 启动——「命令不存在」不会触发 error 事件，
 而是 cmd 退出码 1 加一行 stderr，所以失败原因里会带上最近几行 stderr。
 
@@ -157,7 +157,7 @@ server 声明了 `capabilities.resources` 时，自动多出两个工具：
 
 按需读的代价是模型多一次工具调用，收益是**上下文占用与 resource 数量无关**。
 
-`fetch_resource` 与内置的 `read_resource` **不是一回事**：后者读的是 qywork
+`fetch_resource` 与内置的 `read_resource` **不是一回事**：后者读的是 oph-autoresearch
 自己落盘的中间产物（命令输出、大文件被截断的部分）。
 
 二进制 resource 只给一行占位，不内联 base64。
@@ -167,10 +167,10 @@ server 声明了 `capabilities.resources` 时，自动多出两个工具：
 ## 握手声明的能力会被显示出来
 
 ```bash
-qy mcp
+oph mcp
 ```
 
-server 声明了、而 qywork 没接的能力（目前是 `prompts` 和 `logging` 之类）
+server 声明了、而 oph-autoresearch 没接的能力（目前是 `prompts` 和 `logging` 之类）
 会明确列出来。**这一条是为了消灭一种静默失败**：一个只提供 `prompts` 的 server
 会连上、握手成功、注册 0 个工具、不报任何错——用户看到「配了但什么都没发生」，
 而日志干干净净。
@@ -184,9 +184,9 @@ server 声明了、而 qywork 没接的能力（目前是 `prompts` 和 `logging
 
 - **SSE / streamable HTTP 传输。** 本地工具用 stdio 就够；远程 server 涉及鉴权、
   重连、会话恢复，是另一件事。
-- **把 qywork 暴露成 MCP server。** 反方向，与本文无关。
+- **把 oph-autoresearch 暴露成 MCP server。** 反方向，与本文无关。
 - **`prompts/*`。** 它是给「用户从菜单里挑一条提示词」用的，而本仓没有那个交互位——
-  `qy exec` 场景下没有人在场。硬接的话只能由模型自己挑，那与它直接读 resource
+  `oph exec` 场景下没有人在场。硬接的话只能由模型自己挑，那与它直接读 resource
   没有区别，却多一套协议。
 - **`notifications/tools/list_changed`。** 收到会记日志，但不会重扫工具表——
   重扫意味着会话中途工具集变化，而冻结前缀里的工具 schema 一变整个缓存就失效。

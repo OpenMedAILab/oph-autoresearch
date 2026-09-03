@@ -23,7 +23,7 @@ const ANCHORS = [
   /join\(\s*import\.meta\.dir\s*,\s*'\.\.'\s*,\s*'([^']+)'/g,
 ]
 
-/** 只认根目录下的第一段：`join(WS_DIR, '.qy')` 之类挂在工作区里的点目录不在此列。 */
+/** 只认根目录下的第一段：`join(WS_DIR, '.oph')` 之类挂在工作区里的点目录不在此列。 */
 export function detect(file: string, src: string): string[] {
   const hits: string[] = []
   for (const re of ANCHORS) {
@@ -58,7 +58,7 @@ describe('脚本产物落点', () => {
       `const a = join(ROOT, '.shoot-ws')`,
       `const b = join(ROOT, '.tmp', 'shots')`,
       `const c = join(import.meta.dir, '..', '.smoke-ws')`,
-      `const d = join(WS_DIR, '.qy', 'team.json')`,
+      `const d = join(WS_DIR, '.oph', 'team.json')`,
       `const e = join(ROOT, 'scripts/seed-demo.ts')`,
     ].join('\n')
     expect(detect('x.ts', src)).toEqual([

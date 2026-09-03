@@ -1,4 +1,4 @@
-import type { RunContextSegment, TodoItem } from '@qywork/core'
+import type { RunContextSegment, TodoItem } from '@oph-autoresearch/core'
 
 /**
  * 三层冻结前缀：system → environment → rules。
@@ -11,7 +11,7 @@ import type { RunContextSegment, TodoItem } from '@qywork/core'
  * 「CRITICAL / YOU MUST / 如有疑问就用 X」会造成过度触发。说清楚该做什么就够了。
  */
 
-export const SYSTEM_LAYER = `你是 qywork 的 harness agent，运行在用户本机，读写用户工作区里的文件、调用工具完成他交给你的任务。
+export const SYSTEM_LAYER = `你是 oph-autoresearch 的 harness agent，运行在用户本机，读写用户工作区里的文件、调用工具完成他交给你的任务。
 
 你的输出会被渲染在一个图形界面里，用户能看到你调用的每一个工具和它的结果。
 

@@ -18,9 +18,9 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ToolContext } from '@qywork/agent'
-import type { AgentEvent, ConversationId, EventEnvelope, RunId } from '@qywork/core'
-import type { QyConfig } from '@qywork/runtime'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import type { AgentEvent, ConversationId, EventEnvelope, RunId } from '@oph-autoresearch/core'
+import type { OphConfig } from '@oph-autoresearch/runtime'
 import {
   appendMessage,
   appendStep,
@@ -34,7 +34,7 @@ import {
   Store,
   settleToolStep,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { EventBus } from './bus.ts'
 import { makeDelegate } from './delegate.ts'
 import { RunManager } from './runs.ts'
@@ -79,12 +79,12 @@ let store: Store
 let content: ContentStore
 let bus: EventBus
 let runs: RunManager
-let config: QyConfig
+let config: OphConfig
 let workspaceId = ''
 let events: EventEnvelope[] = []
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'qywork-delegate-'))
+  dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-delegate-'))
   const dbPath = join(dir, 'delegate.sqlite3')
   store = new Store({ path: dbPath })
   content = new ContentStore(contentPathFor(dbPath))
@@ -101,7 +101,7 @@ beforeAll(async () => {
       },
     },
     mode: 'auto',
-  } as unknown as QyConfig
+  } as unknown as OphConfig
   workspaceId = upsertWorkspace(store, dir, 'delegate-ws').id
   bus.subscribe({
     id: 'test',
@@ -195,7 +195,7 @@ function seedWaitingWorkflow(parent: ConversationId, child: ConversationId, key:
 /**
  * 广播出去的成员事件，按顺序。
  *
- * 成员类型按 `type` 收窄拿到——`@qywork/core` 刻意不逐个导出事件成员，
+ * 成员类型按 `type` 收窄拿到——`@oph-autoresearch/core` 刻意不逐个导出事件成员，
  * 它们只在 `AgentEvent` 这个可辨识联合里出现。
  */
 type MemberEvent = Extract<AgentEvent, { type: 'team.member' }>

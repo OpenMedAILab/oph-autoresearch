@@ -1,12 +1,12 @@
 /**
- * 交互式模式：`qy` 不带参数时进这里。
+ * 交互式模式：`oph` 不带参数时进这里。
  *
  * **为什么是行式 REPL 而不是全屏 TUI。** 全屏方案（备用缓冲区、自绘光标、鼠标）在 Windows 的
  * conhost 上是雷区：resize 事件、宽字符光标定位、Ctrl-C 的传递各有各的坑，而它换来的收益 ——固定
  * 的输入框、滚动区——对一个「说一句、看它执行」的循环并不是必需的。行式 REPL 把渲染交给终端本身，
  * 代价是没有花哨的界面，收益是它在哪都能跑。
  *
- * **与 `qy exec` 的关键差别。** 不是「exec 加个循环」。**会话是连续的**：同一个 conversationId 跨轮
+ * **与 `oph exec` 的关键差别。** 不是「exec 加个循环」。**会话是连续的**：同一个 conversationId 跨轮
  * 复用，所以模型看得到上一轮说了什么，提示缓存也能命中。exec 每次都是新会话——那正是它作为「一次
  * 性执行」应该有的语义，两者不能合并。
  *
@@ -14,18 +14,18 @@
  * 一个改到一半的任务被整个进程带走，比中断本身糟得多。
  */
 
-import type { AgentEvent, ConversationId } from '@qywork/core'
-import { formatCosts, formatMoney } from '@qywork/core'
+import type { AgentEvent, ConversationId } from '@oph-autoresearch/core'
+import { formatCosts, formatMoney } from '@oph-autoresearch/core'
 import {
   configNotices,
   dataPath,
   diagnoseConfig,
   exportConversation,
   loadConfig,
-  type QyConfig,
+  type OphConfig,
   Session,
-} from '@qywork/runtime'
-import { ContentStore, contentPathFor, Store, usageTotals } from '@qywork/store'
+} from '@oph-autoresearch/runtime'
+import { ContentStore, contentPathFor, Store, usageTotals } from '@oph-autoresearch/store'
 
 const DIM = '\x1b[2m'
 const RESET = '\x1b[0m'
@@ -75,7 +75,7 @@ export async function runTui(workspaceRoot: string): Promise<number> {
   process.on('SIGINT', onSigint)
 
   process.stdout.write(
-    `${BOLD}qywork${RESET} ${DIM}${workspaceRoot}${RESET}\n` +
+    `${BOLD}oph-autoresearch${RESET} ${DIM}${workspaceRoot}${RESET}\n` +
       `${DIM}模型 ${model} · /help 看命令${RESET}\n\n`,
   )
 
@@ -144,7 +144,7 @@ export async function runTui(workspaceRoot: string): Promise<number> {
 
 export interface CommandContext {
   store: Store
-  config: QyConfig
+  config: OphConfig
   readonly conversationId: ConversationId | undefined
   setConversation(id: ConversationId | undefined): void
   readonly model: string
@@ -230,7 +230,7 @@ export async function handleCommand(input: string, ctx: CommandContext): Promise
 // ───────────────────────── 渲染 ─────────────────────────
 
 /**
- * 与 `qy exec` 同一套渲染。
+ * 与 `oph exec` 同一套渲染。
  *
  * 刻意共用而不是各写一份：两套渲染就是两套会漂移的行为，
  * 而「exec 里显示了但交互模式没显示」这种差异极难发现。

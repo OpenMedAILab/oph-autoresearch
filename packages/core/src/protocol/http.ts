@@ -6,7 +6,7 @@
  * 量这两个就是——服务端一份、设置页一份、运行面板又一份，三份互不校验，改一个字段名另外两份不会
  * 红。
  *
- * **为什么在 core。** 依赖只能朝底层走，而 `apps/web` 只依赖 `@qywork/core`。放 `store` 或 `server`
+ * **为什么在 core。** 依赖只能朝底层走，而 `apps/web` 只依赖 `@oph-autoresearch/core`。放 `store` 或 `server`
  * 里前端都够不着，因此只能抄。放这里之后，写它的（store）、发它的（server）、画它的（web）认的是
  * 同一份。
  */

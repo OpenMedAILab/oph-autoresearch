@@ -5,7 +5,7 @@
  * 它们加起来比会话链路还长，混在一起会让读 store 的人把这些当成热路径。
  */
 
-import type { Attachment, Conversation, EffortLevel, PermissionMode } from '@qywork/core'
+import type { Attachment, Conversation, EffortLevel, PermissionMode } from '@oph-autoresearch/core'
 import { createSignal } from 'solid-js'
 import { client } from './connection.ts'
 import { tauriInvoke } from './shell.ts'
@@ -54,8 +54,8 @@ export interface RedactedProvider {
 /**
  * 服务端配置的对外形状。**这是一份手抄，而且是故意抄不全的。**
  *
- * 抄是因为够不着：真源 `QyConfig` 在 `@qywork/runtime`(L5)，界面只依赖
- * `@qywork/core`(L0)。抄不全是因为 `sandboxNetwork` 只有内核沙箱的平台上才生效，
+ * 抄是因为够不着：真源 `OphConfig` 在 `@oph-autoresearch/runtime`(L5)，界面只依赖
+ * `@oph-autoresearch/core`(L0)。抄不全是因为 `sandboxNetwork` 只有内核沙箱的平台上才生效，
  * Windows 上画个开关等于画个假的（见 CLAUDE.md B5）。
  *
  * 所以这里少一个字段是有意的，**但它不能因此在保存时被抹掉**：保存走的是
@@ -248,7 +248,7 @@ export async function loadModels(): Promise<ModelCatalog> {
  * 模型目录：**配置的派生态，全应用只有这一份**。
  *
  * 它由服务端按「配置里的接口 × 模型」现算——窗口、档位、思考参数的判定都在
- * `@qywork/ai` 里，界面够不着，所以只能来自服务端。
+ * `@oph-autoresearch/ai` 里，界面够不着，所以只能来自服务端。
  *
  * **失效点挂在唯一那条写入路径上**（`saveServerConfig`），不由各个消费者自己刷。
  * 组件各持一份永不失效的缓存，实测后果：设置页校准完思考写回了配置，
@@ -444,7 +444,7 @@ export function revealWorkspace(path: string): Promise<void> {
  * 分成两个端点等于两条路写同一个字段，而那个字段正是分支监听和缺省 `?ws=` 的判据。
  */
 export interface WorkspaceInput {
-  /** 本机已存在的目录。不给就在 `~/.qywork/workspaces/<name>/` 建一个。 */
+  /** 本机已存在的目录。不给就在 `~/.oph-autoresearch/workspaces/<name>/` 建一个。 */
   path?: string
   /** 显示名。不给且给了 `path` 时取目录名。两个都不给回 422。 */
   name?: string
@@ -576,7 +576,7 @@ export async function saveTeamRaw(raw: string): Promise<{ ok: boolean }> {
  *
  * - `builtin` 随程序发布，只读，**用户看不到**（服务端现在也还没有内容）。
  * - `project` 是工作区 `.agents/`，跟着这个仓库走，别的 CLI 也读得到。
- * - `global` 是 `~/.qywork/`，跨工作区。
+ * - `global` 是 `~/.oph-autoresearch/`，跨工作区。
  *
  * 优先级 `builtin > project > global`，同名先认领的赢。**解析在服务端做**——
  * 界面上列出来的那条必须就是模型真的加载的那条，前端不许自己再算一遍。
@@ -773,7 +773,7 @@ export function setExtraEnabled(
  * 走原始字节而不是 base64 JSON：base64 会让传输体积涨三分之一，
  * 而这是本机回环，没有任何理由为它多付这一份。
  *
- * 带上会话 id：附件落在 `~/.qywork/attachments/<会话id>/`，删会话时整个目录一起删。
+ * 带上会话 id：附件落在 `~/.oph-autoresearch/attachments/<会话id>/`，删会话时整个目录一起删。
  */
 export async function uploadAttachment(file: File, conversationId: string): Promise<Attachment> {
   const res = await client.api<{ attachment: Attachment }>(

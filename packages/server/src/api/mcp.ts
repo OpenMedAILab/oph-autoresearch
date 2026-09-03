@@ -14,14 +14,14 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { parseMcpConfig } from '@qywork/mcp'
+import { parseMcpConfig } from '@oph-autoresearch/mcp'
 import {
   isWorkspaceTrusted,
   loadConfig,
   loadScopedMcpConfig,
   MCP_CONFIG,
   mergeMcpServers,
-} from '@qywork/runtime'
+} from '@oph-autoresearch/runtime'
 import { type ApiHandler, json } from './types.ts'
 
 /** 只有项目层和全局层可写。内置随程序发布，写进去下次升级就没了。 */
@@ -50,7 +50,7 @@ export const handleMcpApi: ApiHandler = async (url, req, d) => {
      * 另一层作用：这里回的必须就是**模型手里那一份**。现起一份的话，信任刚打开时
      * 这一页会显示「已连上」，而模型持有的仍是加载时那份，两个界面互相打脸。
      */
-    const { acquireExtensions, releaseExtensions } = await import('@qywork/runtime')
+    const { acquireExtensions, releaseExtensions } = await import('@oph-autoresearch/runtime')
     const ext = await acquireExtensions(d.workspaceRoot)
     try {
       const config = await loadScopedMcpConfig(d.workspaceRoot)

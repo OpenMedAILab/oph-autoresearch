@@ -16,9 +16,9 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { stepStamp } from '@qywork/agent'
-import type { WireMessage } from '@qywork/ai'
-import type { MessageId, RunContextSegment, Step } from '@qywork/core'
+import { stepStamp } from '@oph-autoresearch/agent'
+import type { WireMessage } from '@oph-autoresearch/ai'
+import type { MessageId, RunContextSegment, Step } from '@oph-autoresearch/core'
 import {
   appendMessage,
   appendStep,
@@ -31,7 +31,7 @@ import {
   settleRunningSteps,
   settleToolStep,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { buildHistory, stepsToUnits, stepsToWireMessages } from './transcript.ts'
 
 const noAttachments = async (content: string) => content

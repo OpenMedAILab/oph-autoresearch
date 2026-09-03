@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { StepPayload } from '@qywork/core'
+import type { StepPayload } from '@oph-autoresearch/core'
 import { Store } from './db.ts'
 import {
   appendStep,
@@ -307,7 +307,7 @@ describe('崩溃恢复', () => {
 /**
  * **只回收没人在跑的那些。**
  *
- * 账本是共享的：两个工作区的 sidecar、开发态热重载、终端里的 `qy exec` 都写它。
+ * 账本是共享的：两个工作区的 sidecar、开发态热重载、终端里的 `oph exec` 都写它。
  * 无差别回收会把另一个进程正在跑的一轮判死。实测形状：那条 run 已经跑了
  * 40 步，第 27 次请求发出后 257 毫秒被写成 interrupted，写入者是刚起来的进程。
  *

@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import type { EffortLevel } from '@qywork/core'
+import type { EffortLevel } from '@oph-autoresearch/core'
 import { lookupModel } from '../catalog.ts'
 import type { ProviderEvent, ProviderProfile, WireMessage } from '../types.ts'
 import { AnthropicAdapter } from './anthropic.ts'

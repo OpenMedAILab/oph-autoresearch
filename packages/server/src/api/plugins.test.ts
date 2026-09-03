@@ -22,11 +22,11 @@ import { handlePluginsApi } from './plugins.ts'
 import type { ApiRequestDeps } from './types.ts'
 
 const dirs: string[] = []
-const homeBefore = process.env.QYWORK_HOME
+const homeBefore = process.env.OPH_AUTORESEARCH_HOME
 
 afterEach(async () => {
-  if (homeBefore === undefined) delete process.env.QYWORK_HOME
-  else process.env.QYWORK_HOME = homeBefore
+  if (homeBefore === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+  else process.env.OPH_AUTORESEARCH_HOME = homeBefore
   for (const d of dirs.splice(0)) {
     await rm(d, { recursive: true, force: true }).catch(() => {})
   }
@@ -40,11 +40,11 @@ function call(path: string, init?: RequestInit): Promise<Response | null> {
   } as unknown as ApiRequestDeps)
 }
 
-/** 把 `QYWORK_HOME` 指到一个临时目录，返回 `~/.qywork/plugins` 那一层。 */
+/** 把 `OPH_AUTORESEARCH_HOME` 指到一个临时目录，返回 `~/.oph-autoresearch/plugins` 那一层。 */
 async function home(): Promise<{ root: string; plugins: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'qywork-home-'))
+  const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-home-'))
   dirs.push(root)
-  process.env.QYWORK_HOME = root
+  process.env.OPH_AUTORESEARCH_HOME = root
   const plugins = join(root, 'plugins')
   await mkdir(plugins, { recursive: true })
   return { root, plugins }
@@ -60,10 +60,10 @@ const MANIFEST = {
 
 /** 造一个可以被装的源目录。`manifest` 传 null 表示故意不放清单。 */
 async function source(manifest: unknown | null): Promise<string> {
-  const src = await mkdtemp(join(tmpdir(), 'qywork-plugsrc-'))
+  const src = await mkdtemp(join(tmpdir(), 'oph-autoresearch-plugsrc-'))
   dirs.push(src)
   if (manifest !== null) {
-    await writeFile(join(src, 'qywork.plugin.json'), JSON.stringify(manifest), 'utf8')
+    await writeFile(join(src, 'oph-autoresearch.plugin.json'), JSON.stringify(manifest), 'utf8')
   }
   await writeFile(join(src, 'index.mjs'), '// noop\n', 'utf8')
   return src
@@ -82,7 +82,7 @@ describe('装一个插件', () => {
     expect(res!.status).toBe(400)
   })
 
-  test('目录里没有 qywork.plugin.json 就拒绝——不然装完才在加载时变成一条 failure', async () => {
+  test('目录里没有 oph-autoresearch.plugin.json 就拒绝——不然装完才在加载时变成一条 failure', async () => {
     const { plugins } = await home()
     const res = await call('/api/plugins/install', {
       method: 'POST',

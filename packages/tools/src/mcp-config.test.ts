@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { ToolContext } from '@qywork/agent'
-import { ToolRegistry } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { ToolRegistry } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { registerBuiltinTools } from './index.ts'
 import { moveMcpServerTool, writeMcpServerTool } from './mcp-config.ts'
 
@@ -44,7 +44,7 @@ describe('模型侧 MCP 配置工具', () => {
         mcpConfig: {
           writeServer: async (input) => {
             received = input
-            return { ok: true, path: 'C:/home/.qywork/mcp.json', replaced: false }
+            return { ok: true, path: 'C:/home/.oph-autoresearch/mcp.json', replaced: false }
           },
           moveServer: async () => ({ ok: false }),
         },

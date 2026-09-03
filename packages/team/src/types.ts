@@ -13,7 +13,7 @@
  * 后端这个概念，而且删掉一个 CLI 会让引用它的角色整条消失。
  */
 
-import type { EffortLevel, WorkflowNode, WorkflowReceipt } from '@qywork/core'
+import type { EffortLevel, WorkflowNode, WorkflowReceipt } from '@oph-autoresearch/core'
 
 /** 目标是外部 CLI 时，`PlanNode.agent` 用这个前缀。角色 id 不带前缀。 */
 export const CLI_PREFIX = 'cli:'
@@ -91,7 +91,7 @@ export interface TeamConfig {
   rules?: TeamRules
   roles: Role[]
   /**
-   * 编排图。**每次由调用方交进来**（模型这一次画的那张），不来自 `.qy/team.json`
+   * 编排图。**每次由调用方交进来**（模型这一次画的那张），不来自 `.oph/team.json`
    * ——那个字段连同它的解析、回传、显示已经删了，编排图只有一个来源。
    */
   plan: PlanNode[]

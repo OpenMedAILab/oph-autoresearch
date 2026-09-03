@@ -8,8 +8,8 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { defineSubagentTool } from './subagent-define.ts'
 
 function ctx(root: string): ToolContext {
@@ -34,15 +34,15 @@ function ctx(root: string): ToolContext {
 const role = { id: 'reviewer', name: '审查员', description: '看代码', systemPrompt: '只读' }
 
 async function ws(): Promise<string> {
-  return await mkdtemp(join(tmpdir(), 'qy-role-'))
+  return await mkdtemp(join(tmpdir(), 'oph-role-'))
 }
 
 describe('建子 agent', () => {
-  test('写进 .qy/team.json —— 那是 write_file 进不去的目录', async () => {
+  test('写进 .oph/team.json —— 那是 write_file 进不去的目录', async () => {
     const root = await ws()
     const res = await defineSubagentTool.fn(role, ctx(root))
     expect(res.status).toBe('success')
-    const doc = JSON.parse(await readFile(join(root, '.qy', 'team.json'), 'utf8'))
+    const doc = JSON.parse(await readFile(join(root, '.oph', 'team.json'), 'utf8'))
     expect(doc.roles).toHaveLength(1)
     expect(doc.roles[0].id).toBe('reviewer')
   })
@@ -53,14 +53,14 @@ describe('建子 agent', () => {
    */
   test('只动 roles，rules 原样留着', async () => {
     const root = await ws()
-    await mkdir(join(root, '.qy'), { recursive: true })
+    await mkdir(join(root, '.oph'), { recursive: true })
     await writeFile(
-      join(root, '.qy', 'team.json'),
+      join(root, '.oph', 'team.json'),
       JSON.stringify({ rules: { maxConcurrent: 2, shared: '别删库' }, roles: [] }),
       'utf8',
     )
     await defineSubagentTool.fn(role, ctx(root))
-    const doc = JSON.parse(await readFile(join(root, '.qy', 'team.json'), 'utf8'))
+    const doc = JSON.parse(await readFile(join(root, '.oph', 'team.json'), 'utf8'))
     expect(doc.rules).toEqual({ maxConcurrent: 2, shared: '别删库' })
     expect(doc.roles).toHaveLength(1)
   })
@@ -70,25 +70,25 @@ describe('建子 agent', () => {
     await defineSubagentTool.fn(role, ctx(root))
     const res = await defineSubagentTool.fn({ ...role, name: '改了名' }, ctx(root))
     expect((res.data as { replaced: boolean }).replaced).toBe(true)
-    const doc = JSON.parse(await readFile(join(root, '.qy', 'team.json'), 'utf8'))
+    const doc = JSON.parse(await readFile(join(root, '.oph', 'team.json'), 'utf8'))
     expect(doc.roles).toHaveLength(1)
     expect(doc.roles[0].name).toBe('改了名')
   })
 
   test('坏 JSON 不覆盖，如实说解析不了', async () => {
     const root = await ws()
-    await mkdir(join(root, '.qy'), { recursive: true })
-    await writeFile(join(root, '.qy', 'team.json'), '{ 这不是 json', 'utf8')
+    await mkdir(join(root, '.oph'), { recursive: true })
+    await writeFile(join(root, '.oph', 'team.json'), '{ 这不是 json', 'utf8')
     const res = await defineSubagentTool.fn(role, ctx(root))
     expect(res.status).toBe('failure')
     expect(res.message).toContain('解析不了')
-    expect(await readFile(join(root, '.qy', 'team.json'), 'utf8')).toBe('{ 这不是 json')
+    expect(await readFile(join(root, '.oph', 'team.json'), 'utf8')).toBe('{ 这不是 json')
   })
 
   test('allowedTools 的空数组留着，不当成没填', async () => {
     const root = await ws()
     await defineSubagentTool.fn({ ...role, allowedTools: [] }, ctx(root))
-    const doc = JSON.parse(await readFile(join(root, '.qy', 'team.json'), 'utf8'))
+    const doc = JSON.parse(await readFile(join(root, '.oph', 'team.json'), 'utf8'))
     expect(doc.roles[0].allowedTools).toEqual([])
   })
 

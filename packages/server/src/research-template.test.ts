@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { loadTeamConfig } from '@qywork/runtime'
-import { scanSkills } from '@qywork/tools'
+import { loadTeamConfig } from '@oph-autoresearch/runtime'
+import { scanSkills } from '@oph-autoresearch/tools'
 import { ensureResearchWorkspace } from './research-template.ts'
 
 const roots: string[] = []
@@ -48,7 +48,7 @@ describe('眼科科研工作区模板', () => {
   test('重复初始化不覆盖用户已经修改的角色配置', async () => {
     const root = await tempWorkspace()
     ensureResearchWorkspace(root)
-    const teamPath = join(root, '.qy', 'team.json')
+    const teamPath = join(root, '.oph', 'team.json')
     await writeFile(teamPath, '{"roles":[],"custom":true}\n', 'utf8')
 
     const result = ensureResearchWorkspace(root)

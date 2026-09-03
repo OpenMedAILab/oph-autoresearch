@@ -66,7 +66,7 @@ async function startServer() {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
       // 配置与账本一起指到临时目录：附件落点就在它下面，检查才有的可看。
-      env: { ...process.env, QYWORK_HOME: WS },
+      env: { ...process.env, OPH_AUTORESEARCH_HOME: WS },
     },
   )
   return new Promise((resolve, reject) => {
@@ -77,9 +77,9 @@ async function startServer() {
     proc.stdout.on('data', (c) => {
       buf += c.toString()
       for (const line of buf.split('\n')) {
-        const t = /^QYWORK_TOKEN=(.+)$/.exec(line.trim())
+        const t = /^OPH_AUTORESEARCH_TOKEN=(.+)$/.exec(line.trim())
         if (t) token = t[1]
-        const p = /^QYWORK_PORT=(\d+)$/.exec(line.trim())
+        const p = /^OPH_AUTORESEARCH_PORT=(\d+)$/.exec(line.trim())
         if (p) port = Number(p[1])
       }
       if (token && port) {
@@ -186,14 +186,14 @@ try {
   // ── 落盘位置 ──
   const dir = join(WS, 'attachments')
   if (!existsSync(dir)) {
-    bad('附件没有落在 QYWORK_HOME/attachments/')
+    bad('附件没有落在 OPH_AUTORESEARCH_HOME/attachments/')
   } else {
     const cids = readdirSync(dir)
     const cid = cids[0]
-    ok(`落点 QYWORK_HOME/attachments/${cid}/ —— 与会话库同一棵树`)
+    ok(`落点 OPH_AUTORESEARCH_HOME/attachments/${cid}/ —— 与会话库同一棵树`)
     ok(`目录内容：${readdirSync(join(dir, cid)).join(', ')}`)
-    if (existsSync(join(WS, '.qy', 'attachments'))) bad('工作区里仍然被创建了 .qy/attachments')
-    else ok('工作区里没有 .qy/attachments（旧落点已废弃）')
+    if (existsSync(join(WS, '.oph', 'attachments'))) bad('工作区里仍然被创建了 .oph/attachments')
+    else ok('工作区里没有 .oph/attachments（旧落点已废弃）')
 
     // ── 删会话 → 目录跟着走 ──
     const status = await page.evaluate(

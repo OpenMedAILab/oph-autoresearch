@@ -8,18 +8,18 @@ import {
   lookupModel,
   type ModelSpec,
   type ProviderKind,
-} from '@qywork/ai'
+} from '@oph-autoresearch/ai'
 import {
   catalogKey,
   collectSecrets,
   configNotices,
   diagnoseConfig,
   loadConfig,
-  type QyConfig,
+  type OphConfig,
   resolveModel,
 } from './config.ts'
 
-function cfg(over: Partial<QyConfig> = {}): QyConfig {
+function cfg(over: Partial<OphConfig> = {}): OphConfig {
   return {
     active: { provider: 'ds', model: 'deepseek-v4-flash' },
     providers: {
@@ -122,7 +122,7 @@ describe('配置体检', () => {
     const [p] = diagnoseConfig(noKey())
     expect(p).toBeDefined()
     expect(p).toContain('config.json')
-    expect(p).toContain('qy init')
+    expect(p).toContain('oph init')
     // 光说「没配」不够——用户得知道往里写什么形状的配置。
     expect(p).toContain('"apiKey"')
   })
@@ -248,7 +248,7 @@ describe('配置提醒', () => {
     /*
      * 这条是跑双端点冒烟照出来的：`lookupModel` 对未收录的模型回落到
      * `unknownModel()`，其 `thinking: 'none'` 让适配器**从不请求推理**，
-     * 而计价全零让 `qy usage` 报 $0。两件事都完全静默。
+     * 而计价全零让 `oph usage` 报 $0。两件事都完全静默。
      *
      * 保守默认是对的，错的是不说——ARCHITECTURE §27「不能把『没测』写成『不支持』」。
      */
@@ -322,7 +322,7 @@ describe('配置提醒', () => {
     const legacy = {
       ...cfg(),
       profiles: { ds: { kind: 'anthropic_messages', model: 'm' } },
-    } as QyConfig
+    } as OphConfig
     const n = configNotices(legacy).join('\n')
     expect(n).toContain('profiles')
     expect(n).toContain('API Key')
@@ -384,9 +384,9 @@ describe('按「接口 × 模型」取档位', () => {
  */
 describe('思考档位校验', () => {
   // 只看档位这一条：夹具没有 key，别的问题与这里无关。
-  const effortProblems = (c: QyConfig) => diagnoseConfig(c).filter((p) => p.includes('思考强度'))
+  const effortProblems = (c: OphConfig) => diagnoseConfig(c).filter((p) => p.includes('思考强度'))
 
-  const withEffort = (effort: unknown): QyConfig =>
+  const withEffort = (effort: unknown): OphConfig =>
     cfg({
       providers: {
         ds: {
@@ -478,7 +478,7 @@ describe('模型库枚举校验', () => {
     expect(p).toContain('openai_v2')
   })
 
-  /** 挡下来还得说清去哪改——这道闸门会让 `qy exec` 直接退出。 */
+  /** 挡下来还得说清去哪改——这道闸门会让 `oph exec` 直接退出。 */
   test('报错带着改哪', () => {
     const [p] = diagnoseConfig(withEntry({ thinking: 'anthropic_effort' }))
     expect(p).toContain('模型库')
@@ -601,7 +601,7 @@ describe('模型库一次性迁移', () => {
   }
 
   /** 迁移后那条两层解析：`resolveModel` 取到库里那一条，`buildAdapter` 叠上去。 */
-  function currentSpec(cfg: QyConfig, providerName: string, model: string): ModelSpec {
+  function currentSpec(cfg: OphConfig, providerName: string, model: string): ModelSpec {
     const r = resolveModel(cfg, { provider: providerName, model })!
     return buildAdapter({
       kind: r.kind,
@@ -612,19 +612,19 @@ describe('模型库一次性迁移', () => {
   }
 
   let home: string
-  const prevHome = process.env.QYWORK_HOME
+  const prevHome = process.env.OPH_AUTORESEARCH_HOME
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'qy-catalog-migrate-'))
-    process.env.QYWORK_HOME = home
+    home = await mkdtemp(join(tmpdir(), 'oph-catalog-migrate-'))
+    process.env.OPH_AUTORESEARCH_HOME = home
   })
   afterEach(async () => {
-    if (prevHome === undefined) delete process.env.QYWORK_HOME
-    else process.env.QYWORK_HOME = prevHome
+    if (prevHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = prevHome
     await rm(home, { recursive: true, force: true }).catch(() => {})
   })
 
-  async function load(raw: LegacyConfig): Promise<QyConfig> {
+  async function load(raw: LegacyConfig): Promise<OphConfig> {
     await writeFile(join(home, 'config.json'), JSON.stringify(raw), 'utf8')
     return loadConfig()
   }

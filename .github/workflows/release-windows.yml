@@ -85,7 +85,7 @@ jobs:
           tauriScript: bun run tauri
           args: --target x86_64-pc-windows-msvc --bundles nsis
           tagName: v__VERSION__
-          releaseName: qywork v__VERSION__
+          releaseName: oph-autoresearch v__VERSION__
           releaseCommitish: ${{ github.sha }}
           releaseDraft: true
           prerelease: false

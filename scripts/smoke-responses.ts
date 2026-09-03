@@ -22,8 +22,8 @@
  * 那条路仍然没有跑过。
  */
 
-import type { ProviderEvent, ProviderUsage, WireMessage, WireToolCall } from '@qywork/ai'
-import { buildAdapter, lookupModel } from '@qywork/ai'
+import type { ProviderEvent, ProviderUsage, WireMessage, WireToolCall } from '@oph-autoresearch/ai'
+import { buildAdapter, lookupModel } from '@oph-autoresearch/ai'
 
 /**
  * 一个待测端点。
@@ -62,16 +62,16 @@ interface Endpoint {
 /** 端点清单。第二个可选——不配就只跑第一个，并且**明说只跑了一个**。 */
 const ENDPOINTS: Endpoint[] = [
   {
-    label: process.env.QY_RESPONSES_LABEL ?? 'DeepSeek',
-    key: process.env.DEEPSEEK_API_KEY ?? process.env.QY_RESPONSES_KEY ?? '',
-    baseUrl: process.env.QY_RESPONSES_BASE_URL ?? 'https://api.deepseek.com/v1',
-    model: process.env.QY_RESPONSES_MODEL ?? 'deepseek-v4-flash',
+    label: process.env.OPH_RESPONSES_LABEL ?? 'DeepSeek',
+    key: process.env.DEEPSEEK_API_KEY ?? process.env.OPH_RESPONSES_KEY ?? '',
+    baseUrl: process.env.OPH_RESPONSES_BASE_URL ?? 'https://api.deepseek.com/v1',
+    model: process.env.OPH_RESPONSES_MODEL ?? 'deepseek-v4-flash',
   },
   {
-    label: process.env.QY_RESPONSES_LABEL_2 ?? '第二端点',
-    key: process.env.QY_RESPONSES_KEY_2 ?? '',
-    baseUrl: process.env.QY_RESPONSES_BASE_URL_2 ?? '',
-    model: process.env.QY_RESPONSES_MODEL_2 ?? 'gpt-5.4-mini',
+    label: process.env.OPH_RESPONSES_LABEL_2 ?? '第二端点',
+    key: process.env.OPH_RESPONSES_KEY_2 ?? '',
+    baseUrl: process.env.OPH_RESPONSES_BASE_URL_2 ?? '',
+    model: process.env.OPH_RESPONSES_MODEL_2 ?? 'gpt-5.4-mini',
   },
 ].filter((e) => e.key && e.baseUrl)
 
@@ -174,7 +174,7 @@ function apply(out: Collected, ev: ProviderEvent): void {
 async function main(): Promise<number> {
   if (ENDPOINTS.length === 0) {
     // 没 key 就明确跳过，**不要静默通过**——一个永远绿的冒烟比没有冒烟更危险。
-    process.stdout.write('跳过：没有 DEEPSEEK_API_KEY / QY_RESPONSES_KEY\n')
+    process.stdout.write('跳过：没有 DEEPSEEK_API_KEY / OPH_RESPONSES_KEY\n')
     return 0
   }
 
@@ -190,7 +190,7 @@ async function main(): Promise<number> {
     process.stdout.write(
       '注意：只配了一个端点，分流的另一条分支本次未被执行。\n' +
         '  配上第二个即可两种实现各跑一遍：\n' +
-        '  QY_RESPONSES_KEY_2=sk-... QY_RESPONSES_BASE_URL_2=https://.../v1 [QY_RESPONSES_MODEL_2=...]\n\n',
+        '  OPH_RESPONSES_KEY_2=sk-... OPH_RESPONSES_BASE_URL_2=https://.../v1 [OPH_RESPONSES_MODEL_2=...]\n\n',
     )
   }
 
@@ -233,7 +233,7 @@ async function runEndpoint(): Promise<void> {
     process.stdout.write(
       `  · ${EP.model} 不在内置目录，能力按最保守假设：` +
         `${asksForReasoning ? '' : '**本次不会请求推理**、'}计价按 0。\n` +
-        '    要让它真的思考，先 qy probe --save 实测一次能力。\n\n',
+        '    要让它真的思考，先 oph probe --save 实测一次能力。\n\n',
     )
   }
 
@@ -366,7 +366,7 @@ async function runEndpoint(): Promise<void> {
   // cached=768——那不是口径错了，是测法错了。
   const salt = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
   const longSystem = `参考资料（${salt}）：${'本项目是一个本地编程 agent。'.repeat(120)}`
-  const cacheKey = `qy-smoke-${EP.model}-${salt}`
+  const cacheKey = `oph-smoke-${EP.model}-${salt}`
   const c1 = await once([{ role: 'user', content: '用一个字回答：好' }], {
     system: longSystem,
     cacheKey,

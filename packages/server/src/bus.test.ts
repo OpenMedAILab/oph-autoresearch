@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { AgentEvent, ConversationId, EventEnvelope } from '@qywork/core'
+import type { AgentEvent, ConversationId, EventEnvelope } from '@oph-autoresearch/core'
 import { EventBus, type Subscriber } from './bus.ts'
 
 const c1 = 'cv_one' as ConversationId

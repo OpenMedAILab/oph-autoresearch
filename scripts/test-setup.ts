@@ -25,7 +25,7 @@ import presetSolid from 'babel-preset-solid'
 import { plugin } from 'bun'
 
 const root = resolve(import.meta.dir, '..')
-const testTemp = process.env.QYWORK_TEST_TEMP
+const testTemp = process.env.OPH_AUTORESEARCH_TEST_TEMP
 if (!testTemp) throw new Error('测试必须通过 bun run test 启动')
 const testTempPath = relative(root, resolve(testTemp)).replaceAll('\\', '/')
 if (!/^\.tmp\/tests\/run-[^/]+$/.test(testTempPath)) {

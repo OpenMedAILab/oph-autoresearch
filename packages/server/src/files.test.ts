@@ -23,7 +23,7 @@ import {
 } from './files.ts'
 
 async function workspace(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'qywork-tree-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-tree-'))
   await writeFile(join(dir, 'a.ts'), 'export const a = 1\n', 'utf8')
   await mkdir(join(dir, 'src'), { recursive: true })
   await writeFile(join(dir, 'src', 'main.ts'), 'export const b = 2\n', 'utf8')

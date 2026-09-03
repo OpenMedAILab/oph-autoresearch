@@ -2,10 +2,10 @@
  * Agent Team 配置读写。
  *
  * 这一页明确按「只读不写」设计，理由是「配置有两个来源迟早分叉」。
- * 结论下错了：界面直接读写**同一个** .qy/team.json，来源仍然只有一个，
+ * 结论下错了：界面直接读写**同一个** .oph/team.json，来源仍然只有一个，
  * 界面只是它的编辑器。分叉风险来自「界面另存一份」，不来自「有界面」。
  *
- * 与「禁止写 .qy/」不冲突：那条硬边界拦的是 **agent 工具**
+ * 与「禁止写 .oph/」不冲突：那条硬边界拦的是 **agent 工具**
  * （tools.ts:resolveWritablePath、policy.ts 的命令裁决），
  * 拦的是 agent 改自己的配置，不是用户经 UI 的显式操作。见 docs/permissions.md。
  */
@@ -18,7 +18,7 @@ export const handleTeamApi: ApiHandler = async (url, req, d) => {
   const p = url.pathname
 
   if (p === '/api/team/raw') {
-    const file = join(d.workspaceRoot, '.qy', 'team.json')
+    const file = join(d.workspaceRoot, '.oph', 'team.json')
     if (req.method === 'GET') {
       const raw = await readFile(file, 'utf8').catch(() => null)
       return json({ path: file, exists: raw !== null, raw: raw ?? '' })
@@ -32,7 +32,7 @@ export const handleTeamApi: ApiHandler = async (url, req, d) => {
       } catch (e) {
         return json({ error: 'invalid json', message: (e as Error).message }, 422)
       }
-      await mkdir(join(d.workspaceRoot, '.qy'), { recursive: true })
+      await mkdir(join(d.workspaceRoot, '.oph'), { recursive: true })
       await writeFile(file, body.raw.endsWith('\n') ? body.raw : `${body.raw}\n`, 'utf8')
       return json({ ok: true })
     }
@@ -41,7 +41,7 @@ export const handleTeamApi: ApiHandler = async (url, req, d) => {
   if (p === '/api/team') {
     // 直接读工作区配置而不是返回启动时的缓存：用户可能刚改完 team.json，
     // 让他为了看到新配置去重启服务是不合理的。
-    const { loadTeamConfig } = await import('@qywork/runtime')
+    const { loadTeamConfig } = await import('@oph-autoresearch/runtime')
     const team = await loadTeamConfig(d.workspaceRoot)
     return json({
       roles: team.roles.map((r) => ({
@@ -58,7 +58,7 @@ export const handleTeamApi: ApiHandler = async (url, req, d) => {
   // 本机装了哪几家外部 agent CLI。**只读**：这份清单来自探测，不落任何文件，
   // 所以没有对应的写接口——设置页要做的只是把它显示出来。
   if (p === '/api/team/cli' && req.method === 'GET') {
-    const { detectClis } = await import('@qywork/team')
+    const { detectClis } = await import('@oph-autoresearch/team')
     const found = await detectClis()
     return json({
       agents: found.map((c) => ({

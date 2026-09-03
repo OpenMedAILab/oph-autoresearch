@@ -7,7 +7,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { lookupModel, type TransportCapabilities } from '@qywork/ai'
+import { lookupModel, type TransportCapabilities } from '@oph-autoresearch/ai'
 import {
   CACHE_ROUTINGS,
   type CacheRouting,
@@ -20,8 +20,8 @@ import {
   type ReasoningEcho,
   THINKING_MODES,
   type ThinkingMode,
-} from '@qywork/core'
-import { globalScopeRoot, normalizeAdditionalDirectories } from '@qywork/tools'
+} from '@oph-autoresearch/core'
+import { globalScopeRoot, normalizeAdditionalDirectories } from '@oph-autoresearch/tools'
 
 /**
  * 权限模式。**只有两种**，刻意不做逐次审批。
@@ -51,7 +51,7 @@ export interface ModelRef {
   model: string
 }
 
-export interface QyConfig {
+export interface OphConfig {
   /** 当前生效的「接口 × 模型」。 */
   active: ModelRef
   providers: Record<string, StoredProvider>
@@ -76,7 +76,7 @@ export interface QyConfig {
    * 成「`read_file` 被拒、`run_command` 读到」的两套账（见 CLAUDE.md E）。真正不受模式影响的是凭证
    * 剥离。
    *
-   * 只接受绝对路径——相对路径的基准是启动 qy 时所在的目录，换个地方启动含义就变。
+   * 只接受绝对路径——相对路径的基准是启动 oph 时所在的目录，换个地方启动含义就变。
    */
   additionalDirectories?: string[]
   /**
@@ -86,7 +86,7 @@ export interface QyConfig {
    * 还要让 TLS 校验认一张自签 CA。那套组件会在别人的机器上以各种方式坏掉，
    * 而坏掉的表现是「网络时好时坏」——比没有这个功能糟得多。
    *
-   * `'deny'` 只在**有内核沙箱的平台上**生效（`qy config` 会报当前是哪档）。
+   * `'deny'` 只在**有内核沙箱的平台上**生效（`oph config` 会报当前是哪档）。
    * 没有沙箱的平台上它是一句空话，所以那里会明确提示它没生效——
    * 静默无效正是本项目反复在修的那类问题。
    */
@@ -126,7 +126,7 @@ function trustKey(path: string): string {
 }
 
 /** 这个工作区的项目层扩展是否已被授权。 */
-export function isWorkspaceTrusted(cfg: QyConfig, workspaceRoot: string): boolean {
+export function isWorkspaceTrusted(cfg: OphConfig, workspaceRoot: string): boolean {
   const key = trustKey(workspaceRoot)
   return (cfg.trustedWorkspaces ?? []).some((p) => trustKey(p) === key)
 }
@@ -138,10 +138,10 @@ export function isWorkspaceTrusted(cfg: QyConfig, workspaceRoot: string): boolea
  * 拆开写会出现只接了授权那一半的界面，而用户没有出路。
  */
 export function setWorkspaceTrust(
-  cfg: QyConfig,
+  cfg: OphConfig,
   workspaceRoot: string,
   trusted: boolean,
-): QyConfig {
+): OphConfig {
   const key = trustKey(workspaceRoot)
   const rest = (cfg.trustedWorkspaces ?? []).filter((p) => trustKey(p) !== key)
   const next = trusted ? [...rest, resolve(workspaceRoot)] : rest
@@ -210,7 +210,7 @@ export function catalogKey(model: string, kind: ProviderKind): string {
  * （`vendor` 决定它在界面上归到哪个分组），那正好补上「未收录模型计价按 0 算、
  * 账本报 $0」这个洞。
  *
- * 字段必须与 `@qywork/ai` 的 `SpecOverride` 一致——合并发生在那一层。
+ * 字段必须与 `@oph-autoresearch/ai` 的 `SpecOverride` 一致——合并发生在那一层。
  */
 export interface StoredCatalogEntry {
   displayName?: string
@@ -308,8 +308,8 @@ export interface ResolvedModel {
 /**
  * 全局层的根。配置文件、全局记忆、全局技能都在这棵树下。
  *
- * 定义在 `@qywork/tools`：那边的作用域解析要用同一个根，而 tools 在更底层、
- * 引不到这里。两处各算一遍的话，某次改 `QYWORK_HOME` 就会让配置和全局记忆
+ * 定义在 `@oph-autoresearch/tools`：那边的作用域解析要用同一个根，而 tools 在更底层、
+ * 引不到这里。两处各算一遍的话，某次改 `OPH_AUTORESEARCH_HOME` 就会让配置和全局记忆
  * 落在两个地方。
  */
 export function configDir(): string {
@@ -321,10 +321,10 @@ export function configPath(): string {
 }
 
 export function dataPath(): string {
-  return join(configDir(), 'qywork.sqlite3')
+  return join(configDir(), 'oph-autoresearch.sqlite3')
 }
 
-const DEFAULT_CONFIG: QyConfig = {
+const DEFAULT_CONFIG: OphConfig = {
   active: { provider: 'anthropic', model: 'claude-opus-5' },
   providers: {
     anthropic: {
@@ -371,7 +371,7 @@ interface LegacyStoredModel {
  *
  * **只改内存里这份，不落盘**：下一次保存配置时旧键随整份写回一起消失。
  */
-function migrateModelLibrary(cfg: QyConfig): string[] {
+function migrateModelLibrary(cfg: OphConfig): string[] {
   const providers = cfg.providers ?? {}
   const flatKeys = Object.keys(cfg.catalog ?? {}).filter((k) => !k.includes('|'))
   const hasLegacyFields = Object.values(providers).some((p) =>
@@ -457,7 +457,7 @@ function migrateModelLibrary(cfg: QyConfig): string[] {
  *
  * 只改内存，与模型库迁移相同；用户下一次保存配置时旧值自然消失。
  */
-function migrateDisabledEffort(cfg: QyConfig): string[] {
+function migrateDisabledEffort(cfg: OphConfig): string[] {
   const notices: string[] = []
   for (const [providerName, provider] of Object.entries(cfg.providers ?? {})) {
     for (const [modelId, model] of Object.entries(provider.models ?? {})) {
@@ -472,25 +472,25 @@ function migrateDisabledEffort(cfg: QyConfig): string[] {
   return notices
 }
 
-export async function loadConfig(): Promise<QyConfig> {
+export async function loadConfig(): Promise<OphConfig> {
   const raw = await readFile(configPath(), 'utf8').catch(() => null)
   if (raw === null) return structuredClone(DEFAULT_CONFIG)
 
-  let parsed: Partial<QyConfig>
+  let parsed: Partial<OphConfig>
   try {
-    parsed = JSON.parse(raw) as Partial<QyConfig>
+    parsed = JSON.parse(raw) as Partial<OphConfig>
   } catch {
     // 配置坏了不能让整个 CLI 起不来：用默认值继续，并让调用方看得见这件事。
-    process.stderr.write(`[qy] 配置文件解析失败，已使用默认配置：${configPath()}\n`)
+    process.stderr.write(`[oph] 配置文件解析失败，已使用默认配置：${configPath()}\n`)
     return structuredClone(DEFAULT_CONFIG)
   }
 
-  const cfg: QyConfig = { ...structuredClone(DEFAULT_CONFIG), ...parsed }
+  const cfg: OphConfig = { ...structuredClone(DEFAULT_CONFIG), ...parsed }
 
   // 模型库的旧形状就地迁成两维键。冲突点名走 stderr：这一步在解析阶段，
   // 而 `configNotices` 拿到的已经是迁完的配置，看不见旧键了。
-  for (const n of migrateModelLibrary(cfg)) process.stderr.write(`[qy] ${n}\n`)
-  for (const n of migrateDisabledEffort(cfg)) process.stderr.write(`[qy] ${n}\n`)
+  for (const n of migrateModelLibrary(cfg)) process.stderr.write(`[oph] ${n}\n`)
+  for (const n of migrateDisabledEffort(cfg)) process.stderr.write(`[oph] ${n}\n`)
 
   /*
    * 接口表**不与默认值合并**。
@@ -516,7 +516,7 @@ export async function loadConfig(): Promise<QyConfig> {
   return cfg
 }
 
-export async function saveConfig(cfg: QyConfig): Promise<void> {
+export async function saveConfig(cfg: OphConfig): Promise<void> {
   await mkdir(dirname(configPath()), { recursive: true })
   await writeFile(configPath(), `${JSON.stringify(cfg, null, 2)}\n`, 'utf8')
 }
@@ -540,7 +540,7 @@ export async function saveConfig(cfg: QyConfig): Promise<void> {
  * 两处各写一遍的话，界面说「这个模型能调思考」而实际那条协议不发，
  * 又是一个选了没反应的控件——而且是**只在某些配置下**才犯。
  */
-export function resolveModel(cfg: QyConfig, model?: string | ModelRef): ResolvedModel | undefined {
+export function resolveModel(cfg: OphConfig, model?: string | ModelRef): ResolvedModel | undefined {
   const ref = typeof model === 'object' ? model : undefined
   const wanted = typeof model === 'object' ? model.model : (model ?? cfg.active.model)
 
@@ -584,7 +584,7 @@ export function resolveModel(cfg: QyConfig, model?: string | ModelRef): Resolved
  * 只有按值才抓得到。所以这个函数存在的意义就是**把明文都找齐**。
  * 名字那条判据由 `CREDENTIAL_NAME_PATTERN` 兜，与配置无关。
  */
-export function collectSecrets(cfg: QyConfig): { values: string[] } {
+export function collectSecrets(cfg: OphConfig): { values: string[] } {
   const values = new Set<string>()
   for (const p of Object.values(cfg.providers ?? {})) {
     if (p.apiKey) values.add(p.apiKey)
@@ -596,13 +596,13 @@ export function collectSecrets(cfg: QyConfig): { values: string[] } {
  * 配置体检。
  *
  * `buildAdapter` 已经会在空 key 时抛 `no_api_key`，但那条消息只能说「没配」——
- * 它在 `@qywork/ai` 里，不知道配置文件在哪，更不知道该往里写什么。
+ * 它在 `@oph-autoresearch/ai` 里，不知道配置文件在哪，更不知道该往里写什么。
  * 这个函数补的就是这一段：**告诉用户改哪个文件、改成什么样**。
  *
  * 返回空数组 = 配置至少能发出第一个请求。它不验证 key 是否有效——那只有 provider
  * 能回答，本地假装验证只会多一层猜。
  */
-export function diagnoseConfig(cfg: QyConfig): string[] {
+export function diagnoseConfig(cfg: OphConfig): string[] {
   const problems: string[] = []
 
   /*
@@ -638,7 +638,7 @@ export function diagnoseConfig(cfg: QyConfig): string[] {
    * 键的协议维打错 → 这条覆盖永远匹配不上任何请求（取法见 `resolveModel`）。
    * 三种都不报错，而模型库界面把用户填的字符串原样显示回去，看着像生效了。
    *
-   * 文案要带**改哪**：这条挡的是 `qy exec` 启动，只说「值不对」而不说去哪改，
+   * 文案要带**改哪**：这条挡的是 `oph exec` 启动，只说「值不对」而不说去哪改，
    * 用户手边未必有终端。
    */
   const vocabularies = [
@@ -675,7 +675,7 @@ export function diagnoseConfig(cfg: QyConfig): string[] {
     problems.push(
       `配置中不存在名为 "${cfg.active.provider}" 的接口。\n` +
         `  已有接口：${names.length ? names.join('、') : '（无）'}\n` +
-        `  修改 ${configPath()} 中的 "active.provider"，或运行 qy init 重建配置。`,
+        `  修改 ${configPath()} 中的 "active.provider"，或运行 oph init 重建配置。`,
     )
     return problems
   }
@@ -685,7 +685,7 @@ export function diagnoseConfig(cfg: QyConfig): string[] {
     problems.push(
       `未配置 API Key：接口 "${cfg.active.provider}" 的 apiKey 为空。\n` +
         `  配置文件：${configPath()}\n` +
-        `  推荐做法：运行 qy init\n` +
+        `  推荐做法：运行 oph init\n` +
         `  或手动改为：\n${indent(exampleProvider(cfg.active, stored))}`,
     )
   }
@@ -696,21 +696,21 @@ export function diagnoseConfig(cfg: QyConfig): string[] {
 /**
  * 配置提醒：**不阻断运行**，但每次都要说。
  *
- * 两个落点共用这一份文案：终端（`qy` 启动时打印）和设置页（按 markdown 渲染）。
+ * 两个落点共用这一份文案：终端（`oph` 启动时打印）和设置页（按 markdown 渲染）。
  * 所以正文写成 markdown（列表用 `- `，不用缩进和 `·`），出口也不能只给命令行的
  * ——桌面端用户手边不一定有终端，一条只说「跑 xxx 命令」的提醒对他等于没说。
  * 不为界面单开一份措辞：同一件事两套文案，迟早只改其中一套。
  *
  * 与 `diagnoseConfig` 分开是因为调用方对两者的处置完全不同：
- * `qy exec` 遇到 `diagnoseConfig` 的问题会**直接退出**（没有 key 就发不出请求，
+ * `oph exec` 遇到 `diagnoseConfig` 的问题会**直接退出**（没有 key 就发不出请求，
  * 让它跑下去只会拿到一条 401）。而「权限模式是 full」不该阻断执行——
  * 它只是一件必须反复说清的事实。
  *
- * **不要合并成一个函数。** 合并之后加一条 full 模式的提醒，`qy exec` 在 full 下
+ * **不要合并成一个函数。** 合并之后加一条 full 模式的提醒，`oph exec` 在 full 下
  * 会**完全拒绝运行**：开了「完全访问」却一条命令都跑不了。
  * 「该说的」和「该拦的」是两件事，混在一个返回值里必然出这种错。
  */
-export function configNotices(cfg: QyConfig): string[] {
+export function configNotices(cfg: OphConfig): string[] {
   const notices: string[] = []
 
   // 额外根目录写错了要**当场说**，而不是让它安静地不生效。
@@ -748,7 +748,7 @@ export function configNotices(cfg: QyConfig): string[] {
    *
    * - 适配器**从不请求推理**（`thinking: 'none'` → 整个省略 reasoning 字段），
    *   实测 `reasoning_tokens` 恒为 0，而界面仍把它显示成会思考的模型；
-   * - 计价全零，`qy usage` 报 $0——**账本与实际不符**。
+   * - 计价全零，`oph usage` 报 $0——**账本与实际不符**。
    *
    * 两件事都完全静默。保守默认本身是对的（乱发字段会让不支持的端点每次 400），
    * 错的是不说。这正是 ARCHITECTURE §27 那条「不能把『没测』写成『不支持』」，
@@ -786,7 +786,7 @@ export function configNotices(cfg: QyConfig): string[] {
     notices.push(
       '配置中的 sandboxNetwork: "deny" 仅在具备内核沙箱的平台上生效' +
         '（Linux / WSL2 的 bubblewrap、macOS 的 seatbelt）。' +
-        '本机档位见「权限与沙箱」一节，或 `qy config` 输出末行的「shell 沙箱」' +
+        '本机档位见「权限与沙箱」一节，或 `oph config` 输出末行的「shell 沙箱」' +
         '——显示 none 即表示该配置未生效。',
     )
   }

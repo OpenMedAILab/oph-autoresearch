@@ -13,7 +13,7 @@ import { detectClis, findCli } from './cli-detect.ts'
 
 /** 造一个假的 claude 可执行文件。两种后缀都写，POSIX 与 Windows 各认一个。 */
 async function fakeBin(name: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'qy-cli-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-cli-'))
   await writeFile(join(dir, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
   await writeFile(join(dir, `${name}.cmd`), '@echo off\n')
   return dir
@@ -40,7 +40,7 @@ describe('外部 CLI 识别', () => {
   })
 
   test('PATH 上一个都没有时回空，不报错', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-cli-empty-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-cli-empty-'))
     expect(await detectClis({ PATH: dir, PATHEXT: '.CMD' })).toEqual([])
   })
 

@@ -1,5 +1,5 @@
-import type { RunUsage, StopReason } from '@qywork/core'
-import { formatMoney } from '@qywork/core'
+import type { RunUsage, StopReason } from '@oph-autoresearch/core'
+import { formatMoney } from '@oph-autoresearch/core'
 import type { JSX } from 'solid-js'
 import {
   createContext,

@@ -1,4 +1,4 @@
-import { todoProgress } from '@qywork/core'
+import { todoProgress } from '@oph-autoresearch/core'
 import { Show } from 'solid-js'
 import { hasRunStatus, openPanel, state } from '../lib/store/index.ts'
 import { IconSpinner } from './Icons.tsx'

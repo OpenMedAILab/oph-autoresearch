@@ -8,8 +8,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { HistoryPort, ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { HistoryPort, ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { readHistoryTool } from './history.ts'
 
 const LONG = '甲'.repeat(60_000)

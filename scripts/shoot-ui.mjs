@@ -6,7 +6,7 @@
  * 用到的 fd 3/4 管道支持不全，`chromium.launch()` 会挂到超时。所以这里分工——
  * Node 管浏览器，Bun 管服务，各自做自己稳的那部分。
  *
- * 同时验证真实发布路径：它启动的是 `qy serve --static`（静态托管构建产物），
+ * 同时验证真实发布路径：它启动的是 `oph serve --static`（静态托管构建产物），
  * 与开发时的 Vite 代理不是同一条路，那条路不测就等于没测。
  *
  *   node scripts/shoot-ui.mjs
@@ -56,8 +56,8 @@ async function startServer() {
   // 建成真实 git 仓库并留下未提交改动，否则 git 面板只能截到「不是 git 仓库」。
   const git = (...args) => run('git', ['-C', WS_DIR, ...args]).catch(() => {})
   await git('init', '-q')
-  await git('config', 'user.email', 'demo@qywork.dev')
-  await git('config', 'user.name', 'qywork')
+  await git('config', 'user.email', 'demo@oph-autoresearch.dev')
+  await git('config', 'user.name', 'oph-autoresearch')
   await git('add', '-A')
   await git('commit', '-q', '-m', 'init')
   await writeFile(
@@ -67,12 +67,12 @@ async function startServer() {
   )
   await writeFile(join(WS_DIR, 'src/util.ts'), 'export const noop = () => {}\n', 'utf8')
 
-  // QYWORK_HOME 把配置与账本一起指到临时目录：既不污染用户的真实账本，
+  // OPH_AUTORESEARCH_HOME 把配置与账本一起指到临时目录：既不污染用户的真实账本，
   // 也保证种子和 serve 读的是同一个库（config.dataPath() 就在这个目录下）。
   await run('bun', [
     'run',
     join(ROOT, 'scripts/seed-demo.ts'),
-    join(WS_DIR, 'qywork.sqlite3'),
+    join(WS_DIR, 'oph-autoresearch.sqlite3'),
     WS_DIR,
   ])
 
@@ -101,7 +101,7 @@ async function startServer() {
       cwd: ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
-      env: { ...process.env, QYWORK_HOME: WS_DIR },
+      env: { ...process.env, OPH_AUTORESEARCH_HOME: WS_DIR },
     },
   )
 
@@ -115,9 +115,9 @@ async function startServer() {
       buf += chunk.toString()
       // --print-token 的输出格式是稳定的两行 KEY=VALUE，供父进程按行读取。
       for (const line of buf.split('\n')) {
-        const t = /^QYWORK_TOKEN=(.+)$/.exec(line.trim())
+        const t = /^OPH_AUTORESEARCH_TOKEN=(.+)$/.exec(line.trim())
         if (t) token = t[1]
-        const p = /^QYWORK_PORT=(\d+)$/.exec(line.trim())
+        const p = /^OPH_AUTORESEARCH_PORT=(\d+)$/.exec(line.trim())
         if (p) port = Number(p[1])
       }
       if (token && port) {

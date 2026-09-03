@@ -14,7 +14,7 @@ import type {
   ProviderKind,
   ReasoningEcho,
   ThinkingMode,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import { DEFAULT_DENSITY, type TokenDensity } from './tokens.ts'
 
 /**
@@ -126,7 +126,7 @@ export interface ModelSpec {
    * 中转站上表现完全不同，所以内置值只是 seed，端点侧由配置里那一格覆盖
    * （`SpecOverride`），出口是模型库界面那一格。
    *
-   * **`qy probe` 不探这一项。** 探针只能发几次请求看命中，而不确定的路线上
+   * **`oph probe` 不探这一项。** 探针只能发几次请求看命中，而不确定的路线上
    * 那是随机结果——探出「可用」再写回目录，是把一次运气固化成结论。
    *
    * **发了不等于会命中。** 2026-08-19 在一个中转端点上配对实测：
@@ -778,7 +778,7 @@ function deepseekCatalog(): ModelSpec[] {
      * 这一支是 chat/completions（Responses 那支见下面）：`thinking:{type:'enabled'}`
      * 和 `reasoning_effort` 必须**一起发**，三档 low / high / max。
      *
-     * **这两档没有在本仓实测过。** 要坐实就跑 `qy probe`——它会把实际接受的档位
+     * **这两档没有在本仓实测过。** 要坐实就跑 `oph probe`——它会把实际接受的档位
      * 写回档案覆盖这里。
      */
     thinking: 'deepseek_thinking' as const,
@@ -847,7 +847,7 @@ function deepseekCatalog(): ModelSpec[] {
    * - 走 chat/completions 时客户端不发思考相关字段，无从控制 → `thinking: 'none'`。
    * - 走 Responses 时 `reasoning.effort:'none'` 能真的关掉 → `thinking: 'reasoning_effort'`。
    *
-   * `thinksByDefault` 两边都是 **true**：省略字段它自己就思考，`qy probe` 实测过。
+   * `thinksByDefault` 两边都是 **true**：省略字段它自己就思考，`oph probe` 实测过。
    *
    * `effortLevels` 仍然是 **`[]`**，这是实测结论不是保守默认：
    * minimal / low / medium / high 全部返回 200，而 reasoning_tokens 三次采样
@@ -907,7 +907,7 @@ export function unknownModel(id: string, provider: ProviderKind): ModelSpec {
      * 1. `thinking: 'none'` → `buildReasoning` 整个省略 reasoning 字段，
      *    因此**这个模型永远不会思考**。用户配了 `gpt-5.6` 期待思考，
      *    拿到的是 `reasoning_tokens: 0`，没有任何报错。
-     * 2. `pricing` 全零 → `qy usage` 报 $0。**账本与实际不符**，
+     * 2. `pricing` 全零 → `oph usage` 报 $0。**账本与实际不符**，
      *    而账本正是用来发现「怎么突然变贵了」的那份记录。
      *
      * 保守默认本身是对的（乱发 reasoning 字段会让不支持的端点每次 400），
@@ -1488,7 +1488,7 @@ function openAiCompatCatalog(now: number): ModelSpec[] {
  * 用户对某个模型参数的覆盖。字段全部可选，只写改过的那几个。
  *
  * 落盘形状见 `runtime` 的 `StoredCatalogEntry`；这里之所以再声明一次，是因为
- * 合并要发生在 `@qywork/ai`（适配器和计价都在这一层），而它引不到 runtime。
+ * 合并要发生在 `@oph-autoresearch/ai`（适配器和计价都在这一层），而它引不到 runtime。
  * 两处字段必须一致，改一处务必看另一处。
  */
 export interface SpecOverride {

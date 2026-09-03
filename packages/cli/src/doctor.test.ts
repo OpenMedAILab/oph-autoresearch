@@ -1,5 +1,5 @@
 /**
- * `qy doctor`。
+ * `oph doctor`。
  *
  * 断言的是**结论与自洽**，不是文案：输出措辞会变，绑定文案的断言会被降级成
  * 「只验不抛异常」。
@@ -21,19 +21,19 @@ import { collectDoctorReport, type Section } from './doctor.ts'
 let home = ''
 let ws = ''
 let report: Section[] = []
-const prevHome = process.env.QYWORK_HOME
+const prevHome = process.env.OPH_AUTORESEARCH_HOME
 
 beforeAll(async () => {
-  // 指向临时目录：体检会往配置目录写一个探针文件，不能落到用户真的 ~/.qywork 里。
-  home = await mkdtemp(join(tmpdir(), 'qy-doctor-home-'))
-  ws = await mkdtemp(join(tmpdir(), 'qy-doctor-ws-'))
-  process.env.QYWORK_HOME = home
+  // 指向临时目录：体检会往配置目录写一个探针文件，不能落到用户真的 ~/.oph-autoresearch 里。
+  home = await mkdtemp(join(tmpdir(), 'oph-doctor-home-'))
+  ws = await mkdtemp(join(tmpdir(), 'oph-doctor-ws-'))
+  process.env.OPH_AUTORESEARCH_HOME = home
   report = await collectDoctorReport(ws)
 })
 
 afterAll(async () => {
-  if (prevHome === undefined) delete process.env.QYWORK_HOME
-  else process.env.QYWORK_HOME = prevHome
+  if (prevHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+  else process.env.OPH_AUTORESEARCH_HOME = prevHome
   await rm(home, { recursive: true, force: true }).catch(() => {})
   await rm(ws, { recursive: true, force: true }).catch(() => {})
 })
@@ -76,7 +76,7 @@ describe('结论要可操作', () => {
 
   test('空工作区本身不产生阻断项', () => {
     /*
-     * 范围是**工作区相关的那几段**，不含配置：临时 QYWORK_HOME 里没有配置文件，
+     * 范围是**工作区相关的那几段**，不含配置：临时 OPH_AUTORESEARCH_HOME 里没有配置文件，
      * 配置段本来就该判 fail（见下面「没有 key 时配置那段判 fail」）。
      *
      * 这条验的是空目录不因「空」而报 fail——否则首次运行的红项指向一个不存在的
@@ -102,10 +102,10 @@ describe('等级判定', () => {
 
   test('没有 key 时配置那段判 fail 而不是 warn', async () => {
     // 没有 key 就发不出任何请求——那是阻断，不是「需要知道」。
-    // 判成 warn 的话 `qy doctor` 在一台完全没配好的机器上会退 0。
+    // 判成 warn 的话 `oph doctor` 在一台完全没配好的机器上会退 0。
     const cfg = report.find((s) => s.title === '配置')
     expect(cfg).toBeDefined()
-    // 本次跑在临时 QYWORK_HOME 上，没有配置文件 → 走默认档案 → 没有 key。
+    // 本次跑在临时 OPH_AUTORESEARCH_HOME 上，没有配置文件 → 走默认档案 → 没有 key。
     expect(cfg?.lines.some((l) => l.level === 'fail')).toBe(true)
   })
 })

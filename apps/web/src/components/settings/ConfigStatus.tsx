@@ -4,7 +4,7 @@ import { configNotices, configProblems, configWriteError } from './configStore.t
 
 /**
  * 当前配置的三类状态。**都是不说出来用户就会误判的事实**，所以摆在设置页里，
- * 而不是只在终端打印——桌面端用户不会去跑 `qy config`。
+ * 而不是只在终端打印——桌面端用户不会去跑 `oph config`。
  *
  * 1. `writeError`：刚才那一下写失败了。没有「保存」按钮之后**失败必须自己现身**——
  *    改一格就写一次，成功时不需要反馈（值就在那儿），失败时不说的话，界面显示的

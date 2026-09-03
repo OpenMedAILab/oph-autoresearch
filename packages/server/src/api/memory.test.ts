@@ -15,25 +15,25 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { scanSkills, scopeRoots } from '@qywork/tools'
+import { scanSkills, scopeRoots } from '@oph-autoresearch/tools'
 import { handleMemoryApi } from './memory.ts'
 import type { ApiRequestDeps } from './types.ts'
 
 const dirs: string[] = []
-const homeBefore = process.env.QYWORK_HOME
+const homeBefore = process.env.OPH_AUTORESEARCH_HOME
 
 afterEach(async () => {
-  if (homeBefore === undefined) delete process.env.QYWORK_HOME
-  else process.env.QYWORK_HOME = homeBefore
+  if (homeBefore === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+  else process.env.OPH_AUTORESEARCH_HOME = homeBefore
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true })
 })
 
 /** 一个工作区 + 一个临时的全局根。两层各自能写记忆。 */
 async function workspace(): Promise<{ root: string; home: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'qywork-memapi-ws-'))
-  const home = await mkdtemp(join(tmpdir(), 'qywork-memapi-home-'))
+  const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-memapi-ws-'))
+  const home = await mkdtemp(join(tmpdir(), 'oph-autoresearch-memapi-home-'))
   dirs.push(root, home)
-  process.env.QYWORK_HOME = home
+  process.env.OPH_AUTORESEARCH_HOME = home
   return { root, home }
 }
 
@@ -162,7 +162,7 @@ describe('删一个技能', () => {
 describe('导入一个技能目录', () => {
   test('目录里没有 SKILL.md 就拒绝——否则导进来的技能一条都扫不到', async () => {
     const { root } = await workspace()
-    const src = await mkdtemp(join(tmpdir(), 'qywork-skillsrc-'))
+    const src = await mkdtemp(join(tmpdir(), 'oph-autoresearch-skillsrc-'))
     dirs.push(src)
     const res = await call(root, '/api/skills/import', {
       method: 'POST',
@@ -173,7 +173,7 @@ describe('导入一个技能目录', () => {
 
   test('整个目录拷进来，附带的文件一起过去', async () => {
     const { root } = await workspace()
-    const src = await mkdtemp(join(tmpdir(), 'qywork-skillsrc-'))
+    const src = await mkdtemp(join(tmpdir(), 'oph-autoresearch-skillsrc-'))
     dirs.push(src)
     await writeFile(
       join(src, 'SKILL.md'),

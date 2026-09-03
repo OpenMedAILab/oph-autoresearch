@@ -9,7 +9,7 @@
 
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, sep } from 'node:path'
-import { IGNORED_DIRS } from '@qywork/tools'
+import { IGNORED_DIRS } from '@oph-autoresearch/tools'
 
 export type PreviewKind =
   | 'text'

@@ -20,8 +20,8 @@
  *   隐式重试会把一次故障放大成一串。
  */
 
-import type { ToolOutcome, ToolSpec } from '@qywork/agent'
-import type { Goal, GoalAction } from '@qywork/core'
+import type { ToolOutcome, ToolSpec } from '@oph-autoresearch/agent'
+import type { Goal, GoalAction } from '@oph-autoresearch/core'
 
 /**
  * 两个工具都要说的那句：**循环不会自己停**。

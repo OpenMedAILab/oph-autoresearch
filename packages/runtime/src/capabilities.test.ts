@@ -8,7 +8,7 @@ import { HOST_CAPABILITIES, makeCapabilityHandler } from './capabilities.ts'
 const echoEnv = (name: string) => `echo "[$${name}]"`
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'qywork-cap-'))
+  const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-cap-'))
   await writeFile(join(root, 'a.txt'), '甲乙丙', 'utf8')
   await mkdir(join(root, 'sub'), { recursive: true })
   await writeFile(join(root, 'sub', 'b.txt'), 'b', 'utf8')
@@ -152,15 +152,15 @@ describe('exec —— 绝不透传宿主环境变量', () => {
    * exec 出一句 echo $ANTHROPIC_API_KEY 就全部落空。
    */
   test('宿主的密钥类环境变量在子进程里读不到', async () => {
-    process.env.QYWORK_CAP_SECRET = 'super-secret-value'
+    process.env.OPH_AUTORESEARCH_CAP_SECRET = 'super-secret-value'
     try {
       const { call } = await fixture()
-      const cmd = echoEnv('QYWORK_CAP_SECRET')
+      const cmd = echoEnv('OPH_AUTORESEARCH_CAP_SECRET')
       const r = (await call('exec.run', { command: cmd })) as ExecRun
       expect(r.stdout).not.toContain('super-secret-value')
       expect(r.stdout).toContain('[]')
     } finally {
-      delete process.env.QYWORK_CAP_SECRET
+      delete process.env.OPH_AUTORESEARCH_CAP_SECRET
     }
   })
 

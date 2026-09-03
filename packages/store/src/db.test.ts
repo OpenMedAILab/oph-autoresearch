@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Store } from './db.ts'
 
 test('写事务在回调前取写权 —— 不从读事务升级后直接 SQLITE_BUSY', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'qywork-store-tx-'))
+  const dir = mkdtempSync(join(tmpdir(), 'oph-autoresearch-store-tx-'))
   const path = join(dir, 'ledger.sqlite3')
   const store = new Store({ path })
   const other = new Database(path)

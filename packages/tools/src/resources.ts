@@ -13,7 +13,7 @@
  * 模型看到的永远是合法 UTF-8。
  */
 
-import type { ToolContext, ToolOutcome, ToolSpec } from '@qywork/agent'
+import type { ToolContext, ToolOutcome, ToolSpec } from '@oph-autoresearch/agent'
 import { badIntMessage, intArg } from './args.ts'
 import { clampBody } from './sink.ts'
 

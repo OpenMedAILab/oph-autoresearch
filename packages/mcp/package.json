@@ -1,5 +1,5 @@
 {
-  "name": "@qywork/mcp",
+  "name": "@oph-autoresearch/mcp",
   "version": "0.1.8",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@qywork/agent": "workspace:*",
-    "@qywork/core": "workspace:*"
+    "@oph-autoresearch/agent": "workspace:*",
+    "@oph-autoresearch/core": "workspace:*"
   }
 }

@@ -10,7 +10,12 @@
  *   事件、让界面停在一个不完整的状态上且不给任何提示。
  */
 
-import type { AgentEvent, ConversationId, EventEnvelope, ResumePosition } from '@qywork/core'
+import type {
+  AgentEvent,
+  ConversationId,
+  EventEnvelope,
+  ResumePosition,
+} from '@oph-autoresearch/core'
 
 /** 保留窗口。够覆盖几分钟的断线；再长就该走全量重拉了。 */
 const RETAIN = 5000

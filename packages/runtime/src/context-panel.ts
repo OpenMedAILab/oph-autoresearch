@@ -25,20 +25,25 @@
  * 同一条会话在运行中和回头看会给出两个数。
  */
 
-import { softLimit } from '@qywork/agent'
+import { softLimit } from '@oph-autoresearch/agent'
 import type {
   ContextBreakdown,
   ContextOmitted,
   ConversationId,
   ProviderRequest,
-} from '@qywork/core'
-import { emptyBreakdown, emptyOmitted, envelopeHeadTokens, reconcileBreakdown } from '@qywork/core'
+} from '@oph-autoresearch/core'
+import {
+  emptyBreakdown,
+  emptyOmitted,
+  envelopeHeadTokens,
+  reconcileBreakdown,
+} from '@oph-autoresearch/core'
 import {
   getConversation,
   latestAnchoredProviderRequest,
   latestSentProviderRequest,
   type Store,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 export interface ContextPanel {
   total: number
@@ -71,7 +76,7 @@ export interface ContextPanel {
 /**
  * provider 回报的上下文占用。
  *
- * 四项相加而不是只取 `inputTokens`：qywork 三个适配器已经把 `inputTokens`
+ * 四项相加而不是只取 `inputTokens`：oph-autoresearch 三个适配器已经把 `inputTokens`
  * 统一收敛成**排除缓存**的口径（见 `openai-compat.ts` 里那段注释），
  * 所以只取它会把命中缓存的那一大段漏掉——冻结前缀设计下第二轮起大头正是
  * cache_read，漏掉它会让 100k 的会话显示成不到 1%。

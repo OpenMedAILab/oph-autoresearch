@@ -12,7 +12,7 @@
  * **内置层不在这里。** 用户看不到内置层，也就没有开关可言。key 里不会出现它。
  */
 
-import type { ConversationId } from '@qywork/core'
+import type { ConversationId } from '@oph-autoresearch/core'
 import type { Store } from './db.ts'
 
 /** `<类目>:<标识>`，如 `skill:release`、`mcp:github`、`plugin:foo`、`memory:style`。 */

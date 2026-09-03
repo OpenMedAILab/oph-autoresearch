@@ -16,13 +16,13 @@
  * 否则模型会在同一轮里反复找那个新工具，然后判定「装失败了」。
  */
 
-import type { ToolContext, ToolSpec } from '@qywork/agent'
+import type { ToolContext, ToolSpec } from '@oph-autoresearch/agent'
 
 export const installPluginTool: ToolSpec = {
   name: 'install_plugin',
   description:
     '把工作区里已经写好的一个插件目录装进本机的插件目录。' +
-    '目录里要有合法的 qywork.plugin.json。装完在下一条消息生效，不是当场。' +
+    '目录里要有合法的 oph-autoresearch.plugin.json。装完在下一条消息生效，不是当场。' +
     '改了插件代码要再装一次——装进去的是快照。',
   parameters: {
     type: 'object',

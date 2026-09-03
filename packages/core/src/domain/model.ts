@@ -33,7 +33,7 @@ import type {
  * 思考强度档位，**弱到强有序**。
  *
  * 派生方向是「数组 → 类型」而不是反过来：类型只能在编译期存在，
- * 而 `qy probe` 要逐档试、适配器要按序比大小（`indexOf`），两处都需要
+ * 而 `oph probe` 要逐档试、适配器要按序比大小（`indexOf`），两处都需要
  * 一个能在运行期枚举的数组。反过来写就必然再抄一份出来。
  *
  * 注意：**「档位全集」和「某个模型支持哪些档」是两件事。**
@@ -153,7 +153,7 @@ export interface Conversation {
    * **只有这两个值，因为它只回答一个问题**：这条会话要不要进列表。
    *
    * 名字刻意取执行层的说法而不是 `'team'`：**Agent Team 是配置项**
-   * （`.qy/team.json` 里的角色与编排图），不是底层执行概念。领域模型按配置功能
+   * （`.oph/team.json` 里的角色与编排图），不是底层执行概念。领域模型按配置功能
    * 命名，等于把「今天恰好只有这一种编排」写死进了数据形状——明天多一种编排，
    * 要么再加一个并列的值（两个值回答同一个问题），要么让新的编排顶着 `team` 的名字跑。
    *
@@ -293,7 +293,7 @@ export type StopReason =
    * 原地打转：同样的执行周期、同样的结果或待办快照、没有任何副作用，连续三次。
    *
    * 与 `max_steps` 严格区分——那是「步数不够」，这是「多给一百步也一样」。
-   * 判据见 `@qywork/agent` 的 `repeatsNoProgress`。
+   * 判据见 `@oph-autoresearch/agent` 的 `repeatsNoProgress`。
    */
   | 'no_progress'
   | 'user_interrupt'
@@ -341,7 +341,7 @@ export interface RunInterruption {
   exitCode?: number | null
   signal?: number | null
   exitKind?: 'terminated' | 'output_channel_closed' | null
-  /** qy serve 退出前最后一段 stderr，已在持久化边界脱敏并限制长度。 */
+  /** oph serve 退出前最后一段 stderr，已在持久化边界脱敏并限制长度。 */
   stderrTail?: string | null
   /** true = 有工具已进入执行器但没有终态，禁止自动重放。 */
   ambiguousToolExecution: boolean
@@ -395,7 +395,7 @@ export const CURRENCY_SYMBOL: Record<Currency, string> = { USD: '$', CNY: '¥' }
 
 /**
  * 金额显示。**命令行和界面共用这一份**——两边各写一个必然漂移成
- * 「`qy usage` 说 $0.0001、面板说 $0.00」，而那种不一致没人会当成 bug 报出来。
+ * 「`oph usage` 说 $0.0001、面板说 $0.00」，而那种不一致没人会当成 bug 报出来。
  *
  * 小额必须看得见：真花了钱却显示 `$0.0000`，读起来就是「免费」。
  * 所以低于四位小数能表示的下限时显示 `<$0.0001` 而不是一串零——
@@ -473,7 +473,7 @@ export interface UsageTurn {
  *
  * `classifier` 是权限裁决的那次小模型调用。它按**每条待判命令**计费，
  * 频次可能比 run 本身高一个量级，所以必须能单独查——
- * `qy usage --by kind` 才答得出「裁决占了多少」，以及要不要换个更小的模型。
+ * `oph usage --by kind` 才答得出「裁决占了多少」，以及要不要换个更小的模型。
  */
 export type UsageKind = 'run' | 'summary' | 'team' | 'classifier'
 

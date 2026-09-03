@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import type { ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { htmlToText, parseDuckDuckGo, webFetchTool } from './web.ts'
 
 function ctx(): ToolContext {

@@ -152,8 +152,8 @@ describe('凭证文件', () => {
   })
 
   /** 本程序自己的配置：明文 apiKey、权限模式都在这一个文件里。 */
-  test('qywork 自己的 config.json', () => {
-    expect(kind('cat ~/.qywork/config.json')).toBe('deny')
+  test('oph-autoresearch 自己的 config.json', () => {
+    expect(kind('cat ~/.oph-autoresearch/config.json')).toBe('deny')
   })
 
   test('往 SSH 凭据里写', () => {
@@ -161,16 +161,16 @@ describe('凭证文件', () => {
   })
 
   /**
-   * **工作区里的 `.qy/` `.agents/` 不在这条规则里。**
+   * **工作区里的 `.oph/` `.agents/` 不在这条规则里。**
    *
-   * 那是项目自己的 agent 配置，与程序全局目录 `~/.qywork/` 是两回事。
+   * 那是项目自己的 agent 配置，与程序全局目录 `~/.oph-autoresearch/` 是两回事。
    * 拦它没有安全收益——模型有 `run_command`，给自己加不加工具能做的事一样多；
    * 而且 `.agents/memory/` 本来就是 `write_memory` 在写，shell 拦就成了两套账。
    */
-  test('项目里的 .agents / .qy 不算凭证，照常可写', () => {
+  test('项目里的 .agents / .oph 不算凭证，照常可写', () => {
     expect(kind('cat .agents/mcp.json')).toBe('allow')
     expect(kind('echo x > .agents/memory/note.md')).toBe('allow')
-    expect(kind('cp team.json .qy/team.json')).toBe('allow')
+    expect(kind('cp team.json .oph/team.json')).toBe('allow')
   })
 
   test('名字里碰巧带这些词的普通文件不误伤', () => {
@@ -222,7 +222,7 @@ describe('PowerShell 写法', () => {
   test('往工作区外写', () => {
     for (const cmd of [
       'Set-Content -Path $env:APPDATA\\x.txt -Value 1',
-      'Remove-Item $env:LOCALAPPDATA\\qy -Recurse',
+      'Remove-Item $env:LOCALAPPDATA\\oph -Recurse',
       'Copy-Item build.js %APPDATA%\\x',
       'Out-File -FilePath $env:windir\\x.txt',
       'Clear-Content $HOME\\.bashrc',
@@ -254,16 +254,16 @@ describe('PowerShell 写法', () => {
   })
 
   /**
-   * **`.qy/` 与 `.agents/` 在这里同样不拦，这是有意的，不是漏了。**
+   * **`.oph/` 与 `.agents/` 在这里同样不拦，这是有意的，不是漏了。**
    *
    * 理由与 POSIX 侧一字不差（见 `policy.ts` 里 `OUTSIDE_LOCATION` 上方那段）：
    * 模型手里已经有 `run_command`，给自己加个工具并没有多出任何能力；而
    * `.agents/memory/` 本来就是 `write_memory` 在写，shell 拦、工具不拦就是两套账。
-   * `Set-Content .qy\mcp.json` 与 `echo x > .qy/mcp.json` 是同一件事，
+   * `Set-Content .oph\mcp.json` 与 `echo x > .oph/mcp.json` 是同一件事，
    * 换个语法不改变上面两条。
    */
-  test('项目里的 .qy / .agents 照常可写', () => {
-    expect(kind('Set-Content .qy\\mcp.json -Value x')).toBe('allow')
+  test('项目里的 .oph / .agents 照常可写', () => {
+    expect(kind('Set-Content .oph\\mcp.json -Value x')).toBe('allow')
     expect(kind('Remove-Item .agents\\memory\\note.md')).toBe('allow')
   })
 })

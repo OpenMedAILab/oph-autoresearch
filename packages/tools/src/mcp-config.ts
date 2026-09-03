@@ -5,7 +5,7 @@
  * 同层包，不能在这里复制一份规则或加一条横向依赖。
  */
 
-import type { ToolSpec } from '@qywork/agent'
+import type { ToolSpec } from '@oph-autoresearch/agent'
 
 function scopeProperty(): Record<string, unknown> {
   return {

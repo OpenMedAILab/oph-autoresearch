@@ -26,7 +26,7 @@ import { LoadState } from './settings/LoadState.tsx'
  */
 /** 「新增」递给模型的话头。不自动发送——用户可以改了再发。 */
 const NEW_SCHEDULE =
-  '我们一起来设一个定时任务吧。先说明定时任务在 qywork 里怎么工作、到点之后跑在哪；然后问我要它做什么、什么时候跑。'
+  '我们一起来设一个定时任务吧。先说明定时任务在 oph-autoresearch 里怎么工作、到点之后跑在哪；然后问我要它做什么、什么时候跑。'
 
 export function SchedulesPanel() {
   const [data, { refetch }] = createResource(loadSchedules)

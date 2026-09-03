@@ -15,8 +15,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { softLimit } from '@qywork/agent'
-import { emptyBreakdown, emptyOmitted, type ProviderKind } from '@qywork/core'
+import { softLimit } from '@oph-autoresearch/agent'
+import { emptyBreakdown, emptyOmitted, type ProviderKind } from '@oph-autoresearch/core'
 import {
   createConversation,
   createRun,
@@ -29,7 +29,7 @@ import {
   setCompactionManifest,
   settleProviderRequest,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { contextPanel } from './context-panel.ts'
 
 const sum = (b: Record<string, number>) => Object.values(b).reduce((n, v) => n + v, 0)

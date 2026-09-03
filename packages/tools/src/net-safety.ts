@@ -6,7 +6,7 @@
  * 型：
  *
  * - `169.254.169.254` —— 云厂商的元数据端点。一次请求就能拿到实例凭证。
- * - `127.0.0.1` / `localhost` —— 本机上跑着的其他服务，包括 qy 自己的 API。
+ * - `127.0.0.1` / `localhost` —— 本机上跑着的其他服务，包括 oph 自己的 API。
  * - `10.x` / `192.168.x` / `172.16-31.x` —— 内网其他机器。
  *
  * **三条容易漏掉的**：
@@ -352,7 +352,7 @@ export async function safeFetch(
       signal,
       headers: {
         // 明示身份。伪装成浏览器只会让站点的反爬策略更难被诊断。
-        'user-agent': 'qywork-agent/0.1 (+https://github.com/qywork)',
+        'user-agent': 'oph-autoresearch-agent/0.1 (+https://github.com/oph-autoresearch)',
         accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5',
         ...extraHeaders,
         // URL 里放的是 IP，得把原主机名带回去，虚拟主机才路由得对。

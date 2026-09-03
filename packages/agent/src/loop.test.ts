@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import type { ChatRequest, LlmAdapter, ProviderEvent, WireToolCall } from '@qywork/ai'
+import type { ChatRequest, LlmAdapter, ProviderEvent, WireToolCall } from '@oph-autoresearch/ai'
 import {
   buildAdapter,
   classifyProviderError,
@@ -8,14 +8,14 @@ import {
   estimateText,
   lookupModel,
   ProviderError,
-} from '@qywork/ai'
+} from '@oph-autoresearch/ai'
 import type {
   AgentEvent,
   ContextBreakdown,
   ProviderRequestDiagnostic,
   TodoItem,
-} from '@qywork/core'
-import { CONTEXT_GROUPS } from '@qywork/core'
+} from '@oph-autoresearch/core'
+import { CONTEXT_GROUPS } from '@oph-autoresearch/core'
 import { AgentLoop, type LoopPersistence, type ToolContext, type ToolContextBase } from './index.ts'
 import {
   MAX_RESENDS,

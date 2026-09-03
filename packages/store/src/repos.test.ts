@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { MessageId } from '@qywork/core'
+import type { MessageId } from '@oph-autoresearch/core'
 import { Store } from './db.ts'
 import {
   appendMessage,

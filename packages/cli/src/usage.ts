@@ -1,18 +1,18 @@
 /**
- * `qy usage` —— 问「这个月花了多少」。
+ * `oph usage` —— 问「这个月花了多少」。
  *
  * `runs` 上的 usage 答不了这个问题：它按 run 存，而删会话是正常操作。
  * 账本是独立的一张表，没有外键，所以账目比业务数据活得久。
  *
- *   qy usage                 最近 30 天
- *   qy usage --days 7        最近 7 天
- *   qy usage --by day        按天（还可以 model / workspace / kind）
- *   qy usage --json          给脚本用
+ *   oph usage                 最近 30 天
+ *   oph usage --days 7        最近 7 天
+ *   oph usage --by day        按天（还可以 model / workspace / kind）
+ *   oph usage --json          给脚本用
  */
 
-import { formatCosts } from '@qywork/core'
-import { dataPath } from '@qywork/runtime'
-import { type GroupBy, Store, usageBy, usageTotals } from '@qywork/store'
+import { formatCosts } from '@oph-autoresearch/core'
+import { dataPath } from '@oph-autoresearch/runtime'
+import { type GroupBy, Store, usageBy, usageTotals } from '@oph-autoresearch/store'
 
 const DIM = '\x1b[2m'
 const RESET = '\x1b[0m'

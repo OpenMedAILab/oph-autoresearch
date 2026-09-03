@@ -9,8 +9,8 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent } from '@qywork/core'
-import { Store, upsertWorkspace } from '@qywork/store'
+import type { AgentEvent } from '@oph-autoresearch/core'
+import { Store, upsertWorkspace } from '@oph-autoresearch/store'
 import type { EventBus } from './bus.ts'
 import { createGitWatch } from './git-watch.ts'
 
@@ -21,7 +21,7 @@ function repo(dir: string): (...args: string[]) => void {
 }
 
 async function repoWithCommit(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'qy-gitwatch-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-gitwatch-'))
   const run = repo(dir)
   run('init', '-q', '-b', 'main', '.')
   run('config', 'user.email', 't@t')
@@ -78,7 +78,7 @@ describe('分支名跟着 .git/HEAD 走', () => {
    * 都走这一档。抛出去的话整个服务起不来，而代价本来只是分支那一格空着。
    */
   test('不是 git 仓库也不抛', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-nogit-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-nogit-'))
     const { branches, watch } = fixture(dir)
     try {
       expect(() => watch.retarget()).not.toThrow()

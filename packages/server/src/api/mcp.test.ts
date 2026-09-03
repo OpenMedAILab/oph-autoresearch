@@ -34,7 +34,7 @@ function call(root: string, path: string, init?: RequestInit): Promise<Response 
 
 /** 一个工作区，外加它项目层的 `mcp.json` 路径。 */
 async function workspace(): Promise<{ root: string; file: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'qywork-mcpws-'))
+  const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-mcpws-'))
   dirs.push(root)
   await mkdir(join(root, '.agents'), { recursive: true })
   return { root, file: join(root, '.agents', 'mcp.json') }
@@ -42,7 +42,7 @@ async function workspace(): Promise<{ root: string; file: string }> {
 
 /** 一份放在本机别处的现成配置，模拟从别的客户端拷过来的那一份。 */
 async function incoming(body: unknown): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'qywork-mcpsrc-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-mcpsrc-'))
   dirs.push(dir)
   const file = join(dir, 'mcp.json')
   await writeFile(file, JSON.stringify(body), 'utf8')

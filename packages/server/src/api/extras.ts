@@ -12,10 +12,10 @@
  * 一个解析——前端自己扫一遍就会出现「面板上关掉了，模型还在用」。
  */
 
-import type { ConversationId } from '@qywork/core'
-import { loadScopedMcpConfig } from '@qywork/runtime'
-import { getConversation, listDisabledExtras, setExtraEnabled } from '@qywork/store'
-import { listScopedEntries, type Scope, scanSkills, scopeRoots } from '@qywork/tools'
+import type { ConversationId } from '@oph-autoresearch/core'
+import { loadScopedMcpConfig } from '@oph-autoresearch/runtime'
+import { getConversation, listDisabledExtras, setExtraEnabled } from '@oph-autoresearch/store'
+import { listScopedEntries, type Scope, scanSkills, scopeRoots } from '@oph-autoresearch/tools'
 import { type ApiHandler, json } from './types.ts'
 
 export interface ExtraRow {
@@ -69,7 +69,7 @@ export const handleExtrasApi: ApiHandler = async (url, req, d) => {
     push(`mcp:${name}`, name, '', mcp.scopeOf[name] ?? 'project')
   }
 
-  const { loadExtensions } = await import('@qywork/runtime')
+  const { loadExtensions } = await import('@oph-autoresearch/runtime')
   const ext = await loadExtensions(d.workspaceRoot)
   // 插件只有全局一个目录，层不用从路径反推。
   for (const pl of ext.plugins.plugins) {

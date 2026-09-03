@@ -1,5 +1,5 @@
 /**
- * 与 `qy serve` 的连接层。
+ * 与 `oph serve` 的连接层。
  *
  * 桌面 WebView 和手机浏览器用的是**同一份**代码。区别只有两处：
  * - 令牌来源：桌面从注入的全局变量拿，手机从二维码带来的 URL fragment 拿。
@@ -23,8 +23,8 @@ import type {
   HelloFrame,
   HelloOkFrame,
   ServerCapabilities,
-} from '@qywork/core'
-import { decodePairingUrl } from '@qywork/core'
+} from '@oph-autoresearch/core'
+import { decodePairingUrl } from '@oph-autoresearch/core'
 import { workspace } from './store/ui.ts'
 
 export type ConnectionState = 'connecting' | 'ready' | 'reconnecting' | 'unauthorized' | 'closed'
@@ -108,7 +108,7 @@ export interface ClientDeps {
  * 被浏览器历史记录留存。
  */
 export function resolveEndpoint(): Endpoint {
-  const injected = (globalThis as Record<string, unknown>).__QYWORK__ as
+  const injected = (globalThis as Record<string, unknown>).__OPH_AUTORESEARCH__ as
     | { token?: string; base?: string }
     | undefined
 
@@ -117,7 +117,7 @@ export function resolveEndpoint(): Endpoint {
     if (decoded?.token) {
       history.replaceState(null, '', `${location.pathname}${location.search}`)
       try {
-        sessionStorage.setItem('qywork.token', decoded.token)
+        sessionStorage.setItem('oph-autoresearch.token', decoded.token)
       } catch {
         // 隐私模式下 sessionStorage 可能不可用；仅影响刷新后要重扫，不致命。
       }
@@ -131,7 +131,7 @@ export function resolveEndpoint(): Endpoint {
 
   let stored = ''
   try {
-    stored = sessionStorage.getItem('qywork.token') ?? ''
+    stored = sessionStorage.getItem('oph-autoresearch.token') ?? ''
   } catch {
     stored = ''
   }
@@ -177,7 +177,7 @@ export class ApiError extends Error {
   }
 }
 
-export class QyClient {
+export class OphClient {
   private ws: SocketLike | null = null
   private lastSeq = 0
   /**

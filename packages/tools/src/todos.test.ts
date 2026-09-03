@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
-import type { TodoItem } from '@qywork/core'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
+import type { TodoItem } from '@oph-autoresearch/core'
 import { writeTodosTool } from './todos.ts'
 
 function ctx(): ToolContext & { emitted: TodoItem[][] } {
@@ -209,7 +209,7 @@ describe('动作语义：首建是创建，改已有的才是编辑', () => {
   })
 
   /**
-   * 端口没接上（`qy exec` 这类一次性执行没有会话）时按「创建」。
+   * 端口没接上（`oph exec` 这类一次性执行没有会话）时按「创建」。
    * 反过来说「修改」是在没有清单时声称改过一份不存在的清单。
    */
   test('端口没接上 —— 按创建，不按修改', () => {

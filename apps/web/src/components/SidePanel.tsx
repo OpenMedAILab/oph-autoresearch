@@ -1,4 +1,4 @@
-import type { FileChange } from '@qywork/core'
+import type { FileChange } from '@oph-autoresearch/core'
 import type { JSX } from 'solid-js'
 import {
   createEffect,

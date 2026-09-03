@@ -4,9 +4,9 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { WireMessage } from '@qywork/ai'
-import { DEFAULT_DENSITY } from '@qywork/ai'
-import type { CompactionManifest, MessageId } from '@qywork/core'
+import type { WireMessage } from '@oph-autoresearch/ai'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
+import type { CompactionManifest, MessageId } from '@oph-autoresearch/core'
 import {
   type CompactionAction,
   type CompactionInput,

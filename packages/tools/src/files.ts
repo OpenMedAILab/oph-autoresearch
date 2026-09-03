@@ -12,10 +12,15 @@
 
 import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { chargeBatchBudget, deliveredTokens, type ToolContext, type ToolSpec } from '@qywork/agent'
-import { MEDIA_TOKENS } from '@qywork/ai'
-import type { FileChange } from '@qywork/core'
-import { isInlineImage, mimeOf } from '@qywork/core'
+import {
+  chargeBatchBudget,
+  deliveredTokens,
+  type ToolContext,
+  type ToolSpec,
+} from '@oph-autoresearch/agent'
+import { MEDIA_TOKENS } from '@oph-autoresearch/ai'
+import type { FileChange } from '@oph-autoresearch/core'
+import { isInlineImage, mimeOf } from '@oph-autoresearch/core'
 import { badIntMessage, intArg } from './args.ts'
 import { dominantEol, eolInsensitivePattern, fromLf, toLf } from './eol.ts'
 import { shrinkImage } from './image.ts'

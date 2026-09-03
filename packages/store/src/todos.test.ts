@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { ConversationId } from '@qywork/core'
+import type { ConversationId } from '@oph-autoresearch/core'
 import { Store } from './db.ts'
 import { appendStep, createConversation, createRun, upsertWorkspace } from './repos.ts'
 import { latestTodos } from './todos.ts'

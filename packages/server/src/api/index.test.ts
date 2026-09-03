@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ConversationHistoryPageResponse, MessageId } from '@qywork/core'
+import type { ConversationHistoryPageResponse, MessageId } from '@oph-autoresearch/core'
 import {
   appendMessage,
   appendStep,
@@ -37,7 +37,7 @@ import {
   setConversationTitle,
   settleProviderRequest,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import type { ModelsResponse } from './conversations.ts'
 import { type ApiDeps, handleApi } from './index.ts'
 
@@ -266,20 +266,20 @@ describe('移除项目', () => {
   /**
    * 新建项目的两条入参。
    *
-   * **`QYWORK_HOME` 必须指到临时目录**：只给 name 那条会真的 mkdir，
-   * 不改的话测试会往开发者真实的 `~/.qywork/workspaces/` 里堆文件夹——
+   * **`OPH_AUTORESEARCH_HOME` 必须指到临时目录**：只给 name 那条会真的 mkdir，
+   * 不改的话测试会往开发者真实的 `~/.oph-autoresearch/workspaces/` 里堆文件夹——
    * 「测试残留污染真实账本」在这个仓库里发生过。
    */
   describe('新建项目', () => {
     let home = ''
-    const prev = process.env.QYWORK_HOME
+    const prev = process.env.OPH_AUTORESEARCH_HOME
     beforeEach(async () => {
-      home = await mkdtemp(join(tmpdir(), 'qywork-newproj-'))
-      process.env.QYWORK_HOME = home
+      home = await mkdtemp(join(tmpdir(), 'oph-autoresearch-newproj-'))
+      process.env.OPH_AUTORESEARCH_HOME = home
     })
     afterEach(async () => {
-      if (prev === undefined) delete process.env.QYWORK_HOME
-      else process.env.QYWORK_HOME = prev
+      if (prev === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+      else process.env.OPH_AUTORESEARCH_HOME = prev
       await rm(home, { recursive: true, force: true }).catch(() => {})
     })
 
@@ -288,14 +288,14 @@ describe('移除项目', () => {
 
     test('只给名字 —— 在默认根下建一个同名文件夹', async () => {
       const d = deps()
-      const res = await post({ name: '青学研上' }, d)
+      const res = await post({ name: '视网膜病变分级研究' }, d)
       expect(res?.status).toBe(200)
       const { workspace, conversations } = (await res?.json()) as {
         workspace: { id: string; name: string; rootPath: string }
         conversations: { workspaceId: string; provider: string; model: string }[]
       }
-      expect(workspace.name).toBe('青学研上')
-      expect(workspace.rootPath).toBe(join(home, 'workspaces', '青学研上'))
+      expect(workspace.name).toBe('视网膜病变分级研究')
+      expect(workspace.rootPath).toBe(join(home, 'workspaces', '视网膜病变分级研究'))
       expect((await stat(workspace.rootPath)).isDirectory()).toBe(true)
       expect(conversations).toEqual([
         expect.objectContaining({ workspaceId: workspace.id, provider: 'p', model: 'm' }),
@@ -351,7 +351,7 @@ describe('移除项目', () => {
       expect(listWorkspaces(d.store).map((w) => String(w.id))).not.toContain(id)
 
       // 用真实存在的目录重新添加：路径唯一，命中的还是同一行
-      const dir = await mkdtemp(join(tmpdir(), 'qywork-readd-'))
+      const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-readd-'))
       const again = upsertWorkspace(d.store, dir, 'x')
       expect(String(again.id)).not.toBe(id) // 换了路径就是另一个项目
       await rm(dir, { recursive: true, force: true }).catch(() => {})
@@ -862,7 +862,7 @@ describe('按 ?ws= 解析项目', () => {
  * 锁的是「设置页拿不拿得到底层工具名与参数」——`ToolSpec` 上的字段被丢在服务端时，
  * 前端写了也显示不出来，而那种缺失在界面上只表现为「少了一栏」，不报任何错。
  *
- * `QYWORK_HOME` 指到临时目录：插件与 MCP 是三层作用域的，不隔离的话这条测试
+ * `OPH_AUTORESEARCH_HOME` 指到临时目录：插件与 MCP 是三层作用域的，不隔离的话这条测试
  * 会去连开发者本机全局装的那些 server。
  */
 describe('工具清单', () => {
@@ -879,14 +879,14 @@ describe('工具清单', () => {
   }
 
   let home = ''
-  const prev = process.env.QYWORK_HOME
+  const prev = process.env.OPH_AUTORESEARCH_HOME
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'qywork-tools-'))
-    process.env.QYWORK_HOME = home
+    home = await mkdtemp(join(tmpdir(), 'oph-autoresearch-tools-'))
+    process.env.OPH_AUTORESEARCH_HOME = home
   })
   afterEach(async () => {
-    if (prev === undefined) delete process.env.QYWORK_HOME
-    else process.env.QYWORK_HOME = prev
+    if (prev === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = prev
     await rm(home, { recursive: true, force: true }).catch(() => {})
   })
 
@@ -1085,7 +1085,9 @@ describe('会话诊断导出接口', () => {
     const res = await call(`/api/conversations/${conv.id}/export`, undefined, d)
     expect(res?.status).toBe(200)
     expect(res?.headers.get('content-type')).toContain('application/json')
-    expect(res?.headers.get('content-disposition')).toContain(`qywork-session-${conv.id}.json`)
+    expect(res?.headers.get('content-disposition')).toContain(
+      `oph-autoresearch-session-${conv.id}.json`,
+    )
     const payload = (await res?.json()) as {
       kind: string
       schemaVersion: number
@@ -1101,7 +1103,7 @@ describe('会话诊断导出接口', () => {
         links: { parentConversationId: string; childConversationId: string }[]
       }
     }
-    expect(payload.kind).toBe('qywork.session-diagnostic')
+    expect(payload.kind).toBe('oph-autoresearch.session-diagnostic')
     expect(payload.schemaVersion).toBe(5)
     expect(payload.conversation.id).toBe(conv.id)
     expect(payload.messages.map((m) => m.content)).toEqual(['为什么只调用工具'])

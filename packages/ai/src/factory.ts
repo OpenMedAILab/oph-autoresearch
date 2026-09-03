@@ -49,7 +49,7 @@ export function buildAdapter(profile: ProviderProfile, now = Date.now()): LlmAda
   if (!profile.apiKey.trim() && !isLocalEndpoint(profile.baseUrl)) {
     throw new ProviderError({
       code: 'no_api_key',
-      message: `未配置 API Key（供应商 ${profile.kind}，模型 ${profile.model}）。运行 qy init 生成配置，或设置对应的环境变量。`,
+      message: `未配置 API Key（供应商 ${profile.kind}，模型 ${profile.model}）。运行 oph init 生成配置，或设置对应的环境变量。`,
       provider: profile.kind,
       detail: { kind: profile.kind, model: profile.model },
     })

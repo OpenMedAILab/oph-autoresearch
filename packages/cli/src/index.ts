@@ -1,22 +1,22 @@
 #!/usr/bin/env bun
 /**
- * qy —— qywork 内核 CLI。发布产物本体。
+ * oph —— oph-autoresearch 内核 CLI。发布产物本体。
  *
  * 桌面端不是「一个内置了 agent 的应用」，而是这个 CLI 的一个前端：Tauri 只负责
- * spawn `qy serve` 并显示 WebView，业务状态一个字节都不存在 Rust 侧。手机端连的
- * 也是同一个 `qy serve`。这样只有一本账。
+ * spawn `oph serve` 并显示 WebView，业务状态一个字节都不存在 Rust 侧。手机端连的
+ * 也是同一个 `oph serve`。这样只有一本账。
  *
- *   qy exec "<任务>"    单次执行，人读格式；--json 出 JSONL 供 CI 消费
- *   qy serve           本地 HTTP + WebSocket（桌面端与手机端都连它）
- *   qy config          打印当前配置与配置文件路径
+ *   oph exec "<任务>"    单次执行，人读格式；--json 出 JSONL 供 CI 消费
+ *   oph serve           本地 HTTP + WebSocket（桌面端与手机端都连它）
+ *   oph config          打印当前配置与配置文件路径
  *
- * 无参数时进交互式（非 TTY 下打印用法）。`qy team run` 尚未实现——编排目前从图形界面发起。
+ * 无参数时进交互式（非 TTY 下打印用法）。`oph team run` 尚未实现——编排目前从图形界面发起。
  */
 
 import { mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import type { AgentEvent } from '@qywork/core'
-import { formatMoney } from '@qywork/core'
+import type { AgentEvent } from '@oph-autoresearch/core'
+import { formatMoney } from '@oph-autoresearch/core'
 import {
   configDir,
   configNotices,
@@ -26,15 +26,15 @@ import {
   loadConfig,
   MCP_CONFIG,
   Session,
-} from '@qywork/runtime'
-import { lanCandidates, processExitObservationFromEnv, serve } from '@qywork/server'
-import { ContentStore, contentPathFor, Store } from '@qywork/store'
+} from '@oph-autoresearch/runtime'
+import { lanCandidates, processExitObservationFromEnv, serve } from '@oph-autoresearch/server'
+import { ContentStore, contentPathFor, Store } from '@oph-autoresearch/store'
 import {
   detectSandbox,
   runCommandRunner,
   setCommandRunner,
   startCommandRunner,
-} from '@qywork/tools'
+} from '@oph-autoresearch/tools'
 import { runDoctor } from './doctor.ts'
 import { runExport } from './export.ts'
 import { runInit } from './init.ts'
@@ -45,18 +45,18 @@ import { renderQr } from './qr.ts'
 import { runTui } from './tui.ts'
 import { runUsage } from './usage.ts'
 
-const USAGE = `qy —— qywork 编码 agent
+const USAGE = `oph —— oph-autoresearch 编码 agent
 
-  qy                      交互式（多轮，同一个会话）
+  oph                      交互式（多轮，同一个会话）
 
-  qy init                 生成配置（第一次用先跑这个）
+  oph init                 生成配置（第一次用先跑这个）
     --force               覆盖已有配置
 
-  qy exec "<任务>"        在当前目录执行一次任务
+  oph exec "<任务>"        在当前目录执行一次任务
     --cwd <路径>          指定工作区（默认当前目录）
     --json                输出 JSONL 事件流（CI 用）
 
-  qy serve                启动本地服务（桌面端与手机端都连它）
+  oph serve                启动本地服务（桌面端与手机端都连它）
     --port <端口>         默认 7717，0 = 随机可用端口
     --host <地址>         默认 0.0.0.0（手机可连）；仅本机用 127.0.0.1
     --cwd <路径>          指定工作区
@@ -64,33 +64,33 @@ const USAGE = `qy —— qywork 编码 agent
     --print-token         把令牌打到 stdout（供 Tauri 读取）
     --parent-pid <pid>    父进程退出时一并退出，避免留下孤儿服务
 
-  qy doctor               一屏体检：配置、shell 沙箱、账本、MCP、插件
+  oph doctor               一屏体检：配置、shell 沙箱、账本、MCP、插件
     --cwd <路径>          指定工作区
     --json                给脚本用（只有阻断项才退非零）
 
-  qy mcp                  检查 ${MCP_CONFIG} 里的 server 连没连上
+  oph mcp                  检查 ${MCP_CONFIG} 里的 server 连没连上
     --tools               连带列出每个 server 提供的工具
     --cwd <路径>          指定工作区
 
-  qy plugins              检查装了哪些插件、隔离到什么程度
+  oph plugins              检查装了哪些插件、隔离到什么程度
     --tools               连带列出每个插件提供的工具与启动日志
     --cwd <路径>          指定工作区
 
-  qy usage                本机用量账本（账目不随会话删除而消失）
+  oph usage                本机用量账本（账目不随会话删除而消失）
     --days <n>            统计区间，默认 30
     --by <维度>           model（默认）/ day / workspace / kind
     --json                给脚本用
 
-  qy export [<会话 id>]    导出会话（不给 id 时列出可选的）
+  oph export [<会话 id>]    导出会话（不给 id 时列出可选的）
     --json                完整 json（不裁剪）；默认 markdown（给人读）
     --thinking            带上思考内容
     -o <文件>             写文件，默认打到 stdout
 
-  qy probe [<档案名>]      实测端点支持什么（思考模式、effort 档位）
+  oph probe [<档案名>]      实测端点支持什么（思考模式、effort 档位）
     --save                把结论写回配置；不加则只打印
 
-  qy config               显示当前配置
-  qy --version
+  oph config               显示当前配置
+  oph --version
 `
 
 async function main(argv: string[]): Promise<number> {
@@ -101,7 +101,7 @@ async function main(argv: string[]): Promise<number> {
     return 0
   }
   if (!cmd) {
-    // 无参数：交互式。但**非 TTY 下仍然打用法**：`qy | cat` 或 CI 里进入等输入的
+    // 无参数：交互式。但**非 TTY 下仍然打用法**：`oph | cat` 或 CI 里进入等输入的
     // 循环，表现为进程不返回。
     if (!process.stdin.isTTY) {
       process.stdout.write(USAGE)
@@ -132,7 +132,7 @@ async function main(argv: string[]): Promise<number> {
      */
     const sb = detectSandbox()
     const mark = sb.active ? `${GREEN}✓${RESET}` : `${YELLOW}⚠${RESET}`
-    // 报出 WSL 版本：给 Windows 用户的建议就是「在 WSL2 里跑 qy」，
+    // 报出 WSL 版本：给 Windows 用户的建议就是「在 WSL2 里跑 oph」，
     // 而「当前是不是 WSL、是第几版」是那条建议唯一需要确认的事。
     // 不说的话，WSL1 里看到「没有沙箱」会显得那条建议不成立。
     const where = sb.wsl === null ? sb.platform : `${sb.platform} · WSL${sb.wsl}`
@@ -148,7 +148,7 @@ async function main(argv: string[]): Promise<number> {
   if (cmd === 'exec') return runExec(rest)
   /*
    * 命令 runner 那一侧。**不写进 USAGE**：它不是给人用的子命令，是
-   * `qy serve` 自己再执行一次这个二进制、把它当作「跑命令的那个父进程」。
+   * `oph serve` 自己再执行一次这个二进制、把它当作「跑命令的那个父进程」。
    * 理由见 `tools/runner.ts` 的模块注释。
    */
   if (cmd === 'runner') {
@@ -166,7 +166,7 @@ async function runExec(args: string[]): Promise<number> {
   const flags = parseFlags(args)
   const prompt = flags.positional.join(' ').trim()
   if (!prompt) {
-    process.stderr.write('需要一个任务描述。例：qy exec "把 README 里的安装步骤补上"\n')
+    process.stderr.write('需要一个任务描述。例：oph exec "把 README 里的安装步骤补上"\n')
     return 2
   }
 
@@ -218,12 +218,12 @@ async function runExec(args: string[]): Promise<number> {
       if (ev.type === 'run.finished' && ev.status === 'failed') exitCode = 1
     }
   } catch (err) {
-    process.stderr.write(`\n[qy] ${err instanceof Error ? err.message : String(err)}\n`)
+    process.stderr.write(`\n[oph] ${err instanceof Error ? err.message : String(err)}\n`)
     exitCode = 1
   } finally {
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
-    // 插件与 MCP server 都是子进程。不收掉的话 `qy exec` 退出后它们可能仍在运行，
+    // 插件与 MCP server 都是子进程。不收掉的话 `oph exec` 退出后它们可能仍在运行，
     // 而 CI 里那表现为「命令跑完了但脚本挂住不返回」。
     session.dispose()
     content.close()
@@ -239,7 +239,7 @@ async function runServe(args: string[]): Promise<number> {
   /*
    * **给没给 `--cwd` 是两种语义，不能合并成一个默认值。**
    *
-   * 给了 = 「就用这个目录当项目」，CLI 的正常用法（`qy serve --cwd D:\项目`），
+   * 给了 = 「就用这个目录当项目」，CLI 的正常用法（`oph serve --cwd D:\项目`），
    * 必须照用。没给 = 未指定——这时把进程的 cwd 登记成项目是错的：
    * 桌面外壳的 cwd 是它自己的安装目录或 `src-tauri`，登记进去会产生一个用户从未
    * 打开过的项目。
@@ -264,11 +264,11 @@ async function runServe(args: string[]): Promise<number> {
   const previousProcessExit = processExitObservationFromEnv(process.env)
   // 退出现场只消费一次。runner 与之后的命令都不需要继承这段 stderr。
   for (const name of [
-    'QYWORK_PREVIOUS_EXIT_KIND',
-    'QYWORK_PREVIOUS_EXIT_AT_MS',
-    'QYWORK_PREVIOUS_EXIT_CODE',
-    'QYWORK_PREVIOUS_EXIT_SIGNAL',
-    'QYWORK_PREVIOUS_STDERR_TAIL',
+    'OPH_AUTORESEARCH_PREVIOUS_EXIT_KIND',
+    'OPH_AUTORESEARCH_PREVIOUS_EXIT_AT_MS',
+    'OPH_AUTORESEARCH_PREVIOUS_EXIT_CODE',
+    'OPH_AUTORESEARCH_PREVIOUS_EXIT_SIGNAL',
+    'OPH_AUTORESEARCH_PREVIOUS_STDERR_TAIL',
   ]) {
     delete process.env[name]
   }
@@ -282,7 +282,7 @@ async function runServe(args: string[]): Promise<number> {
    * runner 出生在绑端口之前，它和它的子孙手里都没有那份句柄。
    *
    * 源码直跑时要把入口脚本带上（`bun <入口>.ts runner`），打包之后只有二进制
-   * 自己（`qy runner`）——判据是「这个进程是不是 bun 在跑一个脚本」。
+   * 自己（`oph runner`）——判据是「这个进程是不是 bun 在跑一个脚本」。
    */
   const runnerArgv = Bun.main.endsWith('.ts')
     ? [process.execPath, Bun.main, 'runner']
@@ -297,14 +297,14 @@ async function runServe(args: string[]): Promise<number> {
     host: flags.host ?? '0.0.0.0',
     ...(flags.static ? { staticDir: resolve(flags.static) } : {}),
     // Tauri spawn 时用环境变量把令牌传进来，桌面端就不必再走扫码。
-    ...(process.env.QYWORK_TOKEN ? { token: process.env.QYWORK_TOKEN } : {}),
+    ...(process.env.OPH_AUTORESEARCH_TOKEN ? { token: process.env.OPH_AUTORESEARCH_TOKEN } : {}),
     ...(previousProcessExit ? { previousProcessExit } : {}),
   })
 
   // 父进程守望。
   //
   // 桌面外壳只在正常退出路径上杀 sidecar；它崩溃或被强杀时（实测 Stop-Process 就会）
-  // 那条路径不会走到，留下的 qy 会占着端口和 SQLite 的 WAL 锁，
+  // 那条路径不会走到，留下的 oph 会占着端口和 SQLite 的 WAL 锁，
   // 下次启动直接起不来。所以由 sidecar 自己盯着父进程，谁死都不会留孤儿。
   if (flags.parentPid) {
     watchParent(flags.parentPid, () => {
@@ -317,12 +317,12 @@ async function runServe(args: string[]): Promise<number> {
 
   if (flags.printToken) {
     // 供父进程（Tauri）按行读取。必须在任何装饰性输出之前，且格式稳定。
-    process.stdout.write(`QYWORK_TOKEN=${handle.token}\n`)
-    process.stdout.write(`QYWORK_PORT=${handle.port}\n`)
+    process.stdout.write(`OPH_AUTORESEARCH_TOKEN=${handle.token}\n`)
+    process.stdout.write(`OPH_AUTORESEARCH_PORT=${handle.port}\n`)
   }
 
   const local = `http://127.0.0.1:${handle.port}`
-  process.stderr.write(`\n${BOLD}qy serve${RESET} 已启动\n`)
+  process.stderr.write(`\n${BOLD}oph serve${RESET} 已启动\n`)
   for (const p of problems) process.stderr.write(`\n${YELLOW}⚠${RESET} ${p}\n`)
   process.stderr.write(`  工作区  ${handle.workspaceRoot}\n`)
   process.stderr.write(`  本机    ${local}/#t=${handle.token}\n`)
@@ -477,13 +477,14 @@ function watchParent(pid: number, onGone: () => void): void {
 /**
  * 版本号。
  *
- * 编译期由 `--define QYWORK_VERSION` 内联；单文件二进制里读不到打包外的 VERSION
+ * 编译期由 `--define OPH_AUTORESEARCH_VERSION` 内联；单文件二进制里读不到打包外的 VERSION
  * 文件（相对路径解析不出来，实测会静默输出 0.0.0）。源码直跑时回落读文件。
  */
-declare const QYWORK_VERSION: string | undefined
+declare const OPH_AUTORESEARCH_VERSION: string | undefined
 
 async function version(): Promise<string> {
-  if (typeof QYWORK_VERSION === 'string' && QYWORK_VERSION) return QYWORK_VERSION
+  if (typeof OPH_AUTORESEARCH_VERSION === 'string' && OPH_AUTORESEARCH_VERSION)
+    return OPH_AUTORESEARCH_VERSION
   const file = Bun.file(new URL('../../../VERSION', import.meta.url))
   return (await file.text().catch(() => 'dev')).trim()
 }

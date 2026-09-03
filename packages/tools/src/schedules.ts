@@ -1,7 +1,7 @@
 /**
  * 定时任务。
  *
- * **这个功能的前提必须先说清楚。** qywork 没有常驻服务：sidecar 的生命周期挂在桌面端窗口上
+ * **这个功能的前提必须先说清楚。** oph-autoresearch 没有常驻服务：sidecar 的生命周期挂在桌面端窗口上
  * （`--parent-pid`）。所以「每天 9:00 跑一次」在**应用关着的时候不会触发**，错过的也不补。
  *
  * 这是一个被正面选择过的取舍：另一条路是装
@@ -31,7 +31,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { ToolSpec } from '@qywork/agent'
+import type { ToolSpec } from '@oph-autoresearch/agent'
 import { globalScopeRoot } from './scopes.ts'
 
 export type ScheduleKind = 'interval' | 'daily'
@@ -70,7 +70,7 @@ export async function loadSchedules(): Promise<Schedule[]> {
     // 文件坏了不能让服务起不来，但也**不能静默当成空**——
     // 静默的话界面上等同于定时任务被删了，用户会再建一遍，
     // 而下一次写入会把坏文件覆盖掉，里面的内容彻底消失。
-    process.stderr.write(`[qy] 定时任务文件解析失败，本次按空处理：${schedulesPath()}\n`)
+    process.stderr.write(`[oph] 定时任务文件解析失败，本次按空处理：${schedulesPath()}\n`)
     return []
   }
 }

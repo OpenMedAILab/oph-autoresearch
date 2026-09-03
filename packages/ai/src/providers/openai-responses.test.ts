@@ -436,7 +436,7 @@ describe('装配', () => {
    * `transmits` 必须按 spec 的参数格式算，不能是类级常量，也不能只看档位表非空。
    *
    * `gpt-5` 不在目录里 → `thinking:'none'` + `effortLevels:[]` → 装配期把 reasoning
-   * 整个省掉，请求里一个字节都没有。此处若声明成 true，`qy probe` 的探针会「通过」
+   * 整个省掉，请求里一个字节都没有。此处若声明成 true，`oph probe` 的探针会「通过」
    * （不是端点支持，是客户端没发），`--save` 再把这份没有依据的结论覆盖回目录。
    *
    * `claude-opus-5` 是另一头：`lookupModel` 的兜底只改写协议、保留能力约束，

@@ -9,7 +9,7 @@
  * 所以真源放账本，随会话删除一起走（同 `file_reads` 与 `goal_events` 的立场）。
  */
 
-import type { ConversationId } from '@qywork/core'
+import type { ConversationId } from '@oph-autoresearch/core'
 import type { Store } from './db.ts'
 
 /** 这条会话已经装了哪些。返回集合而不是数组：调用方全都是在做包含判断。 */

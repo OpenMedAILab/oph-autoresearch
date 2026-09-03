@@ -2,11 +2,11 @@
  * 记忆与技能的读写面。
  *
  * **为什么必须有这一层。** 记忆是 `<层根>/memory/*.md`、技能是 `<层根>/skills/<name>/`——项目层在
- * 工作区 `.agents/` 下，全局层在 `~/.qywork/` 下。都是普通文件，agent 通过工具随时能写。但**人看不
+ * 工作区 `.agents/` 下，全局层在 `~/.oph-autoresearch/` 下。都是普通文件，agent 通过工具随时能写。但**人看不
  * 到也删不掉**：桌面端用户手边不一定有编辑器，记错一条记忆就会一直错下去。「agent 能写、人不能管」
  * 是最不该留的不对称。
  *
- * **不重写扫描逻辑。** 列表直接调 `@qywork/tools` 导出的 `listEntries` / `scanSkills`——
+ * **不重写扫描逻辑。** 列表直接调 `@oph-autoresearch/tools` 导出的 `listEntries` / `scanSkills`——
  * 和工具走同一个函数。另写一份「给界面用的扫描」必然和工具那份漂移，
  * 而漂移的表现是「界面上有这条记忆，模型却说没有」。
  *
@@ -35,7 +35,7 @@ import {
   scopeDir,
   scopePaths,
   scopeRoots,
-} from '@qywork/tools'
+} from '@oph-autoresearch/tools'
 import type { ApiHandler } from './types.ts'
 import { json } from './types.ts'
 

@@ -10,8 +10,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ToolContext, ToolRegistry } from '@qywork/agent'
-import { DEFAULT_DENSITY, type TokenDensity } from '@qywork/ai'
+import type { ToolContext, ToolRegistry } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY, type TokenDensity } from '@oph-autoresearch/ai'
 import {
   appendStep,
   createConversation,
@@ -26,12 +26,12 @@ import {
   setConversationTitle,
   setExtraEnabled,
   upsertWorkspace,
-} from '@qywork/store'
-import { configPath, type QyConfig } from './config.ts'
+} from '@oph-autoresearch/store'
+import { configPath, type OphConfig } from './config.ts'
 import { buildTailNotes } from './prompt.ts'
 import { Session, withAttachments } from './session.ts'
 
-const config: QyConfig = {
+const config: OphConfig = {
   active: { provider: 'p', model: 'deepseek-v4-flash' },
   providers: {
     p: { kind: 'openai_chat_completions', apiKey: 'sk-x', models: { 'deepseek-v4-flash': {} } },
@@ -43,7 +43,7 @@ async function session(over: Partial<ConstructorParameters<typeof Session>[0]> =
   const s = new Session({
     store,
     config,
-    workspaceRoot: await mkdtemp(join(tmpdir(), 'qywork-sess-')),
+    workspaceRoot: await mkdtemp(join(tmpdir(), 'oph-autoresearch-sess-')),
     signal: new AbortController().signal,
     ...over,
   })
@@ -57,7 +57,7 @@ async function session(over: Partial<ConstructorParameters<typeof Session>[0]> =
 
 describe('附件请求形状', () => {
   test('历史媒体降级为普通文本，只有当前媒体使用内容块数组', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-attachment-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-attachment-'))
     await writeFile(join(root, 'chart.png'), Buffer.from([0]))
     const attachment = {
       type: 'image' as const,
@@ -185,14 +185,14 @@ async function workspaceWithMcp(
     { name: 'pong', description: 'q' },
   ],
 ): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'qywork-sess-mcp-'))
+  const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-sess-mcp-'))
   await mkdir(join(root, '.agents'), { recursive: true })
   /*
    * 项目层的 MCP 要先授权才加载，而授权落在 `config.json` 里。这一份必须写进临时
-   * 的 `QYWORK_HOME`，写本机真配置会给用户加上一条指向临时目录的授权。
+   * 的 `OPH_AUTORESEARCH_HOME`，写本机真配置会给用户加上一条指向临时目录的授权。
    * 还原由文件末尾的 `afterEach` 负责。
    */
-  process.env.QYWORK_HOME = await mkdtemp(join(tmpdir(), 'qywork-sess-home-'))
+  process.env.OPH_AUTORESEARCH_HOME = await mkdtemp(join(tmpdir(), 'oph-autoresearch-sess-home-'))
   await writeFile(configPath(), JSON.stringify({ trustedWorkspaces: [root] }), 'utf8')
   const NL = String.fromCharCode(10)
   const defs = JSON.stringify(
@@ -402,7 +402,7 @@ describe('外部工具按量转按需', () => {
  * 但会话已经在库里了。
  */
 describe('新建会话的来源', () => {
-  const offline: QyConfig = {
+  const offline: OphConfig = {
     active: { provider: 'p', model: 'deepseek-v4-flash' },
     providers: {
       p: {
@@ -417,10 +417,10 @@ describe('新建会话的来源', () => {
 
   async function askOnce(
     over?: Partial<Parameters<Session['ask']>[2]>,
-    config: QyConfig = offline,
+    config: OphConfig = offline,
   ) {
     const store = new Store({ path: ':memory:' })
-    const root = await mkdtemp(join(tmpdir(), 'qywork-src-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-src-'))
     const s = new Session({
       store,
       config,
@@ -450,7 +450,7 @@ describe('新建会话的来源', () => {
     store.close()
   })
 
-  /** 不填仍然是用户会话——`qy run "..."` 走的就是这条，它必须能被列出来。 */
+  /** 不填仍然是用户会话——`oph run "..."` 走的就是这条，它必须能被列出来。 */
   test('不填来源的仍然是用户会话', async () => {
     const { store, root } = await askOnce()
     const ws = upsertWorkspace(store, root, 'x')
@@ -624,9 +624,9 @@ describe('注入消息的回读', () => {
   })
 })
 
-/** `workspaceWithMcp` 会改 `QYWORK_HOME`，每条用例跑完还回去。 */
-const HOME_BEFORE = process.env.QYWORK_HOME
+/** `workspaceWithMcp` 会改 `OPH_AUTORESEARCH_HOME`，每条用例跑完还回去。 */
+const HOME_BEFORE = process.env.OPH_AUTORESEARCH_HOME
 afterEach(() => {
-  if (HOME_BEFORE === undefined) delete process.env.QYWORK_HOME
-  else process.env.QYWORK_HOME = HOME_BEFORE
+  if (HOME_BEFORE === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+  else process.env.OPH_AUTORESEARCH_HOME = HOME_BEFORE
 })

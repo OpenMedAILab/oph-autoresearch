@@ -2,7 +2,7 @@
  * 外观：跟随系统 / 浅色 / 深色。
  *
  * **为什么不进服务端配置。** 服务端配置回答「这台机器上 agent 怎么跑」；主题回答「这块屏幕怎么
- * 画」。桌面端和手机端连的是**同一个** `qy serve`——主题写进服务端，手机上调成深色桌面跟着变。而
+ * 画」。桌面端和手机端连的是**同一个** `oph serve`——主题写进服务端，手机上调成深色桌面跟着变。而
  * 且首屏就要用它：走服务端意味着第一帧只能先画一个猜的主题，等 HTTP 回来再翻，那是肉眼可见的闪白。
  *
  * 代价是换台机器要重设一次。接受——它不是配置，是这块屏幕的偏好。
@@ -19,7 +19,7 @@ import { createSignal } from 'solid-js'
 
 export type ThemePref = 'system' | 'light' | 'dark'
 
-const KEY = 'qywork.theme'
+const KEY = 'oph-autoresearch.theme'
 
 function read(): ThemePref {
   try {

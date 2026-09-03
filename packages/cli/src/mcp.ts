@@ -1,14 +1,14 @@
 /**
- * `qy mcp` —— 看一眼工作区里的 MCP server 有没有连上。
+ * `oph mcp` —— 看一眼工作区里的 MCP server 有没有连上。
  *
- * 没有这条命令的话，「配了但工具没出现」只能靠翻 `qy serve` 的日志排查，
+ * 没有这条命令的话，「配了但工具没出现」只能靠翻 `oph serve` 的日志排查，
  * 而那些日志混在启动输出里、还会被桌面外壳吞掉。MCP 的失败又特别常见：
  * 命令没装、包名写错、要的凭证没给——每一种的处置办法都不同，
  * 所以要**逐条把原因打出来**，而不是只说「有 2 个 server 连不上」。
  */
 
 import { resolve } from 'node:path'
-import { loadWorkspaceMcp, MCP_CONFIG, toolNamePrefix } from '@qywork/runtime'
+import { loadWorkspaceMcp, MCP_CONFIG, toolNamePrefix } from '@oph-autoresearch/runtime'
 
 const DIM = '\x1b[2m'
 const RESET = '\x1b[0m'
@@ -54,7 +54,7 @@ export async function runMcp(args: string[]): Promise<number> {
        */
       if (s.unsupported.length > 0) {
         process.stderr.write(
-          `${YELLOW}  ⚠ 该 server 还声明了 qywork 尚未支持的能力：${s.unsupported.join('、')}` +
+          `${YELLOW}  ⚠ 该 server 还声明了 oph-autoresearch 尚未支持的能力：${s.unsupported.join('、')}` +
             `（它们提供的东西不会出现在工具列表里）${RESET}\n`,
         )
       }
@@ -78,7 +78,7 @@ export async function runMcp(args: string[]): Promise<number> {
       process.stderr.write(`\n${DIM}加 --tools 看每个 server 提供哪些工具${RESET}\n`)
     }
 
-    // 有 server 连不上时退非零：CI 里 `qy mcp` 就能当一条检查用。
+    // 有 server 连不上时退非零：CI 里 `oph mcp` 就能当一条检查用。
     return reg.failures.length > 0 ? 1 : 0
   } finally {
     // 探测完就把子进程收掉。留着的话这条命令会挂住不返回。

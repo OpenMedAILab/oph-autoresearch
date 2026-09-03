@@ -97,7 +97,7 @@ export interface WorkspaceRoots {
   /**
    * 额外可读写的根目录，**必须是绝对路径**。
    *
-   * 相对路径的基准是进程 cwd，而 `qy` 可以从任何目录启动——
+   * 相对路径的基准是进程 cwd，而 `oph` 可以从任何目录启动——
    * 同一份配置在不同地方含义不同，那是配置项最坏的一种失败方式。
    * 非绝对路径在配置体检期就会被指出来，这里再滤一道（防止绕过上游校验）。
    */
@@ -152,7 +152,7 @@ export function normalizeAdditionalDirectories(raw: readonly string[] | undefine
     if (!isAbsolute(trimmed)) {
       problems.push(
         `additionalDirectories 中的 "${trimmed}" 不是绝对路径。` +
-          `相对路径以启动 qy 时的当前目录为基准，在不同目录启动含义不同，` +
+          `相对路径以启动 oph 时的当前目录为基准，在不同目录启动含义不同，` +
           `请改为绝对路径。`,
       )
       continue
@@ -321,7 +321,7 @@ function decodeSafely(input: string): string {
  * 就在工作区**里面**，完全合法地通过了 `resolveInWorkspace`。挡它们是因为写进去等于**自我提权**：
  *
  * - `.agents/mcp.json` —— 配哪些 MCP server，写一行就多一批工具；
- * - `.qy/` —— `plugins/` 是装进来的插件本体（一段下次加载就会跑的代码），
+ * - `.oph/` —— `plugins/` 是装进来的插件本体（一段下次加载就会跑的代码），
  *   `plugin-data/` 是插件的私有存储。
  *
  * **技能与记忆不在里面**，虽然它们同在 `.agents/` 下：一篇 SKILL.md 是一段提示词，
@@ -329,27 +329,27 @@ function decodeSafely(input: string): string {
  * 实打实的——设置页的「新增技能」把话头递给模型，而模型写不了那个文件，
  * 那颗按钮等于点了没反应（B5）。
  *
- * 角色（`.qy/team.json` 的 `roles`）同理不给新能力，但它和门禁同在一个文件里，
- * 所以走 `define_subagent` 那条只动 `roles` 的写入路径，不是把整个 `.qy/` 放开。
+ * 角色（`.oph/team.json` 的 `roles`）同理不给新能力，但它和门禁同在一个文件里，
+ * 所以走 `define_subagent` 那条只动 `roles` 的写入路径，不是把整个 `.oph/` 放开。
  *
  * **`full` 下不挡**（判据在 `resolveWritablePath` 的 `unrestricted`）：那个模式下
  * `run_command` 全放行，`echo > .agents/mcp.json` 一行就写进去了，只拦文件工具就是
  * 「文件工具拦、shell 不拦」的两套账。
  *
- * **它挡不住什么。** `run_command` 里的路径不经过这里（`rm .qy/mcp.json` 照样能跑）。
+ * **它挡不住什么。** `run_command` 里的路径不经过这里（`rm .oph/mcp.json` 照样能跑）。
  * 那条路只能靠 OS 沙箱，Windows 上暂时没有。
  *
  * **为什么 `.agents/` 也在里面。** 项目层的 MCP 配置搬到了 `.agents/`（跨客户端约定的那条路径）。
  * 搬家之后保护必须跟着搬，否则这条防线就只剩一个空目录名。
  *
- * **插件不在这里**：它只从 `~/.qywork/plugins/` 加载，工作区里没有插件目录，
+ * **插件不在这里**：它只从 `~/.oph-autoresearch/plugins/` 加载，工作区里没有插件目录，
  * 挡 `.agents/plugins` 是在保护一条没有加载方的路径。
  *
  * **记忆是例外，但不需要例外条款**：它也在 `.agents/memory/` 下，而
  * `write_memory` 走的是 `resolveInWorkspace` 不是这里——记忆本来就该由模型写，
  * 只是必须走那一条唯一的写入路径，而不是拿 `write_file` 直接改。
  */
-export const PROTECTED_DIRS: readonly string[] = ['.qy', '.agents/mcp.json']
+export const PROTECTED_DIRS: readonly string[] = ['.oph', '.agents/mcp.json']
 
 /**
  * **模型**遍历工作区时跳过的噪音目录——依赖树、构建产物、缓存。
@@ -401,7 +401,7 @@ export class ProtectedPathError extends Error {
 export function isProtectedPath(workspaceRoot: string, resolved: string): boolean {
   const rel = relative(workspaceRoot, resolved)
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return false
-  // 逐段比，不用字符串前缀：`.qyX` 不在 `.qy` 目录下，
+  // 逐段比，不用字符串前缀：`.ophX` 不在 `.oph` 目录下，
   // 而 `startsWith` 会把它一起挡掉。
   const parts = rel.split(sep)
   return PROTECTED_DIRS.some((p) => {
@@ -413,8 +413,8 @@ export function isProtectedPath(workspaceRoot: string, resolved: string): boolea
 /**
  * 写路径解析：先过根目录约束，再挡受保护目录。
  *
- * `.qy/` 的保护**只按工作区判**，与额外根目录无关——它是一条工作区内的
- * 路径判定。额外根目录再多也不会让 `<工作区>/.qy/` 变得可写。
+ * `.oph/` 的保护**只按工作区判**，与额外根目录无关——它是一条工作区内的
+ * 路径判定。额外根目录再多也不会让 `<工作区>/.oph/` 变得可写。
  *
  * 「完全访问」下这一层也不设：它挡的是「给自己加工具」，而同一个模式下模型
  * 手里的 `run_command` 是全放行的，`echo > .agents/x` 一行就写进去了。

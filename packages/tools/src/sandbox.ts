@@ -80,7 +80,7 @@ export interface SandboxPolicy {
   /** 额外可写根目录（`additionalDirectories`），绝对路径。 */
   writableRoots?: readonly string[]
   /**
-   * 工作区内只读的那几条路径（相对工作区）：`.qy`、`.agents/mcp.json`——
+   * 工作区内只读的那几条路径（相对工作区）：`.oph`、`.agents/mcp.json`——
    * 判据是「写进去会不会给自己加工具」，见 `PROTECTED_DIRS`。
    * 条目可以是文件也可以是目录（`--ro-bind-try` 两者都吃）。
    *
@@ -331,8 +331,8 @@ export function defaultMaskPaths(home = homedir()): string[] {
     join(home, '.kube'),
     join(home, '.config', 'gh'),
     join(home, '.config', 'gcloud'),
-    // qywork 自己的配置目录：里面就是 provider 的 API Key 明文。
-    join(home, '.qywork'),
+    // oph-autoresearch 自己的配置目录：里面就是 provider 的 API Key 明文。
+    join(home, '.oph-autoresearch'),
   ]
 }
 
@@ -347,7 +347,7 @@ export function defaultMaskPaths(home = homedir()): string[] {
  *   基本上什么都跑不起来。如实记在 `docs/permissions.md`：
  *   **工作区外的文件仍然读得到**，凭证目录是单独盖掉的。
  * - 可写根目录逐个 `--bind`。
- * - `.qy/` 在可写根之后再 `--ro-bind` 盖回只读：**顺序不能反**，bwrap 后到的赢。
+ * - `.oph/` 在可写根之后再 `--ro-bind` 盖回只读：**顺序不能反**，bwrap 后到的赢。
  * - 凭证目录 `--tmpfs` 盖成空的。
  * - `--unshare-pid` + `--proc /proc`：看不到宿主进程表（`/proc/<pid>/environ`
  *   里有别的进程的环境变量，而凭证刚在本进程侧被剥干净）。
@@ -391,7 +391,7 @@ export function buildBwrapArgv(
   }
 
   // 只读子目录**必须排在可写根之后**——bwrap 按出现顺序叠加，后到的覆盖先到的。
-  // 反过来写的话 .qy/ 会被随后的 --bind 重新变成可写，而且不报错。
+  // 反过来写的话 .oph/ 会被随后的 --bind 重新变成可写，而且不报错。
   for (const root of writable) {
     for (const sub of policy.readOnlySubdirs ?? []) {
       args.push('--ro-bind-try', join(root, sub), join(root, sub))
@@ -467,7 +467,7 @@ export function buildSeatbeltProfile(
   // 只读子目录要排在可写根**之后**：SBPL 是最后匹配的规则赢，
   // 与 bwrap 的挂载顺序是同一个道理，反了同样不报错。
   if (policy.readOnlySubdirs?.length) {
-    lines.push('', ';; 工作区内禁止写入的目录（.qy/ 等），必须排在上面的放行之后')
+    lines.push('', ';; 工作区内禁止写入的目录（.oph/ 等），必须排在上面的放行之后')
     for (const root of writable) {
       for (const sub of policy.readOnlySubdirs) {
         lines.push(`(deny file-write* (subpath ${sbplString(join(root, sub))}))`)
@@ -594,12 +594,12 @@ function findGitBash(): string | null {
 }
 
 /** bash 路径的环境变量覆盖。装在非常规位置（scoop、MSYS2、Cygwin）时唯一的出路。 */
-export const BASH_PATH_ENV = 'QYWORK_BASH_PATH'
+export const BASH_PATH_ENV = 'OPH_AUTORESEARCH_BASH_PATH'
 
 /**
  * 探测结果。形状照 `SandboxStatus`：**「没有」也是一种可上报的状态，不是崩溃。**
  *
- * 坑：不要在模块加载时抛。没有 bash 的机器上那会让整个 `qy serve` 起不来，
+ * 坑：不要在模块加载时抛。没有 bash 的机器上那会让整个 `oph serve` 起不来，
  * 用户在浏览器里只看到「连不上」。终端程序可以 `exit(1)` 打一行了事，带界面的
  * 服务端不行——它得能起来，然后如实说「这台机器没有 bash」。
  *
@@ -846,7 +846,7 @@ export function commandShell(): CommandShell | null {
  * runner），要么没绑（直接 spawn 就对）。它不随调用方、会话、工作区变化，
  * 穿成参数逐层传下去只是把同一个事实复制多份。
  *
- * `qy serve` 在**绑端口之前**注册；`qy exec`、测试进程不注册，走直接 spawn。
+ * `oph serve` 在**绑端口之前**注册；`oph exec`、测试进程不注册，走直接 spawn。
  */
 let runner: CommandRunner | null = null
 
@@ -878,7 +878,7 @@ export async function spawnGuarded(input: GuardedSpawnInput): Promise<GuardedSpa
    * 改走脚本文件：命令正文不再进 argv，逐字节到达。
    */
   const scriptRun = isWindows ? shell.scriptArgv : undefined
-  const scriptPath = scriptRun ? joinNative(tmpdir(), `qy-cmd-${randomUUID()}.sh`) : null
+  const scriptPath = scriptRun ? joinNative(tmpdir(), `oph-cmd-${randomUUID()}.sh`) : null
   if (scriptPath) await writeFile(scriptPath, input.command, 'utf8')
   const inner =
     scriptRun && scriptPath ? [...scriptRun(scriptPath)] : [...shell.argv, input.command]
@@ -934,7 +934,7 @@ export async function spawnGuarded(input: GuardedSpawnInput): Promise<GuardedSpa
     /*
      * 非 Windows 上自成进程组，`killTree` 才有整组可杀。
      *
-     * 不这么做的话它和 `qy serve` 同组，而 `process.kill(-pid)` 打的是**组**
+     * 不这么做的话它和 `oph serve` 同组，而 `process.kill(-pid)` 打的是**组**
      * ——那一下会连自己一起杀掉。`killTree` 因此还要再验一次组长身份，
      * 见那边的注释：这里只是把「能安全整组杀」这个前提创造出来。
      *
@@ -960,7 +960,7 @@ export async function spawnGuarded(input: GuardedSpawnInput): Promise<GuardedSpa
  * **管道不 EOF 比服务没死严重。** 谁要是拿管道 EOF 当「命令结束了」的判据，那次
  * `registry.execute` 就永不返回，而 `loop.ts` 调它的那一处外面没有任何超时。后果
  * 逐层传导到 `run-control.ts` 的 finally 不执行、`runs.unregister` 不执行——
- * **这条会话从此永远回绝「已有任务在执行」，直到重启 `qy serve`**。触发它不需要
+ * **这条会话从此永远回绝「已有任务在执行」，直到重启 `oph serve`**。触发它不需要
  * 「起服务器」这种边角：任何经 shell 派生了子进程的命令（`npm test` → node、
  * `python x.py`）碰上超时或用户中断都会走到。
  *
@@ -971,7 +971,7 @@ export async function spawnGuarded(input: GuardedSpawnInput): Promise<GuardedSpa
  * **平台**：
  * - **Windows**：`taskkill /F /T`，`/T` 连子孙一起。上面那段是本机实测。
  * - **其余平台**：杀进程组。**但必须先确认它真是自己那一组的组长**——`detached`
- *   万一没生效，`-pid` 指向的就是 `qy serve` 自己所在的组，而那一下不会报错，
+ *   万一没生效，`-pid` 指向的就是 `oph serve` 自己所在的组，而那一下不会报错，
  *   服务端会被直接杀掉。验不过就回落到单进程 kill。
  *   **这条路径没有在本机验证过**（本机是 Windows），如实写在这里。
  */

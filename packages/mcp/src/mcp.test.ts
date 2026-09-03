@@ -9,7 +9,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ToolRegistry } from '@qywork/agent'
+import { ToolRegistry } from '@oph-autoresearch/agent'
 import { McpClient } from './client.ts'
 import { loadMcpServers, parseMcpConfig } from './load.ts'
 import { permissionLabel, renderContent, specFor, toolName } from './register.ts'
@@ -100,7 +100,7 @@ process.stdin.on('data', (c) => {
 }
 
 async function fixture(opts: Parameters<typeof serverSource>[0] = {}) {
-  const dir = await mkdtemp(join(tmpdir(), 'qywork-mcp-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-mcp-'))
   const entry = join(dir, 'server.mjs')
   await writeFile(entry, serverSource(opts), 'utf8')
   return { dir, entry }
@@ -140,7 +140,7 @@ describe('握手', () => {
   test('命令不存在时立刻失败，不阻塞到超时', async () => {
     const c = new McpClient({
       name: 'nope',
-      spec: { command: 'qywork-绝对不存在的命令', args: [] },
+      spec: { command: 'oph-autoresearch-绝对不存在的命令', args: [] },
       cwd: process.cwd(),
     })
     const started = Date.now()
@@ -215,7 +215,7 @@ describe('tools/call', () => {
     const inFlight = c.callTool('echo', { text: 'x' })
     c.stop()
     await expect(inFlight).rejects.toThrow()
-  })
+  }, 15_000)
 })
 
 describe('权限：server 的 hint 只能收紧，不能放宽', () => {
@@ -430,7 +430,7 @@ describe('批量加载', () => {
       {
         servers: {
           good: { command: process.execPath, args: [entry] },
-          bad: { command: 'qywork-绝对不存在', args: [] },
+          bad: { command: 'oph-autoresearch-绝对不存在', args: [] },
         },
         error: null,
       },

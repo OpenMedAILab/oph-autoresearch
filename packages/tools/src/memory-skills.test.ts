@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import {
   deleteMemoryTool,
   listEntries,
@@ -22,7 +22,7 @@ import {
 } from './skills.ts'
 
 async function workspace(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'qywork-ms-'))
+  return mkdtemp(join(tmpdir(), 'oph-autoresearch-ms-'))
 }
 
 function ctx(root: string, approve = true): ToolContext {
@@ -44,14 +44,14 @@ function ctx(root: string, approve = true): ToolContext {
 }
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const before = process.env.QYWORK_HOME
+  const before = process.env.OPH_AUTORESEARCH_HOME
   const home = await workspace()
-  process.env.QYWORK_HOME = home
+  process.env.OPH_AUTORESEARCH_HOME = home
   try {
     return await fn(home)
   } finally {
-    if (before === undefined) delete process.env.QYWORK_HOME
-    else process.env.QYWORK_HOME = before
+    if (before === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = before
   }
 }
 

@@ -4,8 +4,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { type ToolContext, ToolRegistry } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import { type ToolContext, ToolRegistry } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { registerBuiltinTools } from './index.ts'
 import { subagentTool } from './subagent.ts'
 import { workflowTool } from './workflow.ts'

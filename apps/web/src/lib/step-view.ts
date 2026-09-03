@@ -8,7 +8,7 @@
  * 判据很简单：**不碰 DOM、不读 store 的，都不该待在组件文件里。**
  */
 
-import { SUBAGENT_NODE_ID } from '@qywork/core'
+import { SUBAGENT_NODE_ID } from '@oph-autoresearch/core'
 
 const NEWLINE = String.fromCharCode(10)
 const CARRIAGE_RETURN = String.fromCharCode(13)
@@ -324,7 +324,7 @@ const EXIT = `${String.fromCharCode(0)}exit`
 /**
  * 派活目标指向外部 CLI 时的前缀。
  *
- * 不从 `@qywork/team` 取：那个包在依赖图上不朝界面这边走，为一个前缀反向引一次
+ * 不从 `@oph-autoresearch/team` 取：那个包在依赖图上不朝界面这边走，为一个前缀反向引一次
  * 不划算。前端这一侧只有这一处认这个前缀，改的时候两边一起改。
  */
 export const CLI_PREFIX = 'cli:'

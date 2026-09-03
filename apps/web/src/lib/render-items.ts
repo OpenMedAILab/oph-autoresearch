@@ -13,7 +13,12 @@
  * - **派活的那两个不进组**（见 `STANDALONE`）。
  */
 
-import { type ActionKind, foldWorkflow, workflowGroupId, workflowTransitionOf } from '@qywork/core'
+import {
+  type ActionKind,
+  foldWorkflow,
+  workflowGroupId,
+  workflowTransitionOf,
+} from '@oph-autoresearch/core'
 import { resultImages } from './step-view.ts'
 import type { TranscriptItem } from './store/index.ts'
 

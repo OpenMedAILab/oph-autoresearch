@@ -12,7 +12,7 @@
  *   两种格式的取舍相反，混成一种就两边都不好用。
  */
 
-import { applySpecOverride, lookupModel } from '@qywork/ai'
+import { applySpecOverride, lookupModel } from '@oph-autoresearch/ai'
 import type {
   ConversationId,
   Message,
@@ -20,7 +20,7 @@ import type {
   Run,
   RunContextSegment,
   Step,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import {
   currentGoal,
   getConversation,
@@ -36,9 +36,9 @@ import {
   listSteps,
   SCHEMA_VERSION,
   type Store,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import pkg from '../package.json' with { type: 'json' }
-import type { QyConfig } from './config.ts'
+import type { OphConfig } from './config.ts'
 import { isWorkspaceTrusted, resolveModel } from './config.ts'
 
 export type ArchiveFormat = 'markdown' | 'json'
@@ -253,7 +253,7 @@ function diagnosticBundle(bundle: ArchiveBundle): ArchiveBundle {
 export function exportConversationDiagnostics(
   store: Store,
   conversationId: ConversationId,
-  config: QyConfig,
+  config: OphConfig,
 ): string {
   const bundle = collect(store, conversationId)
   const conversationTree = collectConversationTree(store, conversationId, bundle)
@@ -270,10 +270,10 @@ export function exportConversationDiagnostics(
 
   return `${JSON.stringify(
     {
-      kind: 'qywork.session-diagnostic',
+      kind: 'oph-autoresearch.session-diagnostic',
       schemaVersion: 5,
       exportedBy: {
-        name: 'qywork',
+        name: 'oph-autoresearch',
         version: pkg.version,
         runtime: `Bun ${Bun.version}`,
         platform: process.platform,
@@ -340,7 +340,7 @@ export function exportConversationDiagnostics(
 }
 
 function diagnosticProvider(
-  config: QyConfig,
+  config: OphConfig,
   conversation: NonNullable<ArchiveBundle['conversation']>,
 ) {
   const resolved = resolveModel(config, {

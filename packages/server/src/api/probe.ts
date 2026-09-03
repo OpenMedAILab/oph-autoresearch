@@ -1,9 +1,9 @@
 /**
- * 测连接 —— 把 `qy probe` 那套实测搬到界面上。
+ * 测连接 —— 把 `oph probe` 那套实测搬到界面上。
  *
  * **为什么必须有这一层。** 内置目录不认得中转站、自建网关和刚发布的模型，`lookupModel` 只能回落到保
  * 守猜测：不请求思考、计价按 0。两条后果都完全静默——界面仍把它显示成会思考的模型，而账本报 $0。
- * 命令行早有 `qy probe`，但桌面端用户手边不一定有终端。
+ * 命令行早有 `oph probe`，但桌面端用户手边不一定有终端。
  *
  * **与 CLI 共用同一个 `probeModel`。** 不另写一套「给界面用的探测」。两套探测的结论迟早不一致，而不
  * 一致的表现是「命令行说支持、界面说不支持」，谁也说不清哪个对。
@@ -21,8 +21,8 @@
  * 走既有的 `PUT /api/config`，不在这里开第二个写入点。
  */
 
-import { type ProbeOutcome, probeModel, toTransportCapabilities } from '@qywork/ai'
-import { collectSecrets, resolveModel } from '@qywork/runtime'
+import { type ProbeOutcome, probeModel, toTransportCapabilities } from '@oph-autoresearch/ai'
+import { collectSecrets, resolveModel } from '@oph-autoresearch/runtime'
 import { type ApiHandler, json } from './types.ts'
 
 /**

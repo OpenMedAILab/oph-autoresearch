@@ -46,7 +46,7 @@ export interface BlobInfo {
   chunkCount: number
 }
 
-/** 主账本挨着放：`qywork.sqlite3` → `qywork_content.sqlite3`。 */
+/** 主账本挨着放：`oph-autoresearch.sqlite3` → `oph-autoresearch_content.sqlite3`。 */
 export function contentPathFor(agentDbPath: string): string {
   if (agentDbPath === ':memory:') return ':memory:'
   return agentDbPath.replace(/(\.sqlite3?|\.db)?$/i, '_content$1')

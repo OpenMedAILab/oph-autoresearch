@@ -17,7 +17,7 @@
  * 两者缺一不可：只有静态的会漏，只有运行时的要等真的花了钱才知道。
  */
 
-import type { SystemBlock } from '@qywork/ai'
+import type { SystemBlock } from '@oph-autoresearch/ai'
 
 /**
  * 冻结区的边界是**最后一个缓存断点**（含）。

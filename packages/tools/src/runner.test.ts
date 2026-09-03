@@ -12,7 +12,7 @@
 import { describe, expect, test } from 'bun:test'
 import { startCommandRunner } from './runner.ts'
 
-/** runner 那一侧的入口。正式路径是 `qy runner`，测试里直接进那个函数。 */
+/** runner 那一侧的入口。正式路径是 `oph runner`，测试里直接进那个函数。 */
 const RUNNER_ARGV = [
   process.execPath,
   '-e',

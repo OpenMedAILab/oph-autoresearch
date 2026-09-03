@@ -17,8 +17,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent, ConversationId, EventEnvelope } from '@qywork/core'
-import { buildHistory, type QyConfig } from '@qywork/runtime'
+import type { AgentEvent, ConversationId, EventEnvelope } from '@oph-autoresearch/core'
+import { buildHistory, type OphConfig } from '@oph-autoresearch/runtime'
 import {
   ContentStore,
   contentPathFor,
@@ -30,7 +30,7 @@ import {
   listSteps,
   Store,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { EventBus } from './bus.ts'
 import { handleCommand } from './commands.ts'
 import { startRun } from './run-control.ts'
@@ -122,12 +122,12 @@ let store: Store
 let content: ContentStore
 let bus: EventBus
 let runs: RunManager
-let config: QyConfig
+let config: OphConfig
 let workspaceId = ''
 let events: EventEnvelope[] = []
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'qywork-followup-'))
+  dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-followup-'))
   const dbPath = join(dir, 'followup.sqlite3')
   store = new Store({ path: dbPath })
   content = new ContentStore(contentPathFor(dbPath))

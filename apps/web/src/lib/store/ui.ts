@@ -250,7 +250,7 @@ export function closeAllPanelTabs(): void {
  * 大屏上拖出来的宽度换到小窗口就成了一个撑破布局的定长。
  */
 export const PANEL_MIN = 337
-const PANEL_KEY = 'qywork.panelWidth'
+const PANEL_KEY = 'oph-autoresearch.panelWidth'
 const PANEL_DEFAULT = 380
 
 /** 负数和 0 不只是难看：`minmax(0, -50px)` 会让整条 `grid-template-columns` 失效，
@@ -493,7 +493,7 @@ if (isDesktopShell()) {
     .catch(() => {})
 }
 
-const FOLLOWUP_KEY = 'qywork.followUpMode'
+const FOLLOWUP_KEY = 'oph-autoresearch.followUpMode'
 
 /**
  * 会话在跑时发出去的消息，默认走哪一档。

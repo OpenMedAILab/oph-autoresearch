@@ -252,26 +252,26 @@ describe('bwrap 参数生成', () => {
     expect(binds(argv, '--bind').filter((x) => x.dst === '/ws')).toHaveLength(1)
   })
 
-  test('.qy 的只读覆盖必须排在可写 bind 之后', () => {
-    const argv = buildBwrapArgv({ workspaceRoot: '/ws', readOnlySubdirs: ['.qy'] }, inner, {
+  test('.oph 的只读覆盖必须排在可写 bind 之后', () => {
+    const argv = buildBwrapArgv({ workspaceRoot: '/ws', readOnlySubdirs: ['.oph'] }, inner, {
       exists: never,
     })
     const bindAt = argv.findIndex((a, i) => a === '--bind' && argv[i + 1] === '/ws')
-    const roAt = argv.findIndex((a, i) => a === '--ro-bind-try' && argv[i + 1]?.includes('.qy'))
+    const roAt = argv.findIndex((a, i) => a === '--ro-bind-try' && argv[i + 1]?.includes('.oph'))
     expect(bindAt).toBeGreaterThanOrEqual(0)
     expect(roAt).toBeGreaterThan(bindAt)
   })
 
-  test('额外根目录里的 .qy 也要盖成只读', () => {
+  test('额外根目录里的 .oph 也要盖成只读', () => {
     // 不盖的话，把某个目录加进 additionalDirectories 就等于在那儿开了一条
     // 「模型可以给自己加工具」的路——而用户配这条时要的只是让它读那个目录。
     const argv = buildBwrapArgv(
-      { workspaceRoot: '/ws', writableRoots: ['/data'], readOnlySubdirs: ['.qy'] },
+      { workspaceRoot: '/ws', writableRoots: ['/data'], readOnlySubdirs: ['.oph'] },
       inner,
       { exists: never },
     )
     const ro = binds(argv, '--ro-bind-try').map((x) => x.dst)
-    expect(ro.some((p) => p.includes('/data') && p.includes('.qy'))).toBe(true)
+    expect(ro.some((p) => p.includes('/data') && p.includes('.oph'))).toBe(true)
   })
 
   test('凭证目录不存在时**不能**生成 --tmpfs', () => {
@@ -362,13 +362,13 @@ describe('平台判定', () => {
 })
 
 describe('默认屏蔽清单', () => {
-  test('覆盖常见凭证目录，并且包含 qywork 自己的配置目录', () => {
+  test('覆盖常见凭证目录，并且包含 oph-autoresearch 自己的配置目录', () => {
     const paths = defaultMaskPaths('/home/u')
     expect(paths).toContain('/home/u/.ssh')
     expect(paths).toContain('/home/u/.aws')
-    // ~/.qywork 里就是 provider 的 API Key 明文。漏掉它的话，
+    // ~/.oph-autoresearch 里就是 provider 的 API Key 明文。漏掉它的话，
     // 环境变量剥得再干净，一句 cat 就全拿走了。
-    expect(paths).toContain('/home/u/.qywork')
+    expect(paths).toContain('/home/u/.oph-autoresearch')
   })
 
   test('不屏蔽整个家目录', () => {
@@ -403,11 +403,11 @@ describe('seatbelt profile', () => {
     expect(s).toContain('(allow file-write* (subpath "/data"))')
   })
 
-  test('.qy 的写禁令排在可写根之后——SBPL 是最后匹配的赢', () => {
+  test('.oph 的写禁令排在可写根之后——SBPL 是最后匹配的赢', () => {
     // 与 bwrap 的挂载顺序是同一个道理，反了同样不报错。
-    const s = P({ workspaceRoot: '/ws', readOnlySubdirs: ['.qy'] })
+    const s = P({ workspaceRoot: '/ws', readOnlySubdirs: ['.oph'] })
     expect(s.indexOf('(allow file-write* (subpath "/ws"))')).toBeLessThan(
-      s.indexOf('(deny file-write* (subpath "/ws/.qy"))'),
+      s.indexOf('(deny file-write* (subpath "/ws/.oph"))'),
     )
   })
 
@@ -481,7 +481,7 @@ describe('两个后端承诺同一件事', () => {
   const policy: Parameters<typeof buildBwrapArgv>[0] = {
     workspaceRoot: '/ws',
     writableRoots: ['/data'],
-    readOnlySubdirs: ['.qy'],
+    readOnlySubdirs: ['.oph'],
     maskPaths: ['/home/u/.ssh'],
   }
   const bw = buildBwrapArgv(policy, ['/bin/true'], { exists: () => true }).join(' ')
@@ -494,9 +494,9 @@ describe('两个后端承诺同一件事', () => {
     }
   })
 
-  test('两边都把 .qy 变回只读', () => {
-    expect(bw).toContain('/ws/.qy')
-    expect(sb).toContain('(deny file-write* (subpath "/ws/.qy"))')
+  test('两边都把 .oph 变回只读', () => {
+    expect(bw).toContain('/ws/.oph')
+    expect(sb).toContain('(deny file-write* (subpath "/ws/.oph"))')
   })
 
   test('两边都挡住凭证目录', () => {
@@ -541,12 +541,12 @@ describe('出网开关', () => {
   test('断网不影响文件边界', () => {
     // 两个维度互不相干。混在一起的话，关掉一个会连带关掉另一个。
     const argv = buildBwrapArgv(
-      { workspaceRoot: '/ws', readOnlySubdirs: ['.qy'], denyNetwork: true },
+      { workspaceRoot: '/ws', readOnlySubdirs: ['.oph'], denyNetwork: true },
       inner,
       { exists: never },
     )
     expect(binds(argv, '--bind')).toContainEqual({ src: '/ws', dst: '/ws' })
-    expect(binds(argv, '--ro-bind-try').map((x) => x.dst)).toContain('/ws/.qy')
+    expect(binds(argv, '--ro-bind-try').map((x) => x.dst)).toContain('/ws/.oph')
   })
 })
 

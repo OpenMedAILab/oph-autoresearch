@@ -7,12 +7,12 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { ConversationId } from '@qywork/core'
-import type { QyConfig } from '@qywork/runtime'
-import { createConversation, recordUsage, Store, upsertWorkspace } from '@qywork/store'
+import type { ConversationId } from '@oph-autoresearch/core'
+import type { OphConfig } from '@oph-autoresearch/runtime'
+import { createConversation, recordUsage, Store, upsertWorkspace } from '@oph-autoresearch/store'
 import { type CommandContext, handleCommand } from './tui.ts'
 
-const config: QyConfig = {
+const config: OphConfig = {
   active: { provider: 'ds', model: 'deepseek-v4-flash' },
   providers: {
     ds: { kind: 'openai_chat_completions', apiKey: 'sk-x', models: { 'deepseek-v4-flash': {} } },

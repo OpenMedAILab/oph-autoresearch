@@ -1,7 +1,7 @@
 /** 模型目录、会话、消息、run。前端进来第一屏要的全在这。 */
 
 import { rm } from 'node:fs/promises'
-import type { ModelSpec } from '@qywork/ai'
+import type { ModelSpec } from '@oph-autoresearch/ai'
 import {
   applySpecOverride,
   builtinCatalog,
@@ -9,7 +9,7 @@ import {
   lookupModel,
   unknownModel,
   VENDORS,
-} from '@qywork/ai'
+} from '@oph-autoresearch/ai'
 import type {
   ConversationHistoryPageResponse,
   ConversationId,
@@ -17,15 +17,15 @@ import type {
   EffortLevel,
   MessageId,
   RunId,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import {
   catalogKey,
   contextPanel,
   exportConversationDiagnostics,
-  type QyConfig,
+  type OphConfig,
   resolveModel,
   type StoredCatalogEntry,
-} from '@qywork/runtime'
+} from '@oph-autoresearch/runtime'
 import {
   archiveConversation,
   createConversation,
@@ -41,7 +41,7 @@ import {
   setConversationTitle,
   usageEntries,
   usageTotals,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { attachmentsDirOf } from './attachments.ts'
 import { type ApiHandler, json } from './types.ts'
 
@@ -91,7 +91,7 @@ export interface ProviderRow {
 export interface ModelsResponse {
   providers: ProviderRow[]
   /** 当前选中的接口与模型。形状与配置里那一段一致。 */
-  active: QyConfig['active']
+  active: OphConfig['active']
   library: LibraryVendor[]
 }
 
@@ -367,7 +367,7 @@ export const handleConversationsApi: ApiHandler = async (url, req, d) => {
     return new Response(exportConversationDiagnostics(d.store, id, d.config), {
       headers: {
         'content-type': 'application/json; charset=utf-8',
-        'content-disposition': `attachment; filename="qywork-session-${id}.json"`,
+        'content-disposition': `attachment; filename="oph-autoresearch-session-${id}.json"`,
       },
     })
   }

@@ -13,7 +13,7 @@ try {
     [process.execPath, 'test', '--conditions', 'browser', ...process.argv.slice(2)],
     {
       cwd: root,
-      env: { ...process.env, QYWORK_TEST_TEMP: testTemp },
+      env: { ...process.env, OPH_AUTORESEARCH_TEST_TEMP: testTemp },
       stdin: 'inherit',
       stdout: 'inherit',
       stderr: 'inherit',

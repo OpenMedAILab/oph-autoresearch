@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * `qy serve` 端到端冒烟：起服务 → 打 HTTP API → 走 WebSocket 驱动一轮真实 agent。
+ * `oph serve` 端到端冒烟：起服务 → 打 HTTP API → 走 WebSocket 驱动一轮真实 agent。
  *
  * 这条路径就是桌面端和手机端将来走的同一条路，所以它验的不只是「服务能起来」，
  * 而是「客户端协议真的能用」：握手、订阅、下发指令、收流式事件、断线补发。
@@ -10,9 +10,14 @@
 
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { AgentEvent, CommandRejectedFrame, EventEnvelope, HelloOkFrame } from '@qywork/core'
-import { loadConfig } from '@qywork/runtime'
-import { serve } from '@qywork/server'
+import type {
+  AgentEvent,
+  CommandRejectedFrame,
+  EventEnvelope,
+  HelloOkFrame,
+} from '@oph-autoresearch/core'
+import { loadConfig } from '@oph-autoresearch/runtime'
+import { serve } from '@oph-autoresearch/server'
 import {
   appendStep,
   createConversation,
@@ -23,7 +28,7 @@ import {
   markStepExecuting,
   Store,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 const WS_DIR = join(import.meta.dir, '..', '.tmp', 'smoke-ws')
 const DB = join(WS_DIR, 'smoke.sqlite3')

@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { AgentEvent, ConversationId, EventEnvelope } from '@qywork/core'
+import type { AgentEvent, ConversationId, EventEnvelope } from '@oph-autoresearch/core'
 import { EventBus } from './bus.ts'
 import { RunManager } from './runs.ts'
 

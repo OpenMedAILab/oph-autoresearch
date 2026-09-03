@@ -18,8 +18,8 @@
  * 静默改写等于告诉模型清单已被原样接受。
  */
 
-import type { ToolSpec } from '@qywork/agent'
-import { type TodoItem, todoProgress } from '@qywork/core'
+import type { ToolSpec } from '@oph-autoresearch/agent'
+import { type TodoItem, todoProgress } from '@oph-autoresearch/core'
 
 /** 待办条目上限。超过这个数说明该拆任务了，而不是把清单当笔记本用。 */
 const MAX_ITEMS = 40
@@ -66,7 +66,7 @@ export const writeTodosTool: ToolSpec = {
    *
    * 全做完之后再提交一份算**新**清单：那已经是下一件事了，说「创建」才对。
    *
-   * 读不到（`qy exec` 没有会话）时按 write：说「创建」最多把一次修订说小了，
+   * 读不到（`oph exec` 没有会话）时按 write：说「创建」最多把一次修订说小了，
    * 说「编辑」却是在没有清单时声称改过一份不存在的清单。
    *
    * 不为它造一个 `plan` 动作：配上对象「待办」读作「规划待办」，动宾同义反复。

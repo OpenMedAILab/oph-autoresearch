@@ -8,7 +8,7 @@
  * 判据是**层号**而不是逐包白名单：白名单每加一个依赖就要改一次，改多了就成了
  * 橡皮图章；层号只在「这个包在架构里的位置变了」时才需要动，那本来就该被讨论一次。
  *
- * 覆盖范围：`packages/*` 与 `apps/*` 的 package.json 里所有 `@qywork/*` 依赖。
+ * 覆盖范围：`packages/*` 与 `apps/*` 的 package.json 里所有 `@oph-autoresearch/*` 依赖。
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -24,20 +24,20 @@ const ROOT = join(import.meta.dir, '..')
  * 新增包必须在这里登记，否则测试直接失败——漏登记不能表现为静默放行。
  */
 const LAYER: Record<string, number> = {
-  '@qywork/core': 0,
-  '@qywork/store': 1,
-  '@qywork/ai': 1,
-  '@qywork/agent': 2,
-  '@qywork/tools': 3,
-  '@qywork/plugins': 3,
-  '@qywork/mcp': 3,
-  '@qywork/team': 4,
-  '@qywork/runtime': 5,
-  '@qywork/server': 6,
-  '@qywork/cli': 7,
+  '@oph-autoresearch/core': 0,
+  '@oph-autoresearch/store': 1,
+  '@oph-autoresearch/ai': 1,
+  '@oph-autoresearch/agent': 2,
+  '@oph-autoresearch/tools': 3,
+  '@oph-autoresearch/plugins': 3,
+  '@oph-autoresearch/mcp': 3,
+  '@oph-autoresearch/team': 4,
+  '@oph-autoresearch/runtime': 5,
+  '@oph-autoresearch/server': 6,
+  '@oph-autoresearch/cli': 7,
   // 前端与桌面壳是叶子：谁都不许依赖它们。
-  '@qywork/web': 90,
-  '@qywork/desktop': 90,
+  '@oph-autoresearch/web': 90,
+  '@oph-autoresearch/desktop': 90,
 }
 
 interface Pkg {
@@ -62,7 +62,7 @@ function loadPackages(): Pkg[] {
       const deps = [
         ...Object.keys(json.dependencies ?? {}),
         ...Object.keys(json.devDependencies ?? {}),
-      ].filter((d) => d.startsWith('@qywork/') && d !== json.name)
+      ].filter((d) => d.startsWith('@oph-autoresearch/') && d !== json.name)
       out.push({ name: json.name, deps: [...new Set(deps)], dir: `${group}/${entry}` })
     }
   }
@@ -114,12 +114,12 @@ describe('包依赖方向', () => {
   })
 
   test('core 谁都不依赖 —— 它是协议与领域类型，一旦有依赖就不再是底座', () => {
-    const core = pkgs.find((p) => p.name === '@qywork/core')
+    const core = pkgs.find((p) => p.name === '@oph-autoresearch/core')
     expect(core?.deps ?? []).toEqual([])
   })
 
   test('没有人依赖前端和桌面壳', () => {
-    const leaves = ['@qywork/web', '@qywork/desktop']
+    const leaves = ['@oph-autoresearch/web', '@oph-autoresearch/desktop']
     const bad = pkgs.filter((p) => p.deps.some((d) => leaves.includes(d))).map((p) => p.name)
     expect(bad).toEqual([])
   })

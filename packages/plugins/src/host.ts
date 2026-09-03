@@ -84,7 +84,7 @@ export interface PluginHostOptions {
   /**
    * 用哪个运行时跑插件。不填则自动解析（优先 node，因为只有它能提供强制隔离）。
    *
-   * **不能默认取 `process.execPath`**：发布产物是单文件二进制，那个路径是 qy 自己。
+   * **不能默认取 `process.execPath`**：发布产物是单文件二进制，那个路径是 oph 自己。
    */
   runtime?: string
   /** 工作区根。沙箱据此决定插件能读写哪一块。 */
@@ -149,8 +149,8 @@ export class PluginHost {
         ...(process.platform === 'win32'
           ? { SYSTEMROOT: process.env.SYSTEMROOT ?? '', TEMP: process.env.TEMP ?? '' }
           : { HOME: '/nonexistent' }),
-        QYWORK_PLUGIN: this.opts.manifest.id,
-        QYWORK_PLUGIN_PERMISSIONS: JSON.stringify(this.permissions),
+        OPH_AUTORESEARCH_PLUGIN: this.opts.manifest.id,
+        OPH_AUTORESEARCH_PLUGIN_PERMISSIONS: JSON.stringify(this.permissions),
       },
     })
     this.proc = proc

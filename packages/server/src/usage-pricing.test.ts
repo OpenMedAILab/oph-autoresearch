@@ -16,9 +16,9 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { computeCost, lookupModel } from '@qywork/ai'
-import type { AgentEvent, ConversationId, EventEnvelope } from '@qywork/core'
-import type { QyConfig } from '@qywork/runtime'
+import { computeCost, lookupModel } from '@oph-autoresearch/ai'
+import type { AgentEvent, ConversationId, EventEnvelope } from '@oph-autoresearch/core'
+import type { OphConfig } from '@oph-autoresearch/runtime'
 import {
   ContentStore,
   contentPathFor,
@@ -26,7 +26,7 @@ import {
   Store,
   upsertWorkspace,
   usageTotals,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { EventBus } from './bus.ts'
 import { startRun } from './run-control.ts'
 import { RunManager } from './runs.ts'
@@ -66,12 +66,12 @@ let store: Store
 let content: ContentStore
 let bus: EventBus
 let runs: RunManager
-let config: QyConfig
+let config: OphConfig
 let workspaceId = ''
 let events: EventEnvelope[] = []
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'qywork-pricing-'))
+  dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-pricing-'))
   const dbPath = join(dir, 'pricing.sqlite3')
   store = new Store({ path: dbPath })
   content = new ContentStore(contentPathFor(dbPath))

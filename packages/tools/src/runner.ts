@@ -1,7 +1,7 @@
 /**
  * 命令跑在一个**先于监听端口出生**的子进程里。
  *
- * **为什么必须这样。** Windows 上句柄是继承的：`qy serve` 绑好端口之后再 spawn 出去的任何进程，都会
+ * **为什么必须这样。** Windows 上句柄是继承的：`oph serve` 绑好端口之后再 spawn 出去的任何进程，都会
  * 拿到那个监听 socket 的一份句柄。命令自己派生的后台服务（`run.ps1 start` 那种）活得比 sidecar 久，
  * 因此 **sidecar 退出之后端口仍然被持有**——连接表里记的还是那个已经退出的 PID，看着像「没人占着
  * 却起不来」。
@@ -13,7 +13,7 @@
  * 它出生时监听 socket 还不存在，所以它和它的子孙手里都没有那份句柄，谁活多久都不会把端口带走。
  *
  * **边界**：
- * - **没有 runner 就直接 spawn**（`qy exec` 一次性执行、测试进程都是这条）。
+ * - **没有 runner 就直接 spawn**（`oph exec` 一次性执行、测试进程都是这条）。
  *   那些进程里没有监听 socket，没有可继承的句柄，不需要绕这一圈。
  * - runner 只转发字节，不解析命令、不判权限：裁决在 `policy.ts`，沙箱在
  *   `spawnGuarded`，这里只负责「谁是父进程」。
@@ -102,7 +102,7 @@ const B64 = {
  * 起一个 runner 子进程。**必须在绑端口之前调用**，否则它一样会拿到那份句柄。
  *
  * `argv` 由调用方给：源码直跑时是 `[bun, <入口>.ts, 'runner']`，打包之后是
- * `[qy, 'runner']`——这个模块不猜自己被怎么装起来的。
+ * `[oph, 'runner']`——这个模块不猜自己被怎么装起来的。
  */
 export function startCommandRunner(argv: string[]): CommandRunner {
   const pending = new Map<number, Pending>()

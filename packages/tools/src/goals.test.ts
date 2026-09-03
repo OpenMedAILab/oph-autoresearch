@@ -8,9 +8,9 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { GoalPort, ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
-import type { Goal, GoalWriteResult } from '@qywork/core'
+import type { GoalPort, ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
+import type { Goal, GoalWriteResult } from '@oph-autoresearch/core'
 import { readGoalTool, updateGoalTool } from './goals.ts'
 
 const SAMPLE: Goal = {
@@ -56,7 +56,7 @@ function ctx(opts?: { goal?: Goal | null; result?: GoalWriteResult }): ToolConte
   } as unknown as ToolContext & { spy: Spy }
 }
 
-/** 端口没接上的上下文（`qy exec` 那种）。 */
+/** 端口没接上的上下文（`oph exec` 那种）。 */
 function bare(): ToolContext {
   const c = ctx()
   delete (c as { goals?: unknown }).goals

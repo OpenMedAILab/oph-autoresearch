@@ -2,7 +2,7 @@
  * MCP `resources/*`：两个工具，**一个字节都不进上下文**。
  *
  * **为什么不是「把 resource 注入上下文」。** MCP 规范把 resource 定位成「由应用决定怎么用的上下文数
- * 据」，常见做法是让 **用户**挑一个 resource 附进对话。这里没有那个交互位——`qy exec` 没有人在场。
+ * 据」，常见做法是让 **用户**挑一个 resource 附进对话。这里没有那个交互位——`oph exec` 没有人在场。
  *
  * 剩下两条路：
  *
@@ -28,7 +28,7 @@
  *    走同一条裁决路径，多一层。
  */
 
-import type { ToolSpec } from '@qywork/agent'
+import type { ToolSpec } from '@oph-autoresearch/agent'
 import type { McpClient } from './client.ts'
 import { permissionLabel, toolName } from './register.ts'
 

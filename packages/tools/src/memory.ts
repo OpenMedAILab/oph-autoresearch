@@ -26,7 +26,7 @@
 
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { ToolSpec } from '@qywork/agent'
+import type { ToolSpec } from '@oph-autoresearch/agent'
 import { resolveInWorkspace } from './paths.ts'
 import {
   type Scope,
@@ -326,7 +326,7 @@ export const moveMemoryTool: ToolSpec = {
     }
 
     await mkdir(dirname(target), { recursive: true })
-    const temp = `${target}.qywork-moving-${crypto.randomUUID()}`
+    const temp = `${target}.oph-autoresearch-moving-${crypto.randomUUID()}`
     try {
       await writeFile(temp, content, { encoding: 'utf8', flag: 'wx' })
       await rename(temp, target)

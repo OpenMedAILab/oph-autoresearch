@@ -29,9 +29,9 @@
  * 「应用内装依赖」本身是一条额外的执行入口，由用户明确要求才有——不要往这里追加别的软件。
  */
 
-import type { EnvDependency } from '@qywork/core'
-import type { CommandShell } from '@qywork/tools'
-import { BASH_PATH_ENV, commandShell, probeBash } from '@qywork/tools'
+import type { EnvDependency } from '@oph-autoresearch/core'
+import type { CommandShell } from '@oph-autoresearch/tools'
+import { BASH_PATH_ENV, commandShell, probeBash } from '@oph-autoresearch/tools'
 import { type ApiHandler, json } from './types.ts'
 
 /**
@@ -311,6 +311,6 @@ export const handleHostApi: ApiHandler = async (url, req) => {
     command: `winget install --id ${dep.winget} -e --source winget`,
     // **这句必须回给前端显示。** 装完之后 PATH 是这个进程启动时的快照，
     // 新装的依赖不在里面——不重启的话探测照样找不到，而那个失败形状最难判断。
-    note: '安装窗口已经打开。装完请重启 qywork——当前进程的 PATH 是启动时的快照，看不到新装的程序。',
+    note: '安装窗口已经打开。装完请重启 oph-autoresearch——当前进程的 PATH 是启动时的快照，看不到新装的程序。',
   })
 }

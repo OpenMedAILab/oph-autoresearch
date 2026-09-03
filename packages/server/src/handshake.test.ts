@@ -11,8 +11,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { AgentEvent, ConversationId, HelloFrame } from '@qywork/core'
-import type { CommandShell } from '@qywork/tools'
+import type { AgentEvent, ConversationId, HelloFrame } from '@oph-autoresearch/core'
+import type { CommandShell } from '@oph-autoresearch/tools'
 import type { ServerWebSocket } from 'bun'
 import { resolveBashRow, wingetUsable } from './api/host.ts'
 import { EventBus } from './bus.ts'

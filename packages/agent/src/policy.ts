@@ -153,9 +153,9 @@ const OUTSIDE_SYMBOL_RE = OUTSIDE_SYMBOLS.map((s) => s.re).join('|')
 const OUTSIDE_LOCATION = String.raw`(?:^|[\s"'=(])~[/\\]|${OUTSIDE_SYMBOL_RE}|(?:^|[\s"'=(])\/etc\/|[A-Za-z]:[\\/]Windows[\\/]`
 
 /*
- * **工作区里的 `.qy/` 与 `.agents/` 不在这张表里，这是有意的。**
+ * **工作区里的 `.oph/` 与 `.agents/` 不在这张表里，这是有意的。**
  *
- * 别加「用 shell 写 .qy/ 或 .agents/ = 自我提权」这条。两条理由让它站不住：
+ * 别加「用 shell 写 .oph/ 或 .agents/ = 自我提权」这条。两条理由让它站不住：
  *
  * 1. **它拦不到任何能力。** `.agents/mcp.json` 决定模型拿到哪些工具，可模型手里
  *    已经有 `run_command`——MCP 服务器本身就是个它能直接启动的进程。给自己加一个
@@ -163,12 +163,12 @@ const OUTSIDE_LOCATION = String.raw`(?:^|[\s"'=(])~[/\\]|${OUTSIDE_SYMBOL_RE}|(?
  * 2. **`.agents/` 本来就该写。** `write_memory` 正往 `.agents/memory/` 里写。
  *    shell 拦、工具不拦，就是同一件事两套账。
  *
- * 真正需要保护的是**本程序自己的**全局目录 `~/.qywork/`（明文 apiKey、权限模式、
+ * 真正需要保护的是**本程序自己的**全局目录 `~/.oph-autoresearch/`（明文 apiKey、权限模式、
  * 全部会话历史）——而它躺在家目录，写由「工作区外」那条挡、读由凭证那条挡，
  * 不需要单开一条。这两个目录名字像，位置和含义完全不同。
  *
  * 换成 PowerShell 也不加：上面两条理由与外层跑哪个 shell 无关，
- * 而 `Set-Content .qy\mcp.json` 与 `echo x > .qy/mcp.json` 是同一件事。
+ * 而 `Set-Content .oph\mcp.json` 与 `echo x > .oph/mcp.json` 是同一件事。
  */
 
 /**
@@ -187,7 +187,7 @@ export const HARD_DENY: readonly { pattern: RegExp; reason: string; id?: string 
      * `Get-ChildItem $HOME -Recurse -Filter *.pem` **同一条命令两次跑出了两个不同结论**——一次拦
      * 一次放。分类器是概率判断，而「`$HOME` 在工作区外」是一个**事实**，不该每次重新赌一遍。
      *
-     * 这和 `.qy/` 那条是同一类错误：把确定的知识交给了概率。
+     * 这和 `.oph/` 那条是同一类错误：把确定的知识交给了概率。
      * 凡是能用确定性规则表达的边界，就不要留给模型推。
      *
      * **为什么只收这几个，不收所有绝对路径。** 家目录、`/etc`、`C:\Windows` 在一个工作区内的编码任
@@ -267,18 +267,18 @@ export const HARD_DENY: readonly { pattern: RegExp; reason: string; id?: string 
      * 两道都要：路径挡住已知位置，形状兜住换了位置的（比如项目里的 `.env`，
      * 那是项目文件、不该拦读，但值不该原样进上下文）。
      *
-     * **为什么 `~/.qywork/config.json` 也在里面。** 那是**本程序自己的**全局配置：明文 apiKey、权限
+     * **为什么 `~/.oph-autoresearch/config.json` 也在里面。** 那是**本程序自己的**全局配置：明文 apiKey、权限
      * 模式、classifier 指向都在那一个文件里。它躺在家目录，所以「工作区外写」那条已经挡住了写；这
      * 里补上读——key 被读走的代价和私钥一样。
      *
-     * 注意它与工作区里的 `.qy/` / `.agents/` 是**两回事**：后者是项目自己的
+     * 注意它与工作区里的 `.oph/` / `.agents/` 是**两回事**：后者是项目自己的
      * agent 配置（mcp.json、skills、team.json），改它不构成提权（模型有
      * `run_command`，加不加工具能做的事一样多），不在这条规则里。
      */
     pattern:
-      /(?:\.ssh[\\/]|\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\.aws[\\/]credentials|\.config[\\/]gcloud[\\/]|\.kube[\\/]config|\.npmrc\b|\.netrc\b|\.pgpass\b|\.docker[\\/]config\.json|\.qywork[\\/]config\.json)/i,
+      /(?:\.ssh[\\/]|\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\.aws[\\/]credentials|\.config[\\/]gcloud[\\/]|\.kube[\\/]config|\.npmrc\b|\.netrc\b|\.pgpass\b|\.docker[\\/]config\.json|\.oph-autoresearch[\\/]config\.json)/i,
     reason:
-      '这是凭证文件（SSH 私钥、云厂商凭据、包管理器 token，或 qywork 自己的配置）。' +
+      '这是凭证文件（SSH 私钥、云厂商凭据、包管理器 token，或 oph-autoresearch 自己的配置）。' +
       '读出来的内容会进上下文再发给模型供应商，发出去就收不回。' +
       '需要用到某个凭证时，用环境变量传给命令，不要把文件内容读进来',
   },
@@ -356,11 +356,11 @@ export function decideCommand(command: string, ctx: PolicyContext): PolicyDecisi
  * 家目录的**字面写法**。命中返回拒绝理由，否则 `null`。
  *
  * **这是上面那条硬拒绝漏掉的另一半。** `OUTSIDE_LOCATION_RULE` 那条正则只认**符号写法**——`~/`、
- * `$HOME`、`%USERPROFILE%`。实测（Windows，工作区在 `<home>\Desktop\qywork`）：
+ * `$HOME`、`%USERPROFILE%`。实测（Windows，工作区在 `<home>\Desktop\oph-autoresearch`）：
  *
  * ```
- * deny      | Get-Content $env:USERPROFILE\.qywork\config.json
- * undecided | type C:\Users\<user>\.qywork\config.json
+ * deny      | Get-Content $env:USERPROFILE\.oph-autoresearch\config.json
+ * undecided | type C:\Users\<user>\.oph-autoresearch\config.json
  * ```
  *
  * **同一个文件，两种拼法，两种结论。** 后者掉到分类器，而分类器是概率判断。

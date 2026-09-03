@@ -25,9 +25,14 @@
  *    加一条例外就是两条规则，而重算一次压缩的成本是零次模型调用。
  */
 
-import type { TokenDensity, WireMessage, WireToolCall } from '@qywork/ai'
-import { estimateMessages, estimateText } from '@qywork/ai'
-import type { ActionKind, CompactionCut, CompactionFacts, CompactionManifest } from '@qywork/core'
+import type { TokenDensity, WireMessage, WireToolCall } from '@oph-autoresearch/ai'
+import { estimateMessages, estimateText } from '@oph-autoresearch/ai'
+import type {
+  ActionKind,
+  CompactionCut,
+  CompactionFacts,
+  CompactionManifest,
+} from '@oph-autoresearch/core'
 
 /**
  * 摘录界：一条 segment、一条事实、一个被折叠的调用参数，共用这一个长度。

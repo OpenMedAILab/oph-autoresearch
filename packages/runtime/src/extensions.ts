@@ -8,16 +8,16 @@
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ToolSpec } from '@qywork/agent'
+import type { ToolSpec } from '@oph-autoresearch/agent'
 import {
   loadMcpServers,
   type McpConfig,
   type McpRegistry,
   parseMcpConfig,
   toolNamePrefix,
-} from '@qywork/mcp'
-import { loadPlugins, type PluginRegistry, pluginToolPrefix } from '@qywork/plugins'
-import type { Role, TeamRules } from '@qywork/team'
+} from '@oph-autoresearch/mcp'
+import { loadPlugins, type PluginRegistry, pluginToolPrefix } from '@oph-autoresearch/plugins'
+import type { Role, TeamRules } from '@oph-autoresearch/team'
 import {
   AGENTS_DIR,
   globalScopeRoot,
@@ -25,7 +25,7 @@ import {
   type Scope,
   scopePaths,
   scopeRoots,
-} from '@qywork/tools'
+} from '@oph-autoresearch/tools'
 import { makeCapabilityHandler } from './capabilities.ts'
 import { isWorkspaceTrusted, loadConfig } from './config.ts'
 
@@ -38,7 +38,7 @@ export const MCP_FILE = 'mcp.json'
 export const MCP_CONFIG = `${AGENTS_DIR}/${MCP_FILE}`
 
 /**
- * 插件的唯一目录：`~/.qywork/plugins/`。
+ * 插件的唯一目录：`~/.oph-autoresearch/plugins/`。
  *
  * **插件不分层。** 它贡献的是工具、预览器、供应商——那些是这个 agent 的能力，
  * 不是某个仓库的内容。分层的代价是同一个插件在两个仓库里各存一份、各自升级，
@@ -55,9 +55,9 @@ export function globalPluginsDir(): string {
  * team 配置**只有工作区一份，不分层**。
  *
  * 它描述的是「这个项目怎么分工」——角色、后端、编排图全是项目属性，
- * 跟到别的仓库去只会派错人。所以它留在 `.qy/`，不进 `.agents/`。
+ * 跟到别的仓库去只会派错人。所以它留在 `.oph/`，不进 `.agents/`。
  */
-export const TEAM_CONFIG = '.qy/team.json'
+export const TEAM_CONFIG = '.oph/team.json'
 
 export interface Extensions {
   plugins: PluginRegistry
@@ -164,7 +164,7 @@ export function releaseExtensions(workspaceRoot: string): void {
 }
 
 /**
- * 装在 `~/.qywork/plugins/` 里的插件。
+ * 装在 `~/.oph-autoresearch/plugins/` 里的插件。
  *
  * 只有这一个目录，所以没有跨层去重——同一个 id 在同一个目录下不可能出现两次。
  * 工具名仍然要去重：两个不同的插件可以声明同一个工具名，撞车的表现是
@@ -228,7 +228,7 @@ export async function loadWorkspaceMcp(
   }
 
   const all = await loadScopedMcpConfig(workspaceRoot)
-  if (all.error) onLog?.(`[qy] ${MCP_FILE}：${all.error}`)
+  if (all.error) onLog?.(`[oph] ${MCP_FILE}：${all.error}`)
 
   /*
    * 项目层要先授权。这里必须**重新合成**而不是把项目层那几个名字过滤掉：
@@ -240,7 +240,7 @@ export async function loadWorkspaceMcp(
   const config = trusted
     ? all
     : await loadScopedMcpConfig(workspaceRoot, { scopes: ['builtin', 'global'] })
-  if (!trusted) onLog?.(`[qy] 项目层 MCP 未授权，本轮不启动：${pending.join('、')}`)
+  if (!trusted) onLog?.(`[oph] 项目层 MCP 未授权，本轮不启动：${pending.join('、')}`)
 
   if (Object.keys(config.servers).length === 0) return empty
 
@@ -303,7 +303,7 @@ export async function loadScopedMcpConfig(
  * 读工作区的 team 配置。
  *
  * 这里只有**角色（子 agent）与编排图**。外部 CLI 不进这个文件：它由本机探测得到
- * （`@qywork/team` 的 `detectClis`），编排图里用 `cli:<id>` 指向它。
+ * （`@oph-autoresearch/team` 的 `detectClis`），编排图里用 `cli:<id>` 指向它。
  */
 export async function loadTeamConfig(workspaceRoot: string): Promise<WorkspaceTeamConfig> {
   const empty: WorkspaceTeamConfig = { roles: [], rules: {}, error: null }
@@ -355,8 +355,8 @@ export async function loadTeamConfig(workspaceRoot: string): Promise<WorkspaceTe
 /**
  * 工具名前缀，转出给 CLI 用。
  *
- * CLI 不直接依赖 `@qywork/mcp` / `@qywork/plugins`（依赖图里它只挂 runtime），
- * 但 `qy mcp` / `qy doctor` / `qy plugins` 都要按前缀数「这个 server / 插件贡献了
+ * CLI 不直接依赖 `@oph-autoresearch/mcp` / `@oph-autoresearch/plugins`（依赖图里它只挂 runtime），
+ * 但 `oph mcp` / `oph doctor` / `oph plugins` 都要按前缀数「这个 server / 插件贡献了
  * 几个工具」。三处原本各自拼 `mcp__${name}__` / `${id}__`，**都没消毒**，
  * 带点的名字一条都匹配不上，体检结果直接骗人。转出来是为了只有一份实现。
  */

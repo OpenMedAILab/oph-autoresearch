@@ -2,8 +2,8 @@
 
 import { mkdir, stat } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import type { ToolSpec } from '@qywork/agent'
-import { configDir } from '@qywork/runtime'
+import type { ToolSpec } from '@oph-autoresearch/agent'
+import { configDir } from '@oph-autoresearch/runtime'
 import {
   archiveWorkspaceConversations,
   countConversations,
@@ -14,15 +14,15 @@ import {
   removeWorkspace,
   setWorkspacePinned,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { ensureResearchWorkspace } from '../research-template.ts'
 import { type ApiHandler, json } from './types.ts'
 
 /**
  * 不给源文件夹时，默认工作区建在这里。
  *
- * 跟账本同根（`~/.qywork/`，可由 `QYWORK_HOME` 改）：它们是同一类数据——
- * 这台机器上 qywork 自己的数据，卸载时一并带走。放进用户主目录会多出一个
+ * 跟账本同根（`~/.oph-autoresearch/`，可由 `OPH_AUTORESEARCH_HOME` 改）：它们是同一类数据——
+ * 这台机器上 oph-autoresearch 自己的数据，卸载时一并带走。放进用户主目录会多出一个
  * 谁都不知道能不能删的文件夹。要打开它有菜单里的「在资源管理器中打开」。
  */
 function defaultWorkspacesRoot(): string {
@@ -116,7 +116,7 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
      * - **给了 `path`**：只接受本机已存在的目录（CLAUDE.md E）。这里不做
      *   `git clone <URL>`——那等于从网上取一段代码、下次加载就跑它。
      *   `name` 不给就取目录名。
-     * - **只给 `name`**：在 `~/.qywork/workspaces/<name>/` 建一个新目录。
+     * - **只给 `name`**：在 `~/.oph-autoresearch/workspaces/<name>/` 建一个新目录。
      *   重名加后缀，不复用已有目录。
      *
      * **路径已经在账本里时复用那一行**（`root_path` 是 UNIQUE），
@@ -257,7 +257,9 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
   // 这一次请求问的是哪个项目（`?ws=` 解析的结果，见 api/index.ts）。
   // 名字取目录名；取不出来（根目录）时回落到整条路径，不回空串。
   if (p === '/api/workspace') {
-    const { isWorkspaceTrusted, loadConfig, loadScopedMcpConfig } = await import('@qywork/runtime')
+    const { isWorkspaceTrusted, loadConfig, loadScopedMcpConfig } = await import(
+      '@oph-autoresearch/runtime'
+    )
     /*
      * `pendingTrust` 列的是**这个项目里要先点头才会执行的配置项**，不是「有没有配 MCP」。
      * 空数组有两种成因（没有项目层配置 / 已经信任过），调用方不需要区分：
@@ -282,14 +284,14 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
    *
    * **信任的对象是项目，不是 MCP。** 今天只有项目层 `.agents/mcp.json` 会被执行，
    * 所以闸只落在那里；`.agents/skills`、`.agents/memory` 注入的是提示词不是命令，
-   * 插件只从 `~/.qywork/plugins/` 装。以后再有工作区来源的执行面，复用这一份信任，
+   * 插件只从 `~/.oph-autoresearch/plugins/` 装。以后再有工作区来源的执行面，复用这一份信任，
    * 不再各加一道闸。
    *
    * 粒度是整个项目：单条 server 的命令行安不安全，用户在界面上判断不了。
    * 也不记配置的内容指纹——记了就是每次 `git pull` 重问一次。
    */
   if (p === '/api/workspace/trust' && req.method === 'POST') {
-    const { loadConfig, saveConfig, setWorkspaceTrust } = await import('@qywork/runtime')
+    const { loadConfig, saveConfig, setWorkspaceTrust } = await import('@oph-autoresearch/runtime')
     const body = (await req.json().catch(() => null)) as { trusted?: unknown } | null
     if (typeof body?.trusted !== 'boolean') {
       return json({ error: 'bad request', message: '缺少 trusted' }, 400)
@@ -317,10 +319,10 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
    * 插件与 MCP 子进程，且没有人关。异常路径也要 release——所以是 try/finally。
    */
   if (p === '/api/tools') {
-    const { ToolRegistry, TOOL_CATEGORIES } = await import('@qywork/agent')
-    const { registerBuiltinTools, LOAD_TOOL_SPEC } = await import('@qywork/tools')
+    const { ToolRegistry, TOOL_CATEGORIES } = await import('@oph-autoresearch/agent')
+    const { registerBuiltinTools, LOAD_TOOL_SPEC } = await import('@oph-autoresearch/tools')
     const { acquireExtensions, releaseExtensions, pluginToolPrefix, toolNamePrefix } = await import(
-      '@qywork/runtime'
+      '@oph-autoresearch/runtime'
     )
 
     const registry = new ToolRegistry()

@@ -5,7 +5,7 @@
  * 静默跳过会让「配了 MCP 但工具不出现」变成无法排查的现象。
  */
 
-import type { ToolSpec } from '@qywork/agent'
+import type { ToolSpec } from '@oph-autoresearch/agent'
 import {
   McpClient,
   type McpServerCapabilities,
@@ -28,10 +28,10 @@ export interface LoadedServer {
   tools: McpToolDef[]
   serverInfo: { name?: string; version?: string }
   protocolVersion: string
-  /** server 握手时声明的能力。`qy mcp` 要显示它。 */
+  /** server 握手时声明的能力。`oph mcp` 要显示它。 */
   capabilities: McpServerCapabilities
   /**
-   * server 声明了、而 qywork 没有实现的能力名。
+   * server 声明了、而 oph-autoresearch 没有实现的能力名。
    *
    * **这个字段的存在就是为了消灭一种静默失败**：一个只提供 `prompts` 的 server
    * 会连上、握手成功、`tools/list` 返回空、注册 0 个工具，**不报任何错**。
@@ -230,7 +230,7 @@ export async function loadMcpServers(
     const unsupported = unsupportedCapabilities(item.client.capabilities)
     if (unsupported.length > 0) {
       options.onLog?.(
-        `[mcp:${item.name}] server 声明了 qywork 尚未接的能力：${unsupported.join('、')}。` +
+        `[mcp:${item.name}] server 声明了 oph-autoresearch 尚未接的能力：${unsupported.join('、')}。` +
           `这些能力提供的东西不会出现在工具列表里。`,
       )
     }
@@ -256,7 +256,9 @@ export async function loadMcpServers(
           (declared.length === 0
             ? 'server 没有声明任何能力，也没有响应 tools/list。'
             : `server 声明的能力是：${declared.join('、')}${
-                unsupported.length ? `，其中 ${unsupported.join('、')} qywork 尚未支持` : ''
+                unsupported.length
+                  ? `，其中 ${unsupported.join('、')} oph-autoresearch 尚未支持`
+                  : ''
               }。`),
       })
     }

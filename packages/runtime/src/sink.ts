@@ -13,15 +13,15 @@
  * 跨库没有外键能守住这条，只有顺序。
  */
 
-import type { SinkPort } from '@qywork/agent'
-import type { ResourceCoverage, RunId } from '@qywork/core'
+import type { SinkPort } from '@oph-autoresearch/agent'
+import type { ResourceCoverage, RunId } from '@oph-autoresearch/core'
 import {
   type ContentStore,
   getResource,
   referencedContentHashes,
   registerResource,
   type Store,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 export class RuntimeSink implements SinkPort {
   constructor(

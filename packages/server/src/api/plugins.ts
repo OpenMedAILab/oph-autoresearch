@@ -1,7 +1,7 @@
 /**
  * 插件。
  *
- * **只有全局一个目录。** `~/.qywork/plugins/`。插件贡献的是工具、预览器、供应商——那些是这个 agent
+ * **只有全局一个目录。** `~/.oph-autoresearch/plugins/`。插件贡献的是工具、预览器、供应商——那些是这个 agent
  * 的能力，不是某个仓库的内容。所以它不分层，接口上也就没有 `scope` 参数：装一次对所有项目生效。
  * 「这个项目要不要加载某个插件」是开关，不是第二份拷贝。
  *
@@ -9,7 +9,7 @@
  * 一个叫「市场」而里面没有任何可安装内容的页面，就是把这次要删的空壳
  * 换个名字再造一遍。
  *
- * 数据源与 `qy plugins` 完全相同（loadExtensions），所以 CLI 与界面不会
+ * 数据源与 `oph plugins` 完全相同（loadExtensions），所以 CLI 与界面不会
  * 对「装了什么、隔离到什么程度」给出两种答案。
  *
  * 失败项与成功项一起回：装失败的插件是用户最需要看到的那部分，
@@ -18,7 +18,7 @@
 
 import { cp, mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { globalPluginsDir } from '@qywork/runtime'
+import { globalPluginsDir } from '@oph-autoresearch/runtime'
 import { type ApiHandler, json } from './types.ts'
 
 /**
@@ -38,11 +38,11 @@ export async function readPluginDir(src: string): Promise<{
   permissions?: string[]
   replacing?: boolean
 }> {
-  const manifestPath = join(src, 'qywork.plugin.json')
+  const manifestPath = join(src, 'oph-autoresearch.plugin.json')
   const raw = await readFile(manifestPath, 'utf8').catch(() => null)
-  if (raw === null) return { ok: false, error: `目录里没有 qywork.plugin.json：${src}` }
+  if (raw === null) return { ok: false, error: `目录里没有 oph-autoresearch.plugin.json：${src}` }
   try {
-    const { parseManifest } = await import('@qywork/plugins')
+    const { parseManifest } = await import('@oph-autoresearch/plugins')
     const m = parseManifest(JSON.parse(raw), manifestPath)
     return {
       ok: true,
@@ -80,7 +80,7 @@ export const handlePluginsApi: ApiHandler = async (url, req, d) => {
   const p = url.pathname
 
   if (p === '/api/plugins') {
-    const { loadExtensions } = await import('@qywork/runtime')
+    const { loadExtensions } = await import('@oph-autoresearch/runtime')
     const ext = await loadExtensions(d.workspaceRoot)
     const reg = ext.plugins
     return json({
@@ -117,7 +117,7 @@ export const handlePluginsApi: ApiHandler = async (url, req, d) => {
   // 变成一条 `curl | sh`。同样的结果照样能达成，只是中间多一次「装的是什么，用户看得到」。
   //
   // **装之前必须校验清单**：
-  // 目录里没有合法的 `qywork.plugin.json` 就直接拒绝。不校验的话，
+  // 目录里没有合法的 `oph-autoresearch.plugin.json` 就直接拒绝。不校验的话，
   // 指错目录会「安装成功」然后在下一次加载时变成一条 failure——
   // 而那时候用户已经不记得自己指了哪里。
   if (p === '/api/plugins/install' && req.method === 'POST') {

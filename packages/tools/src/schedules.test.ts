@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import {
   createScheduleTool,
   deleteScheduleTool,
@@ -129,23 +129,23 @@ describe('nextRunAt', () => {
 })
 
 /*
- * 三个工具跑在真实的 `schedules.json` 上，`QYWORK_HOME` 指到临时目录。
+ * 三个工具跑在真实的 `schedules.json` 上，`OPH_AUTORESEARCH_HOME` 指到临时目录。
  *
  * 不打桩落盘：这三个工具的全部要害都在落盘那一侧——归属过滤、
  * 与 HTTP 面同形的记录、走不走 `updateSchedules`。桩掉之后测的就只剩参数解析了。
  */
 describe('定时任务工具', () => {
   let home = ''
-  const prevHome = process.env.QYWORK_HOME
+  const prevHome = process.env.OPH_AUTORESEARCH_HOME
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'qywork-sched-'))
-    process.env.QYWORK_HOME = home
+    home = await mkdtemp(join(tmpdir(), 'oph-autoresearch-sched-'))
+    process.env.OPH_AUTORESEARCH_HOME = home
   })
 
   afterEach(async () => {
-    if (prevHome === undefined) delete process.env.QYWORK_HOME
-    else process.env.QYWORK_HOME = prevHome
+    if (prevHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = prevHome
     await rm(home, { recursive: true, force: true })
   })
 

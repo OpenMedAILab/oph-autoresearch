@@ -3,17 +3,17 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "qywork",
+      "name": "oph-autoresearch",
       "devDependencies": {
         "@babel/core": "^7.28.0",
         "@babel/preset-typescript": "^7.27.0",
         "@biomejs/biome": "2.3.5",
         "@happy-dom/global-registrator": "^20.11.6",
-        "@qywork/ai": "workspace:*",
-        "@qywork/core": "workspace:*",
-        "@qywork/runtime": "workspace:*",
-        "@qywork/server": "workspace:*",
-        "@qywork/store": "workspace:*",
+        "@oph-autoresearch/ai": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
+        "@oph-autoresearch/runtime": "workspace:*",
+        "@oph-autoresearch/server": "workspace:*",
+        "@oph-autoresearch/store": "workspace:*",
         "@types/babel__core": "^7.20.5",
         "@types/bun": "1.3.14",
         "babel-preset-solid": "^1.9.15",
@@ -23,14 +23,14 @@
       },
     },
     "apps/desktop": {
-      "name": "@qywork/desktop",
+      "name": "@oph-autoresearch/desktop",
       "version": "0.1.0",
       "devDependencies": {
         "@tauri-apps/cli": "^2.11.4",
       },
     },
     "apps/web": {
-      "name": "@qywork/web",
+      "name": "@oph-autoresearch/web",
       "version": "0.1.0",
       "dependencies": {
         "@codemirror/lang-css": "^6.3.1",
@@ -42,7 +42,7 @@
         "@codemirror/lang-rust": "^6.0.2",
         "@codemirror/state": "^6.5.2",
         "@codemirror/view": "^6.38.6",
-        "@qywork/core": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/xterm": "^6.0.0",
         "codemirror": "^6.0.2",
@@ -60,35 +60,35 @@
       },
     },
     "packages/agent": {
-      "name": "@qywork/agent",
+      "name": "@oph-autoresearch/agent",
       "version": "0.1.0",
       "dependencies": {
-        "@qywork/ai": "workspace:*",
-        "@qywork/core": "workspace:*",
-        "@qywork/store": "workspace:*",
+        "@oph-autoresearch/ai": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
+        "@oph-autoresearch/store": "workspace:*",
       },
     },
     "packages/ai": {
-      "name": "@qywork/ai",
+      "name": "@oph-autoresearch/ai",
       "version": "0.1.0",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.80.0",
-        "@qywork/core": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
         "openai": "^6.9.0",
       },
     },
     "packages/cli": {
-      "name": "@qywork/cli",
+      "name": "@oph-autoresearch/cli",
       "version": "0.1.0",
       "bin": {
-        "qy": "./src/index.ts",
+        "oph": "./src/index.ts",
       },
       "dependencies": {
-        "@qywork/core": "workspace:*",
-        "@qywork/runtime": "workspace:*",
-        "@qywork/server": "workspace:*",
-        "@qywork/store": "workspace:*",
-        "@qywork/tools": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
+        "@oph-autoresearch/runtime": "workspace:*",
+        "@oph-autoresearch/server": "workspace:*",
+        "@oph-autoresearch/store": "workspace:*",
+        "@oph-autoresearch/tools": "workspace:*",
         "qrcode": "^1.5.4",
       },
       "devDependencies": {
@@ -96,76 +96,76 @@
       },
     },
     "packages/core": {
-      "name": "@qywork/core",
+      "name": "@oph-autoresearch/core",
       "version": "0.1.0",
     },
     "packages/mcp": {
-      "name": "@qywork/mcp",
+      "name": "@oph-autoresearch/mcp",
       "version": "0.1.0",
       "dependencies": {
-        "@qywork/agent": "workspace:*",
-        "@qywork/core": "workspace:*",
+        "@oph-autoresearch/agent": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
       },
     },
     "packages/plugins": {
-      "name": "@qywork/plugins",
+      "name": "@oph-autoresearch/plugins",
       "version": "0.1.0",
       "dependencies": {
-        "@qywork/agent": "workspace:*",
-        "@qywork/core": "workspace:*",
+        "@oph-autoresearch/agent": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
       },
     },
     "packages/runtime": {
-      "name": "@qywork/runtime",
+      "name": "@oph-autoresearch/runtime",
       "version": "0.1.0",
       "dependencies": {
-        "@qywork/agent": "workspace:*",
-        "@qywork/ai": "workspace:*",
-        "@qywork/core": "workspace:*",
-        "@qywork/mcp": "workspace:*",
-        "@qywork/plugins": "workspace:*",
-        "@qywork/store": "workspace:*",
-        "@qywork/team": "workspace:*",
-        "@qywork/tools": "workspace:*",
+        "@oph-autoresearch/agent": "workspace:*",
+        "@oph-autoresearch/ai": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
+        "@oph-autoresearch/mcp": "workspace:*",
+        "@oph-autoresearch/plugins": "workspace:*",
+        "@oph-autoresearch/store": "workspace:*",
+        "@oph-autoresearch/team": "workspace:*",
+        "@oph-autoresearch/tools": "workspace:*",
       },
     },
     "packages/server": {
-      "name": "@qywork/server",
+      "name": "@oph-autoresearch/server",
       "version": "0.1.0",
       "dependencies": {
-        "@qywork/agent": "workspace:*",
-        "@qywork/ai": "workspace:*",
-        "@qywork/core": "workspace:*",
-        "@qywork/mcp": "workspace:*",
-        "@qywork/plugins": "workspace:*",
-        "@qywork/runtime": "workspace:*",
-        "@qywork/store": "workspace:*",
-        "@qywork/team": "workspace:*",
-        "@qywork/tools": "workspace:*",
+        "@oph-autoresearch/agent": "workspace:*",
+        "@oph-autoresearch/ai": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
+        "@oph-autoresearch/mcp": "workspace:*",
+        "@oph-autoresearch/plugins": "workspace:*",
+        "@oph-autoresearch/runtime": "workspace:*",
+        "@oph-autoresearch/store": "workspace:*",
+        "@oph-autoresearch/team": "workspace:*",
+        "@oph-autoresearch/tools": "workspace:*",
       },
     },
     "packages/store": {
-      "name": "@qywork/store",
+      "name": "@oph-autoresearch/store",
       "version": "0.1.0",
       "dependencies": {
-        "@qywork/core": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
       },
     },
     "packages/team": {
-      "name": "@qywork/team",
+      "name": "@oph-autoresearch/team",
       "version": "0.1.0",
       "dependencies": {
-        "@qywork/core": "workspace:*",
-        "@qywork/tools": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
+        "@oph-autoresearch/tools": "workspace:*",
       },
     },
     "packages/tools": {
-      "name": "@qywork/tools",
+      "name": "@oph-autoresearch/tools",
       "version": "0.1.0",
       "dependencies": {
-        "@qywork/agent": "workspace:*",
-        "@qywork/ai": "workspace:*",
-        "@qywork/core": "workspace:*",
+        "@oph-autoresearch/agent": "workspace:*",
+        "@oph-autoresearch/ai": "workspace:*",
+        "@oph-autoresearch/core": "workspace:*",
         "@silvia-odwyer/photon-node": "0.3.4",
         "unpdf": "^1.8.1",
       },
@@ -366,31 +366,31 @@
 
     "@napi-rs/lzma-linux-x64-gnu": ["@napi-rs/lzma-linux-x64-gnu@1.5.1", "", { "os": "linux", "cpu": "x64" }, "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ=="],
 
-    "@qywork/agent": ["@qywork/agent@workspace:packages/agent"],
+    "@oph-autoresearch/agent": ["@oph-autoresearch/agent@workspace:packages/agent"],
 
-    "@qywork/ai": ["@qywork/ai@workspace:packages/ai"],
+    "@oph-autoresearch/ai": ["@oph-autoresearch/ai@workspace:packages/ai"],
 
-    "@qywork/cli": ["@qywork/cli@workspace:packages/cli"],
+    "@oph-autoresearch/cli": ["@oph-autoresearch/cli@workspace:packages/cli"],
 
-    "@qywork/core": ["@qywork/core@workspace:packages/core"],
+    "@oph-autoresearch/core": ["@oph-autoresearch/core@workspace:packages/core"],
 
-    "@qywork/desktop": ["@qywork/desktop@workspace:apps/desktop"],
+    "@oph-autoresearch/desktop": ["@oph-autoresearch/desktop@workspace:apps/desktop"],
 
-    "@qywork/mcp": ["@qywork/mcp@workspace:packages/mcp"],
+    "@oph-autoresearch/mcp": ["@oph-autoresearch/mcp@workspace:packages/mcp"],
 
-    "@qywork/plugins": ["@qywork/plugins@workspace:packages/plugins"],
+    "@oph-autoresearch/plugins": ["@oph-autoresearch/plugins@workspace:packages/plugins"],
 
-    "@qywork/runtime": ["@qywork/runtime@workspace:packages/runtime"],
+    "@oph-autoresearch/runtime": ["@oph-autoresearch/runtime@workspace:packages/runtime"],
 
-    "@qywork/server": ["@qywork/server@workspace:packages/server"],
+    "@oph-autoresearch/server": ["@oph-autoresearch/server@workspace:packages/server"],
 
-    "@qywork/store": ["@qywork/store@workspace:packages/store"],
+    "@oph-autoresearch/store": ["@oph-autoresearch/store@workspace:packages/store"],
 
-    "@qywork/team": ["@qywork/team@workspace:packages/team"],
+    "@oph-autoresearch/team": ["@oph-autoresearch/team@workspace:packages/team"],
 
-    "@qywork/tools": ["@qywork/tools@workspace:packages/tools"],
+    "@oph-autoresearch/tools": ["@oph-autoresearch/tools@workspace:packages/tools"],
 
-    "@qywork/web": ["@qywork/web@workspace:apps/web"],
+    "@oph-autoresearch/web": ["@oph-autoresearch/web@workspace:apps/web"],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.62.4", "", { "os": "android", "cpu": "arm" }, "sha512-RrPokAb7dmbxFoeO3TloqHyOjgye8RkBhSqmp4aJMIex4c9r46ZstPnleDQOq1t46VOVjwIuwNogIqbodV1Vvg=="],
 

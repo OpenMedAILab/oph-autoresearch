@@ -1,7 +1,7 @@
 /**
  * 配对与鉴权。
  *
- * 无账号体系（需求 11），但**不等于无鉴权**：`qy serve` 会绑到局域网地址上让手机
+ * 无账号体系（需求 11），但**不等于无鉴权**：`oph serve` 会绑到局域网地址上让手机
  * 连过来，同一个 Wi-Fi 下的任何设备都能触达这个端口。没有令牌 = 任何人都能对这台机器上的
  * 工作区执行命令。
  *
@@ -16,7 +16,7 @@
  */
 
 import { networkInterfaces } from 'node:os'
-import { encodePairingUrl, type PairingPayload } from '@qywork/core'
+import { encodePairingUrl, type PairingPayload } from '@oph-autoresearch/core'
 
 export class Pairing {
   readonly token: string
@@ -25,7 +25,7 @@ export class Pairing {
   /** `token` 由外部给（桌面端 spawn 时的环境变量），不给就随进程生成一个。 */
   constructor(opts: { token?: string; deviceName?: string } = {}) {
     this.token = opts.token || generateToken()
-    this.deviceName = opts.deviceName ?? 'qywork'
+    this.deviceName = opts.deviceName ?? 'oph-autoresearch'
   }
 
   /**

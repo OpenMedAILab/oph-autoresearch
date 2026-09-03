@@ -28,7 +28,7 @@ import type {
   StopReason,
   ToolActionStatus,
   WorkspaceId,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 
 export const MIGRATIONS: { id: number; name: string; sql: string }[] = [
   {
@@ -187,7 +187,7 @@ CREATE INDEX idx_audit_workspace ON permission_audit(workspace_id, created_at DE
     sql: /* sql */ `
 -- 中间资源登记表。
 --
--- 正文**不在这里**——它在另一个数据库（qywork_content.sqlite3）里，按 content_hash 寻址。
+-- 正文**不在这里**——它在另一个数据库（oph-autoresearch_content.sqlite3）里，按 content_hash 寻址。
 -- 这张表只存定位事实：谁产生的、多大、什么类型、哈希是多少。
 --
 -- 跨库没有外键，所以「blob 存在」这件事由写入顺序保证：
@@ -497,7 +497,7 @@ ALTER TABLE runs DROP COLUMN context_percent;
      * run 记下**是谁在跑它**，启动回收据此跳过仍在运行的那些。
      *
      * **为什么必须有这两列。** `recoverStaleRuns` **不能无差别扫全库的 running/queued**：一台机器上
-     * 可以有好几个进程写同一个账本（两个工作区各一个 sidecar、开发态的热重载、终端里的 `qy exec
+     * 可以有好几个进程写同一个账本（两个工作区各一个 sidecar、开发态的热重载、终端里的 `oph exec
      * `），无差别扫的话**后起的那个进程一启动，就把前一个正在跑的那一轮判成中断**，而那个进程仍在
      * 运行、仍在写入。实测形状：一条跑了 40 步的 run 在第 27 次请求发出后 257 毫秒被判为中断，写
      * 入者是另一个刚起来的进程。

@@ -1,4 +1,4 @@
-import type { TodoItem } from '@qywork/core'
+import type { TodoItem } from '@oph-autoresearch/core'
 import { For, Show } from 'solid-js'
 import { IconCheck, IconSpinner } from './Icons.tsx'
 

@@ -12,8 +12,8 @@
  *   bun run scripts/overflow-recovery.ts
  */
 
-import { buildAdapter, classifyProviderError, ProviderError } from '@qywork/ai'
-import { loadConfig, resolveModel } from '@qywork/runtime'
+import { buildAdapter, classifyProviderError, ProviderError } from '@oph-autoresearch/ai'
+import { loadConfig, resolveModel } from '@oph-autoresearch/runtime'
 
 let failures = 0
 function check(label: string, ok: boolean, detail?: unknown): void {

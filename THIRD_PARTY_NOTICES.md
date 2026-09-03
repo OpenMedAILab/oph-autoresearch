@@ -1,6 +1,6 @@
 # 第三方依赖许可证清单
 
-本文件记录 oph-autoresearch（含 qywork 底座）直接声明的第三方依赖及其许可证，不涉及 OpenMedAILab 新增代码。
+本文件记录 oph-autoresearch 及其第三方框架底座直接声明的依赖与许可证，不涉及 OpenMedAILab 新增代码。
 
 版本以本仓库的 `bun.lock` 与 `apps/desktop/src-tauri/Cargo.lock` 为准；两份锁文件同时固定了下列依赖的传递依赖。发布桌面安装包时，应将本文件随安装包一同提供，并在升级依赖后重新核对。
 
@@ -50,7 +50,7 @@
 
 ## 构建与开发依赖
 
-这些组件用于构建、测试或打包，不作为 qywork 的业务运行时依赖发布。
+这些组件用于构建、测试或打包，不作为 oph-autoresearch 的业务运行时依赖发布。
 
 | 组件 | 锁定版本 | 许可证 |
 | --- | ---: | --- |
@@ -66,5 +66,5 @@
 
 ## 说明
 
-- OpenMedAILab 新增代码见根目录 [MIT 许可证](LICENSE)；导入的 qywork 底座继续遵循 [Apache-2.0](LICENSES/Apache-2.0.txt) 与 [NOTICE](NOTICE)。
+- OpenMedAILab 新增代码见根目录 [MIT 许可证](LICENSE)；导入的第三方框架代码继续遵循 [Apache-2.0](LICENSES/Apache-2.0.txt) 与 [NOTICE](NOTICE)。
 - 每项组件仍按其上游许可证授权；完整依赖图与精确版本见 `bun.lock` 和 `apps/desktop/src-tauri/Cargo.lock`。

@@ -1,5 +1,5 @@
 {
-  "name": "@qywork/store",
+  "name": "@oph-autoresearch/store",
   "version": "0.1.8",
   "private": true,
   "type": "module",
@@ -7,6 +7,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@qywork/core": "workspace:*"
+    "@oph-autoresearch/core": "workspace:*"
   }
 }

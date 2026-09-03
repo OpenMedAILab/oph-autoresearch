@@ -1,5 +1,5 @@
 {
-  "name": "@qywork/ai",
+  "name": "@oph-autoresearch/ai",
   "version": "0.1.8",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
-    "@qywork/core": "workspace:*",
+    "@oph-autoresearch/core": "workspace:*",
     "openai": "^6.9.0"
   }
 }

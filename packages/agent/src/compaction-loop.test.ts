@@ -11,9 +11,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import type { ChatRequest, LlmAdapter, ProviderEvent, WireMessage } from '@qywork/ai'
-import { classifyProviderError, DEFAULT_DENSITY, lookupModel } from '@qywork/ai'
-import type { AgentEvent } from '@qywork/core'
+import type { ChatRequest, LlmAdapter, ProviderEvent, WireMessage } from '@oph-autoresearch/ai'
+import { classifyProviderError, DEFAULT_DENSITY, lookupModel } from '@oph-autoresearch/ai'
+import type { AgentEvent } from '@oph-autoresearch/core'
 import {
   createConversation,
   createRun,
@@ -23,7 +23,7 @@ import {
   Store,
   settleProviderRequest,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import type { CompactionOutcome } from './compaction.ts'
 import { stepStamp } from './compaction.ts'
 import type { CompactionPort, CompactionRunInput, LoopPersistence, ToolContext } from './index.ts'

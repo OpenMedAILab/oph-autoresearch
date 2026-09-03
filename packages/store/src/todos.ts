@@ -13,7 +13,7 @@
  * 账本记的就是这个字符串，改工具名要连同迁移一起改，与这里同步。
  */
 
-import type { ConversationId, TodoItem } from '@qywork/core'
+import type { ConversationId, TodoItem } from '@oph-autoresearch/core'
 import type { Store } from './db.ts'
 
 /**

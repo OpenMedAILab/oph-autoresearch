@@ -5,11 +5,11 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { CompactionRunInput, Summarizer } from '@qywork/agent'
-import { softLimit } from '@qywork/agent'
-import type { WireMessage } from '@qywork/ai'
-import { DEFAULT_DENSITY, estimateMessages } from '@qywork/ai'
-import type { MessageId } from '@qywork/core'
+import type { CompactionRunInput, Summarizer } from '@oph-autoresearch/agent'
+import { softLimit } from '@oph-autoresearch/agent'
+import type { WireMessage } from '@oph-autoresearch/ai'
+import { DEFAULT_DENSITY, estimateMessages } from '@oph-autoresearch/ai'
+import type { MessageId } from '@oph-autoresearch/core'
 import {
   appendMessage,
   appendStep,
@@ -19,7 +19,7 @@ import {
   Store,
   settleToolStep,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { RuntimeCompaction } from './compaction.ts'
 import { buildHistory } from './transcript.ts'
 

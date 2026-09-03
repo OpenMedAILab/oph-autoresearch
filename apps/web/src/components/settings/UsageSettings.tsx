@@ -1,5 +1,5 @@
-import type { UsageResponse, UsageTotals } from '@qywork/core'
-import { formatCosts } from '@qywork/core'
+import type { UsageResponse, UsageTotals } from '@oph-autoresearch/core'
+import { formatCosts } from '@oph-autoresearch/core'
 import { createResource, createSignal, For, Show } from 'solid-js'
 import { loaded } from '../../lib/resource.ts'
 import { compact } from '../../lib/step-view.ts'

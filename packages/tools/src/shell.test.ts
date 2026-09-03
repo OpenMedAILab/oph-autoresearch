@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { ToolContext } from '@qywork/agent'
+import type { ToolContext } from '@oph-autoresearch/agent'
 import { makeShellTool } from './shell.ts'
 
 const shell = { path: 'unused', argv: [], hint: '测试 shell。' }

@@ -10,9 +10,9 @@
  * 这个产品只有 `auto` / `full` 两档，没有「逐次询问」那一档。
  */
 
-import type { ConversationId, FollowUp, RunId } from '@qywork/core'
-import type { Store } from '@qywork/store'
-import { listConversations } from '@qywork/store'
+import type { ConversationId, FollowUp, RunId } from '@oph-autoresearch/core'
+import type { Store } from '@oph-autoresearch/store'
+import { listConversations } from '@oph-autoresearch/store'
 import type { EventBus } from './bus.ts'
 
 export interface ActiveRun {

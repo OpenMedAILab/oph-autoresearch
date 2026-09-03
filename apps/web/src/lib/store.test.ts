@@ -5,7 +5,7 @@
  * 出现在响应里）不在这里测：那些要么已由端到端实测覆盖，要么该由服务端测试锁，
  * 搬进单测只会变成测桩。
  *
- * **为什么要先补几个浏览器全局。** `store.ts` 顶层 `new QyClient(...)`，而 `QyClient` 有个**字段初
+ * **为什么要先补几个浏览器全局。** `store.ts` 顶层 `new OphClient(...)`，而 `OphClient` 有个**字段初
  * 始化器** `private readonly endpoint = resolveEndpoint()`——构造函数体是空的，但字段在实例化时就
  * 跑，它要读 `location` / `sessionStorage` / `matchMedia`。所以这里先把这几样补上再动态 import，而
  * 不是去改产品代码加 `typeof location === 'undefined'` 的判断：那种判断只为测试存在，生产路径上永
@@ -258,7 +258,7 @@ describe('面板宽度：拖出来的数照原样记住', () => {
     // 窗口再变宽就还给用户。反过来抹掉它，等于拿一次临时的窗口尺寸改用户的设置。
     resizePanel(1632)
     expect(panelWidth()).toBe(1632)
-    expect(stored.get('qywork.panelWidth')).toBe('1632')
+    expect(stored.get('oph-autoresearch.panelWidth')).toBe('1632')
   })
 })
 

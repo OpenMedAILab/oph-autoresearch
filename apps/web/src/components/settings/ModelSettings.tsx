@@ -1,4 +1,4 @@
-import { PROVIDER_KINDS, type ProviderKind } from '@qywork/core'
+import { PROVIDER_KINDS, type ProviderKind } from '@oph-autoresearch/core'
 import { createSignal, For, Show } from 'solid-js'
 import {
   ensureModelCatalog,
@@ -29,7 +29,7 @@ import { Field, Row } from './Row.tsx'
  * 下拉里显示的短名。**底层值不动**——它直指端点（`/v1/chat/completions`），
  * 而官方的 `completions` 是另一个已弃用的补全接口，短名只在界面上用。
  *
- * 词表本身在 `@qywork/core`：配置、协议、界面三方都要说它，抄一份到这里就会漂，
+ * 词表本身在 `@oph-autoresearch/core`：配置、协议、界面三方都要说它，抄一份到这里就会漂，
  * 漂出来的形状是下拉里多一个端点不认的值。
  */
 const KIND_LABEL: Record<ProviderKind, string> = {

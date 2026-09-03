@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { ToolContext } from '@qywork/agent'
-import { sanitizeToolName, ToolRegistry } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { sanitizeToolName, ToolRegistry } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { registerBuiltinTools } from './index.ts'
 import {
   displayPath,
@@ -21,7 +21,7 @@ import { startCommandRunner } from './runner.ts'
 import { BASH_PATH_ENV, commandShell, setCommandRunner } from './sandbox.ts'
 
 async function workspace(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'qywork-test-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-test-'))
   await writeFile(join(dir, 'a.txt'), 'hello\nworld\n', 'utf8')
   await mkdir(join(dir, 'src'), { recursive: true })
   await writeFile(join(dir, 'src', 'main.ts'), 'export const answer = 42\n', 'utf8')
@@ -60,7 +60,7 @@ test('内置工具名全部符合 provider 约束', () => {
 /**
  * 在「这台机器没有 bash」的状态里跑一段。
  *
- * 用 `QYWORK_BASH_PATH` 指到一个不存在的位置来制造这个状态——那是探测的第一顺位，
+ * 用 `OPH_AUTORESEARCH_BASH_PATH` 指到一个不存在的位置来制造这个状态——那是探测的第一顺位，
  * 所以它同时验了两件事：**指错即无**，以及**探测是每次现跑的**（缓存的话这里拿到的
  * 还是上一轮的结果）。
  *
@@ -70,7 +70,7 @@ test('内置工具名全部符合 provider 约束', () => {
  */
 async function withoutBash<T>(fn: () => T | Promise<T>): Promise<T> {
   const prev = process.env[BASH_PATH_ENV]
-  process.env[BASH_PATH_ENV] = join(tmpdir(), 'qywork-there-is-no-bash-here')
+  process.env[BASH_PATH_ENV] = join(tmpdir(), 'oph-autoresearch-there-is-no-bash-here')
   try {
     return await fn()
   } finally {
@@ -123,13 +123,13 @@ describe('越界拒绝是判定，不是崩溃', () => {
  *
  * 原始失败形状（会话 `cv_0msw3jst9`）：用户开着完全访问，`read_file` 桌面上的
  * 项目被路径层拒，而同一个模式下 `run_command` 是全放行的——模型因此
- * `cd /c/Users/.../qywork && head -c 6000 README.md` 读到了同一个文件，
+ * `cd /c/Users/.../oph-autoresearch && head -c 6000 README.md` 读到了同一个文件，
  * 全程没告诉用户。只放开权限闸、留着路径层，得到的不是更安全，是两套账。
  */
 describe('完全访问：路径边界跟着一起放开', () => {
   test('工作区外的绝对路径照读', async () => {
     const root = await workspace()
-    const outside = await mkdtemp(join(tmpdir(), 'qywork-outside-'))
+    const outside = await mkdtemp(join(tmpdir(), 'oph-autoresearch-outside-'))
     await writeFile(join(outside, 'note.md'), '界外的正文\n', 'utf8')
 
     // 走 `rootsOf`，一并覆盖 ToolContext 的 `unrestrictedPaths` → 根目录清单那一跳。
@@ -190,7 +190,7 @@ describe('路径约束', () => {
 
   test('拒绝指向工作区外的符号链接', async () => {
     const root = await workspace()
-    const outside = await mkdtemp(join(tmpdir(), 'qywork-outside-'))
+    const outside = await mkdtemp(join(tmpdir(), 'oph-autoresearch-outside-'))
     await writeFile(join(outside, 'secret.txt'), 'nope', 'utf8')
     try {
       await symlink(outside, join(root, 'link'))
@@ -212,7 +212,7 @@ describe('路径约束', () => {
 describe('额外根目录', () => {
   async function withExtra(): Promise<{ root: string; extra: string }> {
     const root = await workspace()
-    const extra = await mkdtemp(join(tmpdir(), 'qywork-extra-'))
+    const extra = await mkdtemp(join(tmpdir(), 'oph-autoresearch-extra-'))
     await writeFile(join(extra, 'notes.md'), '# notes\n', 'utf8')
     return { root, extra }
   }
@@ -229,7 +229,7 @@ describe('额外根目录', () => {
   test('清单**外**的路径仍然拒绝', async () => {
     // 这条是整个特性的反向对照：加了额外目录不等于边界没了。
     const { root, extra } = await withExtra()
-    const other = await mkdtemp(join(tmpdir(), 'qywork-other-'))
+    const other = await mkdtemp(join(tmpdir(), 'oph-autoresearch-other-'))
     await expect(
       resolveInWorkspace({ workspaceRoot: root, additional: [extra] }, join(other, 'x.txt')),
     ).rejects.toBeInstanceOf(PathEscapeError)
@@ -263,7 +263,7 @@ describe('额外根目录', () => {
     // 只按字面比较的话，额外目录里一个指向别处的软链能把整棵树带出来。
     // 额外根目录必须走与工作区**完全相同**的 realpath 判定。
     const { root, extra } = await withExtra()
-    const outside = await mkdtemp(join(tmpdir(), 'qywork-escape-'))
+    const outside = await mkdtemp(join(tmpdir(), 'oph-autoresearch-escape-'))
     await writeFile(join(outside, 'secret.txt'), 'nope', 'utf8')
     try {
       await symlink(outside, join(extra, 'link'))
@@ -283,16 +283,19 @@ describe('额外根目录', () => {
 
   test('额外目录不存在时只是不生效，不会让整次解析抛错', async () => {
     const { root } = await withExtra()
-    const roots = { workspaceRoot: root, additional: [join(tmpdir(), 'qywork-not-here-at-all')] }
+    const roots = {
+      workspaceRoot: root,
+      additional: [join(tmpdir(), 'oph-autoresearch-not-here-at-all')],
+    }
     await expect(resolveInWorkspace(roots, 'a.txt', { mustExist: true })).resolves.toContain(
       'a.txt',
     )
   })
 
-  test('工作区的 .qy / .agents 保护不受额外目录影响', async () => {
+  test('工作区的 .oph / .agents 保护不受额外目录影响', async () => {
     const { root, extra } = await withExtra()
     await expect(
-      resolveWritablePath({ workspaceRoot: root, additional: [extra] }, '.qy/team.json'),
+      resolveWritablePath({ workspaceRoot: root, additional: [extra] }, '.oph/team.json'),
     ).rejects.toThrow(/权限|扩展配置/)
     await expect(
       resolveWritablePath({ workspaceRoot: root, additional: [extra] }, '.agents/mcp.json'),
@@ -731,10 +734,10 @@ describe('搜索与命令', () => {
     // 非 bash 的语法提示必须自己否掉 bash，否则模型照 POSIX 写。
     expect(shell.hint).toContain('不是 bash')
     const out = await withoutBash(() =>
-      registry().execute('run_command', { command: 'echo qywork-shell-ok' }, ctx(root)),
+      registry().execute('run_command', { command: 'echo oph-autoresearch-shell-ok' }, ctx(root)),
     )
     expect(out.status).toBe('success')
-    expect(String(out.data?.stdout)).toContain('qywork-shell-ok')
+    expect(String(out.data?.stdout)).toContain('oph-autoresearch-shell-ok')
   }, 20_000)
 
   /**
@@ -803,7 +806,7 @@ describe('搜索与命令', () => {
   /**
    * 同一件事在 **runner 路径**上也要成立——那才是产品实际走的那条。
    *
-   * `qy serve` 的命令一律由 runner 代跑（它是那个「先于监听端口出生」的父进程），
+   * `oph serve` 的命令一律由 runner 代跑（它是那个「先于监听端口出生」的父进程），
    * 上一条测的却是直接 spawn。两条路的差别恰好落在这句话上：runner 那侧一旦在
    * 收到退出码时就把流关掉，读端立刻拿到 EOF，`backgroundHeld` 恒为 false——
    * 因此这句提示在真正跑着的产品里一次也发不出来，而两条路的测试都是绿的。
@@ -933,7 +936,7 @@ describe('probe_url', () => {
     registry().execute('run_command', { command, probe_url, timeout_ms }, ctx(root))
 
   /**
-   * **只准回环。** `web_fetch` 那条路刻意挡掉本机（127.0.0.1 后面可能是 qy
+   * **只准回环。** `web_fetch` 那条路刻意挡掉本机（127.0.0.1 后面可能是 oph
    * 自己的 API），这条方向相反、边界也相反。放宽一点它就是第二条出网通道。
    */
   test('非回环地址一律拒绝，且不起进程', async () => {
@@ -1022,10 +1025,10 @@ describe('probe_url', () => {
 })
 
 /**
- * `.qy/` 与 `.agents/` 的写保护。
+ * `.oph/` 与 `.agents/` 的写保护。
  *
  * 这一条挡的不是越权，是**自我提权**：`.agents/mcp.json` 决定模型能拿到哪些
- * 工具，`.qy/team.json` 决定派活前哪些角色要人点头。模型完全合法地能写工作区内的
+ * 工具，`.oph/team.json` 决定派活前哪些角色要人点头。模型完全合法地能写工作区内的
  * 文件，因此它可以通过写一个自己有权限写的文件，给自己加工具。
  *
  * **判据是「会不会给自己加工具」**：技能与记忆同在 `.agents/` 下却不在墙内——
@@ -1037,9 +1040,9 @@ describe('probe_url', () => {
  * `run_command` 全放行，只拦文件工具就是两套账。
  */
 describe('受保护目录', () => {
-  test('.qy 下的写入被拒，且理由说清是为什么', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-protected-'))
-    await expect(resolveWritablePath(dir, '.qy/team.json')).rejects.toThrow(/权限|扩展配置/)
+  test('.oph 下的写入被拒，且理由说清是为什么', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'oph-protected-'))
+    await expect(resolveWritablePath(dir, '.oph/team.json')).rejects.toThrow(/权限|扩展配置/)
   })
 
   /*
@@ -1047,7 +1050,7 @@ describe('受保护目录', () => {
    * 不搬的话这条防线就只剩一个空目录名——而空目录名看起来和防线一模一样。
    */
   test('会加工具的那一条被拒：mcp.json', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-protected-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-protected-'))
     await expect(resolveWritablePath(dir, '.agents/mcp.json')).rejects.toThrow(/权限|扩展配置/)
   })
 
@@ -1057,27 +1060,27 @@ describe('受保护目录', () => {
    * 技能是提示词，不给任何新能力，本来就不该在墙内。
    */
   test('技能与记忆不在墙内 —— 它们不给新能力', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-protected-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-protected-'))
     await expect(resolveWritablePath(dir, '.agents/skills/发版/SKILL.md')).resolves.toContain(
       'SKILL.md',
     )
     await expect(resolveWritablePath(dir, '.agents/memory/x.md')).resolves.toContain('x.md')
   })
 
-  /** 逐段比而不是字符串前缀：`.qyX` 不在 `.qy` 目录下。 */
+  /** 逐段比而不是字符串前缀：`.ophX` 不在 `.oph` 目录下。 */
   test('名字撞了前缀的目录不受牵连', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-protected-'))
-    await expect(resolveWritablePath(dir, '.qyX/a.md')).resolves.toContain('a.md')
+    const dir = await mkdtemp(join(tmpdir(), 'oph-protected-'))
+    await expect(resolveWritablePath(dir, '.ophX/a.md')).resolves.toContain('a.md')
   })
 
   /** 绕过尝试：`..` 回绕、大小写、分隔符混用。判定基于已解析的绝对路径，都该挡住。 */
   test('绕不过去', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-protected-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-protected-'))
     const backslash = String.fromCharCode(92)
     const attempts = [
-      './.qy/x.json',
-      'sub/../.qy/x.json',
-      `.qy${backslash}x.json`,
+      './.oph/x.json',
+      'sub/../.oph/x.json',
+      `.oph${backslash}x.json`,
       './.agents/mcp.json',
       'sub/../.agents/mcp.json',
       `.agents${backslash}mcp.json`,
@@ -1088,18 +1091,18 @@ describe('受保护目录', () => {
   })
 
   test('工作区里其它地方照常能写', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-protected-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-protected-'))
     await expect(resolveWritablePath(dir, 'src/a.ts')).resolves.toContain('a.ts')
-    // 名字里带 .qy 但不是那个目录的，不能误伤。
-    await expect(resolveWritablePath(dir, '.qyx/a.ts')).resolves.toContain('a.ts')
-    await expect(resolveWritablePath(dir, 'docs/.qy.md')).resolves.toContain('.qy.md')
+    // 名字里带 .oph 但不是那个目录的，不能误伤。
+    await expect(resolveWritablePath(dir, '.ophx/a.ts')).resolves.toContain('a.ts')
+    await expect(resolveWritablePath(dir, 'docs/.oph.md')).resolves.toContain('.oph.md')
     await expect(resolveWritablePath(dir, '.agentsx/a.ts')).resolves.toContain('a.ts')
   })
 
   /** 读不受限制：模型需要能看懂现有配置才能给出合理建议，看不等于改。 */
   test('只挡写，不挡读', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qy-protected-'))
-    expect(isProtectedPath(dir, join(dir, '.qy', 'team.json'))).toBe(true)
+    const dir = await mkdtemp(join(tmpdir(), 'oph-protected-'))
+    expect(isProtectedPath(dir, join(dir, '.oph', 'team.json'))).toBe(true)
     expect(isProtectedPath(dir, join(dir, '.agents', 'mcp.json'))).toBe(true)
     expect(isProtectedPath(dir, join(dir, 'src', 'a.ts'))).toBe(false)
   })
@@ -1137,8 +1140,8 @@ describe('写路径的软链边界', () => {
    * 那才是「写新文件」这条路上真正的破口。
    */
   test.skipIf(process.platform === 'win32')('指向界外的软链（含悬挂）不能写进去', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qy-ws-'))
-    const outside = await mkdtemp(join(tmpdir(), 'qy-out-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-ws-'))
+    const outside = await mkdtemp(join(tmpdir(), 'oph-out-'))
 
     // 1. 悬挂软链：目标尚不存在，realpath 会失败，但写入照样跟随它。
     await symlink(join(outside, '还不存在.txt'), join(root, 'dangling'))
@@ -1156,8 +1159,8 @@ describe('写路径的软链边界', () => {
 
   /** Windows 无开发者模式时不能创建文件软链；目录 junction 不需要该权限，覆盖同一条越界。 */
   test.skipIf(process.platform !== 'win32')('Windows 目录 junction 不能越过工作区', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qy-ws-'))
-    const outside = await mkdtemp(join(tmpdir(), 'qy-out-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-ws-'))
+    const outside = await mkdtemp(join(tmpdir(), 'oph-out-'))
 
     await symlink(outside, join(root, 'dir'), 'junction')
     expect(resolveInWorkspace(root, 'dir/新文件.txt')).rejects.toThrow(PathEscapeError)
@@ -1165,7 +1168,7 @@ describe('写路径的软链边界', () => {
 
   /** 别拒过头：工作区内还不存在的新文件必须照常解析得出来。 */
   test('工作区内的新文件正常放行，且返回解析后的路径', async () => {
-    const root = await realpath(await mkdtemp(join(tmpdir(), 'qy-ws-')))
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'oph-ws-')))
     const abs = await resolveInWorkspace(root, '子目录/新文件.txt')
     expect(abs).toBe(join(root, '子目录', '新文件.txt'))
   })
@@ -1177,7 +1180,7 @@ describe('写路径的软链边界', () => {
    * 覆盖已存在的文件被恒定拒绝（macOS 的 /tmp → /private/tmp 就是这个形状）。
    */
   test('读路径与写路径解析出同一个绝对路径', async () => {
-    const root = await realpath(await mkdtemp(join(tmpdir(), 'qy-ws-')))
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'oph-ws-')))
     await writeFile(join(root, 'a.txt'), 'hi', 'utf8')
     const read = await resolveInWorkspace(root, 'a.txt', { mustExist: true })
     const write = await resolveInWorkspace(root, 'a.txt')
@@ -1216,7 +1219,7 @@ describe('grep 的单条上界', () => {
   }
 
   test('压缩过的一整行不会整段进上下文，两条引擎同一个上界', async () => {
-    const root = await realpath(await mkdtemp(join(tmpdir(), 'qy-grep-')))
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'oph-grep-')))
     await writeFile(join(root, 'vendor.min.js'), MINIFIED, 'utf8')
 
     const { viaRg, viaBuiltin } = await bothEngines(root)
@@ -1249,7 +1252,7 @@ describe('grep 的单条上界', () => {
  */
 describe('grep 计入投递预算', () => {
   test('超出预算时少给几条并标 truncated，不是失败', async () => {
-    const root = await realpath(await mkdtemp(join(tmpdir(), 'qy-grep-budget-')))
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'oph-grep-budget-')))
     // 每行都命中、每行都吃满单条上界，堆到远超预算。
     const line = `bug ${'y'.repeat(500)}`
     await writeFile(join(root, 'noisy.txt'), Array.from({ length: 200 }, () => line).join('\n'))
@@ -1268,7 +1271,7 @@ describe('grep 计入投递预算', () => {
 
   /** 正常体量的搜索不受影响——预算只在真的越界时才动手。 */
   test('装得下时一条不少，也不标截断', async () => {
-    const root = await realpath(await mkdtemp(join(tmpdir(), 'qy-grep-small-')))
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'oph-grep-small-')))
     await writeFile(join(root, 'a.txt'), 'bug one\nbug two\nbug three\n')
 
     const { grepTool } = await import('./search.ts')
@@ -1301,7 +1304,7 @@ describe('read_file 认图片', () => {
    * 取不回来了。捕获只能发生在观察的那一刻。
    */
   test('返回字节，不返回路径', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-img-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-img-'))
     await writeFile(join(root, 'a.png'), PNG)
     const out = await registry().execute('read_file', { path: 'a.png' }, ctx(root))
     expect(out.status).toBe('success')
@@ -1324,7 +1327,7 @@ describe('read_file 认图片', () => {
    * `null` 是「厂商规格页没写」，照常读（判据只认 `false`）。
    */
   test('模型不收图片：不读字节，失败信息带下一步', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-img3-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-img3-'))
     await writeFile(join(root, 'a.png'), PNG)
 
     const out = await registry().execute(
@@ -1355,7 +1358,7 @@ describe('read_file 认图片', () => {
    * 而分段读一个二进制文件走不通，模型只能反复试。判据取内容不取扩展名。
    */
   test('读视频：报「不是文本」而不是「分段读取」', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-mp4-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-mp4-'))
     // 前 4 KB 里有 NUL 就够判：真 mp4 的头部一定有。
     const head = Buffer.concat([Buffer.from('    ftypisom'), Buffer.alloc(4096)])
     await writeFile(join(root, 'clip.mp4'), Buffer.concat([head, Buffer.alloc(2 * 1024 * 1024)]))
@@ -1374,7 +1377,7 @@ describe('read_file 认图片', () => {
    * 而那对一张图既做不到也没意义。
    */
   test('大图报的是图片的错，不是「分段读取」', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-img2-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-img2-'))
     await writeFile(join(root, 'big.png'), Buffer.concat([PNG, Buffer.alloc(2 * 1024 * 1024)]))
     const out = await registry().execute('read_file', { path: 'big.png' }, ctx(root))
     expect(out.status).toBe('success')
@@ -1388,7 +1391,7 @@ describe('read_file 认图片', () => {
    * 「已存在但没读取过。先 read_file 再覆盖」——**而模型照做也永远过不去**。
    */
   test('读过的图片能被 write_file 覆盖', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-img3-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-img3-'))
     await writeFile(join(root, 'c.png'), PNG)
     const r = registry()
     const c = ctx(root)

@@ -14,11 +14,11 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { QyConfig } from '@qywork/runtime'
+import type { OphConfig } from '@oph-autoresearch/runtime'
 import { handleConfigApi, mergeConfig, type RedactedConfig, redactConfig } from './config.ts'
 import type { ApiDeps } from './types.ts'
 
-const cfg = (): QyConfig => ({
+const cfg = (): OphConfig => ({
   active: { provider: 'main', model: 'claude-opus-5' },
   providers: {
     main: {
@@ -62,7 +62,7 @@ describe('脱敏', () => {
 })
 
 describe('回填', () => {
-  const roundTrip = (mutate: (r: RedactedConfig) => void): QyConfig => {
+  const roundTrip = (mutate: (r: RedactedConfig) => void): OphConfig => {
     const current = cfg()
     const wire = redactConfig(current)
     mutate(wire)
@@ -139,10 +139,10 @@ describe('回填', () => {
   /**
    * **界面认识的字段，比配置里真实存在的字段少。**
    *
-   * `apps/web` 够不着 `@qywork/runtime`（层级不允许），所以那边手抄了一份
+   * `apps/web` 够不着 `@oph-autoresearch/runtime`（层级不允许），所以那边手抄了一份
    * `RedactedConfig`。抄的那份现在就少一个 `sandboxNetwork`——它只在 CLI 里配。
    *
-   * 因此失败形状是：用户 `qy config` 设了 `sandboxNetwork: 'deny'`，
+   * 因此失败形状是：用户 `oph config` 设了 `sandboxNetwork: 'deny'`，
    * 然后打开设置页改个模型保存，那一项被抹掉。**保存那一刻毫无反馈**，
    * 而它是条安全设置，等发现时已经跑过若干条不受限的命令。
    *
@@ -151,7 +151,7 @@ describe('回填', () => {
    * 改成逐字段赋值就当场坏。这条测试钉的就是它。
    */
   test('客户端不认识的顶层字段不会被抹掉', () => {
-    const current: QyConfig = { ...cfg(), sandboxNetwork: 'deny', envAllowList: ['GITHUB_TOKEN'] }
+    const current: OphConfig = { ...cfg(), sandboxNetwork: 'deny', envAllowList: ['GITHUB_TOKEN'] }
     // 模拟界面：把服务端回的那份按自己认识的字段重建一遍，多余的键丢掉。
     const wire = redactConfig(current)
     const asClientSeesIt = {
@@ -188,13 +188,13 @@ describe('读盘时机', () => {
    * 进程外改过的配置，不能被下一次保存整份盖掉。
    *
    * 形状是这样的：保存走「读回整份 → 改一格 → 整份写回」，所以 GET 回什么，
-   * 下一次 PUT 就把什么写进文件。GET 回启动时那份的话，`qy probe` 落下的校准
+   * 下一次 PUT 就把什么写进文件。GET 回启动时那份的话，`oph probe` 落下的校准
    * 结果、手编的 JSON、另一个实例写的改动，都会在用户改一格设置时消失。
    */
   test('每次 GET 都按文件回答，进程里那份跟着换', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'qy-cfg-'))
-    const prev = process.env.QYWORK_HOME
-    process.env.QYWORK_HOME = home
+    const home = await mkdtemp(join(tmpdir(), 'oph-cfg-'))
+    const prev = process.env.OPH_AUTORESEARCH_HOME
+    process.env.OPH_AUTORESEARCH_HOME = home
     const write = (kind: string) =>
       writeFile(
         join(home, 'config.json'),
@@ -215,8 +215,8 @@ describe('读盘时机', () => {
       expect((await get(d)).config.providers.main?.kind).toBe('openai_responses')
       expect(d.config.providers.main?.kind).toBe('openai_responses')
     } finally {
-      if (prev === undefined) delete process.env.QYWORK_HOME
-      else process.env.QYWORK_HOME = prev
+      if (prev === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+      else process.env.OPH_AUTORESEARCH_HOME = prev
     }
   })
 })

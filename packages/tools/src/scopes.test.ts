@@ -18,7 +18,7 @@ import { scanAllSkills, scanSkills } from './skills.ts'
 const dirs: string[] = []
 
 async function tmp(): Promise<string> {
-  const d = await mkdtemp(join(tmpdir(), 'qywork-scope-'))
+  const d = await mkdtemp(join(tmpdir(), 'oph-autoresearch-scope-'))
   dirs.push(d)
   return d
 }
@@ -47,16 +47,16 @@ async function writeSkill(root: string, dir: string, name: string, desc: string)
 }
 
 describe('三层的根', () => {
-  test('项目层是工作区的 .agents/，全局层跟着 QYWORK_HOME 走', () => {
-    const before = process.env.QYWORK_HOME
-    process.env.QYWORK_HOME = 'C:/fake-home'
+  test('项目层是工作区的 .agents/，全局层跟着 OPH_AUTORESEARCH_HOME 走', () => {
+    const before = process.env.OPH_AUTORESEARCH_HOME
+    process.env.OPH_AUTORESEARCH_HOME = 'C:/fake-home'
     try {
       const r = scopeRoots('C:/ws')
       expect(r.project.replace(/\\/g, '/')).toBe('C:/ws/.agents')
       expect(r.global).toBe('C:/fake-home')
     } finally {
-      if (before === undefined) delete process.env.QYWORK_HOME
-      else process.env.QYWORK_HOME = before
+      if (before === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+      else process.env.OPH_AUTORESEARCH_HOME = before
     }
   })
 

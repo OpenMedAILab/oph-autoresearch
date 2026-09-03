@@ -151,8 +151,8 @@ export default function McpSettings() {
                           就是一个查不出原因的现象。 */}
                           <Show when={s.unsupported.length > 0}>
                             <div class="entry-extra bad">
-                              这个 server 还声明了 {s.unsupported.join(' / ')}，qywork 没有实现，
-                              它们不会生效
+                              这个 server 还声明了 {s.unsupported.join(' / ')}，oph-autoresearch
+                              没有实现， 它们不会生效
                             </div>
                           </Show>
                         </EntryCard>

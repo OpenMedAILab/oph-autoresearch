@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import type { SinkPort, ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { SinkPort, ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { readResourceTool } from './resources.ts'
 
 const enc = new TextEncoder()

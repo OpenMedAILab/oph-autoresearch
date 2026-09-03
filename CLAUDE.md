@@ -1,4 +1,4 @@
-# CLAUDE.md — qywork 开发规则
+# CLAUDE.md — oph-autoresearch 开发规则
 
 按你现在在干什么找：**写方案 → A · 写代码 → B · 判断做完没 → C · 写文档和记忆 → D · 碰安全边界 → E**。
 F 是明确不采纳的，写出来是为了不被重新抄进来。
@@ -436,11 +436,11 @@ bun run gate
 
 ## D3　记忆分两层
 
-- **只跟 qywork 这份代码有关的** → `.claude/memory/`，每条一个文件 + `MEMORY.md` 索引。
+- **只跟 oph-autoresearch 这份代码有关的** → `.claude/memory/`，每条一个文件 + `MEMORY.md` 索引。
 - **整台机器都成立的**（Windows 编码陷阱、Playwright 不可用、npm shim）
   和**跨项目工作偏好** → 全局 `~/.claude/projects/.../memory/`。
 
-分界理由：这台机器上还跑着别的仓库，机器级陷阱写进 qywork 等于让那边重踩一遍。
+分界理由：这台机器上还跑着别的仓库，机器级陷阱写进 oph-autoresearch 等于让那边重踩一遍。
 写新记忆前先读对应 `MEMORY.md`。记忆是线索不是结论，适用 A5。
 
 ## D4　回复短、单线
@@ -471,7 +471,7 @@ bun run gate
   加新边界前先问「shell 那侧拦不拦得住同一件事」——只拦得住一侧的边界不是边界，
   是给模型指了条绕路。
 - **凭证剥离与模式无关。** `scrubEnv` 两种模式一视同仁——它不是裁决，
-  是「明文 key 不进子进程」这条事实。`~/.qywork/`（明文 key、权限模式、会话历史）
+  是「明文 key 不进子进程」这条事实。`~/.oph-autoresearch/`（明文 key、权限模式、会话历史）
   在 `auto` 下由「工作区外路径」与「凭证文件」两条硬规则挡着；`full` 下不挡，
   那是这个模式的定义。
 - **工作区里的 `.agents/` 在 `auto` 下由文件工具拦，shell 有意不拦**：
@@ -480,7 +480,7 @@ bun run gate
   （模型手里已有 `run_command`，MCP server 本身就是它能直接启动的进程，
   给自己加个工具没有获得新能力），而 `.agents/memory/` 本来就该由 `memory` 工具写，
   shell 拦就是两套账。`full` 下这一层同样不设，理由同上。
-  它与 `~/.qywork/` 名字像，位置和含义完全不同，别混。
+  它与 `~/.oph-autoresearch/` 名字像，位置和含义完全不同，别混。
 
 ---
 
@@ -496,6 +496,6 @@ bun run gate
 - **「禁止跑全量测试，只测影响范围」**——那是给跑一次很久的大仓定的。
   本仓全量是秒级，圈范围只会漏跨包回归，收益是负的。见 C2。
 - **「一切只在 master 直接提交、禁开分支」**——那来自并行会话很密的场景，
-  qywork 没有这个约束，按常规做法走。
+  oph-autoresearch 没有这个约束，按常规做法走。
 - 但**「带 pathspec 点名提交、禁止 `git add -A`」值得采纳**：
   不带 pathspec 的 `commit` 提交的是整个 index，会卷走并行会话暂存的内容。

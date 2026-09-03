@@ -1,12 +1,12 @@
 /**
- * `@qywork/tools` 的对外面。**这里列的就是承诺，没列的就是内部实现。**
+ * `@oph-autoresearch/tools` 的对外面。**这里列的就是承诺，没列的就是内部实现。**
  * 具名导出，不用 `export *`（B6）：后者会把 `buildBwrapArgv`、`parseFrontmatter`、
  * `clampBody` 这类纯内部符号一并推出包边界。加一行之前先确认它真有包外调用点（B3）。
  *
  * 包内互相引用与测试走相对路径，不受这份清单约束。
  */
 
-import type { ToolRegistry } from '@qywork/agent'
+import type { ToolRegistry } from '@oph-autoresearch/agent'
 import { editFileTool, listDirTool, readFileTool, writeFileTool } from './files.ts'
 import { readGoalTool, updateGoalTool } from './goals.ts'
 import { moveMcpServerTool, writeMcpServerTool } from './mcp-config.ts'
@@ -40,7 +40,7 @@ export {
   PROTECTED_DIRS,
   resolveInWorkspace,
 } from './paths.ts'
-// 命令跑在一个「先于监听端口出生」的子进程里。`qy serve` 绑端口前起它，
+// 命令跑在一个「先于监听端口出生」的子进程里。`oph serve` 绑端口前起它，
 // 隐藏的 `runner` 子命令是它那一侧的入口。
 export {
   type CommandRunner,

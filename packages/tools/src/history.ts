@@ -21,7 +21,7 @@ import {
   type ToolContext,
   type ToolOutcome,
   type ToolSpec,
-} from '@qywork/agent'
+} from '@oph-autoresearch/agent'
 
 /** 一次搜索最多回多少条命中。再多模型也读不完，只会把预算烧光。 */
 const MAX_HITS = 40

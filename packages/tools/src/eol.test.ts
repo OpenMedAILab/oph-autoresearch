@@ -9,9 +9,9 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ToolContext } from '@qywork/agent'
-import { ToolRegistry } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { ToolRegistry } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { dominantEol, eolInsensitivePattern, fromLf, toLf } from './eol.ts'
 import { registerBuiltinTools } from './index.ts'
 
@@ -42,7 +42,7 @@ function registry(): ToolRegistry {
 const CRLF_SRC = ['const a = 1', 'const b = 2', 'const c = 3', ''].join('\r\n')
 
 async function crlfWorkspace(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'qywork-eol-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-eol-'))
   await writeFile(join(dir, 'crlf.ts'), CRLF_SRC, 'utf8')
   return dir
 }

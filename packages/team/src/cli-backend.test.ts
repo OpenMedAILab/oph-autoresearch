@@ -83,7 +83,7 @@ const run = (agent: CliAgent, root: string) =>
 
 describe('回执约定', () => {
   test('任务原样在前，约定追加在后', async () => {
-    const got = await run(echo, await mkdtemp(join(tmpdir(), 'qy-cli-')))
+    const got = await run(echo, await mkdtemp(join(tmpdir(), 'oph-cli-')))
     expect(got.output.startsWith('把 a.txt 改成小写')).toBe(true)
     expect(got.output).toContain('### 回执')
     // 交付物正文在前是硬要求：`extract` 取的是最后一个非空目标字段，
@@ -106,12 +106,12 @@ describe('接着问', () => {
       resultField: 'thread_id',
       sessionField: 'thread_id',
     }
-    const got = await run(teller, await mkdtemp(join(tmpdir(), 'qy-cli-')))
+    const got = await run(teller, await mkdtemp(join(tmpdir(), 'oph-cli-')))
     expect(got.session).toBe('t-2')
   })
 
   test('表里没写 sessionField 的那几家不给 session', async () => {
-    const got = await run(echo, await mkdtemp(join(tmpdir(), 'qy-cli-')))
+    const got = await run(echo, await mkdtemp(join(tmpdir(), 'oph-cli-')))
     expect('session' in got).toBe(false)
   })
 
@@ -129,7 +129,7 @@ describe('接着问', () => {
     }
     const got = await runCli(resumable, {
       prompt: '你刚才改了什么',
-      workspaceRoot: await mkdtemp(join(tmpdir(), 'qy-cli-')),
+      workspaceRoot: await mkdtemp(join(tmpdir(), 'oph-cli-')),
       signal: new AbortController().signal,
       resume: 'sess-7',
     })

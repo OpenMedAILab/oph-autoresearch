@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
- * 把 `qy` 编译成单文件二进制，并按 Tauri 要求的命名放进 sidecar 目录。
+ * 把 `oph` 编译成单文件二进制，并按 Tauri 要求的命名放进 sidecar 目录。
  *
- * Tauri 的 `externalBin: ["bin/qy"]` 在打包时会去找 `bin/qy-<目标三元组>`
+ * Tauri 的 `externalBin: ["bin/oph"]` 在打包时会去找 `bin/oph-<目标三元组>`
  * （macOS 上还会因 arm64/x86_64 分成两个）。名字差一个字都会在打包末尾才报错，
  * 所以三元组由 `rustc -vV` 现问，而不是照着平台猜。
  *
@@ -59,7 +59,7 @@ function windowsMetadata(version: string): string[] {
 async function main(): Promise<number> {
   const triple = await hostTriple()
   const ext = process.platform === 'win32' ? '.exe' : ''
-  const outfile = join(OUT_DIR, `qy-${triple}${ext}`)
+  const outfile = join(OUT_DIR, `oph-${triple}${ext}`)
 
   await mkdir(OUT_DIR, { recursive: true })
   await rm(outfile, { force: true })
@@ -81,7 +81,7 @@ async function main(): Promise<number> {
       '--minify',
       '--sourcemap',
       '--define',
-      `QYWORK_VERSION="${version}"`,
+      `OPH_AUTORESEARCH_VERSION="${version}"`,
       ...windowsMetadata(version),
       '--outfile',
       outfile,
@@ -107,7 +107,7 @@ async function main(): Promise<number> {
     process.stderr.write(`版本号未内联：期望 ${version}，实得 ${reported}\n`)
     return 1
   }
-  process.stdout.write(`自检通过：qy ${reported}\n`)
+  process.stdout.write(`自检通过：oph ${reported}\n`)
   return 0
 }
 

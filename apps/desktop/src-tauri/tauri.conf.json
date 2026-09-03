@@ -41,7 +41,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["bin/qy"],
+    "externalBin": ["bin/oph"],
     "macOS": {
       "minimumSystemVersion": "11.0"
     },

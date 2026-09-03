@@ -11,10 +11,10 @@
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { AgentEvent, EventEnvelope } from '@qywork/core'
-import { loadConfig } from '@qywork/runtime'
-import { serve } from '@qywork/server'
-import { Store } from '@qywork/store'
+import type { AgentEvent, EventEnvelope } from '@oph-autoresearch/core'
+import { loadConfig } from '@oph-autoresearch/runtime'
+import { serve } from '@oph-autoresearch/server'
+import { Store } from '@oph-autoresearch/store'
 
 const ROOT = join(import.meta.dir, '..', '.tmp', 'smoke-ws')
 const WS_GIT = join(ROOT, 'cli-receipt')

@@ -8,15 +8,15 @@
  * 才能执行** （codex 要 OPENAI_API_KEY，claude 要 ANTHROPIC_API_KEY），所以不能像 `run_command` 那
  * 样按名字一律剥掉。
  *
- * 但 qywork 自己配置里那些 key 它一把都用不上——按**值**剥掉即可：
- * 用户在 `~/.qywork/config.json` 里配的 DeepSeek key 没有任何理由出现在
+ * 但 oph-autoresearch 自己配置里那些 key 它一把都用不上——按**值**剥掉即可：
+ * 用户在 `~/.oph-autoresearch/config.json` 里配的 DeepSeek key 没有任何理由出现在
  * codex 的进程里。这条剥的是「多余的凭证」，不影响后端正常工作。
  *
  * 另外，能被调起的只有厂商表里那几家、且用户在设置页允许的那几家，属于知情同意——
  * 与 MCP server 同一档。所以这里不加裁决，只做凭证收敛。
  */
 
-import { collectProcess, scrubEnv } from '@qywork/tools'
+import { collectProcess, scrubEnv } from '@oph-autoresearch/tools'
 import type { CliAgent } from './types.ts'
 
 const DEFAULT_TIMEOUT = 10 * 60 * 1000
@@ -71,7 +71,7 @@ export async function runCli(
      */
     resume?: string
     /**
-     * qywork 自己的凭证。按值剥掉——后端用不上，也就没有理由拿到。
+     * oph-autoresearch 自己的凭证。按值剥掉——后端用不上，也就没有理由拿到。
      * 不传等于「没有已知凭证」，不等于「不用剥」。
      */
     secrets?: { values: string[] }

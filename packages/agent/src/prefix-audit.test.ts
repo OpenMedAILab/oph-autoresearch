@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { SystemBlock } from '@qywork/ai'
+import type { SystemBlock } from '@oph-autoresearch/ai'
 import {
   auditFrozenPrefix,
   auditFrozenText,
@@ -191,18 +191,18 @@ describe('审真实的系统提示词', () => {
   const ALL = new Set(GATES)
 
   test('三层冻结前缀里没有天生会变的字段', async () => {
-    const { buildSystemPrompt } = await import('@qywork/runtime')
+    const { buildSystemPrompt } = await import('@oph-autoresearch/runtime')
     expect(auditFrozenText(buildSystemPrompt(ALL))).toEqual([])
   })
 
   test('两次构造逐字节相同', async () => {
-    const { buildSystemPrompt } = await import('@qywork/runtime')
+    const { buildSystemPrompt } = await import('@oph-autoresearch/runtime')
     expect(buildSystemPrompt(ALL)).toBe(buildSystemPrompt(ALL))
   })
 
   /** 缺一条模型就想不起来自己能做这件事，所以每个类目都要发到。 */
   test('能力段把每个类目都告诉模型', async () => {
-    const { buildSystemPrompt } = await import('@qywork/runtime')
+    const { buildSystemPrompt } = await import('@oph-autoresearch/runtime')
     const p = buildSystemPrompt(ALL)
     for (const tool of GATES) expect(p).toContain(tool)
     expect(p).toContain('主会话验收后可能要求原子会话返工')
@@ -214,7 +214,7 @@ describe('审真实的系统提示词', () => {
    * 按通道注册，写死会让没有对应通道的会话读到一个不存在的工具。
    */
   test('缺通道时那一行不发，其余照常', async () => {
-    const { buildSystemPrompt } = await import('@qywork/runtime')
+    const { buildSystemPrompt } = await import('@oph-autoresearch/runtime')
     const p = buildSystemPrompt(new Set(['write_memory', 'read_skill']))
     expect(p).not.toContain('run_command')
     expect(p).not.toContain('subagent')
@@ -227,7 +227,7 @@ describe('审真实的系统提示词', () => {
   })
 
   test('输入区显式引用绑定技能、外部工具与子 agent', async () => {
-    const { buildSystemPrompt } = await import('@qywork/runtime')
+    const { buildSystemPrompt } = await import('@oph-autoresearch/runtime')
     const p = buildSystemPrompt(
       new Set(['read_skill', 'load_tool', 'define_subagent', 'subagent', 'mcp__github__search']),
     )
@@ -245,7 +245,7 @@ describe('审真实的系统提示词', () => {
    * 断点之外。它绿了才说明分层是真的分开了，而不是两边都干净所以看着没问题。
    */
   test('尾区注记确实带着会变的内容（证明分层不是摆设）', async () => {
-    const { buildTailNotes } = await import('@qywork/runtime')
+    const { buildTailNotes } = await import('@oph-autoresearch/runtime')
     const notes = buildTailNotes({ workspaceRoot: '/tmp/ws', platform: 'linux', mode: 'auto' })
       .map((n) => n.content)
       .join('\n')

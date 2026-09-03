@@ -10,7 +10,7 @@
  * 「进程仍在跑」的唯一证据。所以这里给出的是「边等边取」，不是「等完再取」。
  */
 
-import type { AgentEvent } from '@qywork/core'
+import type { AgentEvent } from '@oph-autoresearch/core'
 
 /**
  * 单生产者单消费者的事件队列。

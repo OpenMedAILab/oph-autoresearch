@@ -17,8 +17,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent, ConversationId, EventEnvelope } from '@qywork/core'
-import type { QyConfig } from '@qywork/runtime'
+import type { AgentEvent, ConversationId, EventEnvelope } from '@oph-autoresearch/core'
+import type { OphConfig } from '@oph-autoresearch/runtime'
 import {
   ContentStore,
   contentPathFor,
@@ -29,7 +29,7 @@ import {
   Store,
   updateGoal,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { EventBus } from './bus.ts'
 import { handleCommand } from './commands.ts'
 import { resumeGoal, setGoal, startRun } from './run-control.ts'
@@ -121,14 +121,14 @@ let store: Store
 let content: ContentStore
 let bus: EventBus
 let runs: RunManager
-let config: QyConfig
+let config: OphConfig
 let workspaceId = ''
 
 /** 收到的全部事件，按顺序。断言与等待都读它。 */
 let events: EventEnvelope[] = []
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'qywork-goal-'))
+  dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-goal-'))
   const dbPath = join(dir, 'goal.sqlite3')
   store = new Store({ path: dbPath })
   content = new ContentStore(contentPathFor(dbPath))

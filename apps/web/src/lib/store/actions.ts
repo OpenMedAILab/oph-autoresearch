@@ -5,7 +5,7 @@
  * **用户点了什么**。两边都只经 `setState` 改同一份 store，没有第二本账。
  */
 
-import type { Attachment, Conversation, EffortLevel } from '@qywork/core'
+import type { Attachment, Conversation, EffortLevel } from '@oph-autoresearch/core'
 import { produce } from 'solid-js/store'
 import { ApiError } from '../client.ts'
 import { client, discardPace, reloadActiveConversation, syncViews } from './connection.ts'
@@ -321,7 +321,7 @@ export async function exportActiveConversation(): Promise<'saved' | 'cancelled'>
   }
 
   const contents = await response.text()
-  const fileName = `qywork-session-${id}.json`
+  const fileName = `oph-autoresearch-session-${id}.json`
   if (isDesktopShell()) {
     try {
       const saved = await tauriInvoke<string | null>('save_session_export', { fileName, contents })

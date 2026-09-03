@@ -19,7 +19,7 @@
  * 两个 server 各带一个 `search` 不会互相覆盖，模型也能从名字看出它在调谁。
  */
 
-import { sanitizeToolName, type ToolSpec } from '@qywork/agent'
+import { sanitizeToolName, type ToolSpec } from '@oph-autoresearch/agent'
 import type { McpCallResult, McpClient, McpToolDef } from './client.ts'
 
 /** 单次工具结果的文本上限。MCP 结果不过 sink，超了只能截断，所以要说出来。 */

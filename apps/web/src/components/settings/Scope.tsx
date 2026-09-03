@@ -3,7 +3,7 @@ import { type Scope, type ScopeDir, WRITABLE_SCOPES } from '../../lib/store/inde
 import { PathLine } from './Page.tsx'
 
 /**
- * 作用域标签页：**项目**（工作区 `.agents/`）与**全局**（`~/.qywork/`）。
+ * 作用域标签页：**项目**（工作区 `.agents/`）与**全局**（`~/.oph-autoresearch/`）。
  *
  * **为什么按层分列，而不是列合并后的那一份。** 用户要能回答「这条记忆是跟着这个仓库走的，还是全局都
  * 生效的」。合并去重之后那个事实就没了——被项目层盖住的全局条目直接消失，「在全局改了却没生效」

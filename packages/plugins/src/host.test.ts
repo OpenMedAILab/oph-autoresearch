@@ -7,7 +7,7 @@ import type { PluginManifest } from './manifest.ts'
 
 /** 写一个真实的插件进程到临时目录。用假 mock 验不出进程隔离。 */
 async function pluginWith(body: string): Promise<{ dir: string; entry: string }> {
-  const dir = await mkdtemp(join(tmpdir(), 'qywork-plugin-'))
+  const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-plugin-'))
   const entry = join(dir, 'index.mjs')
   await writeFile(
     entry,
@@ -116,14 +116,14 @@ describe('进程生命周期', () => {
   })
 
   test('启动即退出的插件报错而不是无限等', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qywork-plugin-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-plugin-'))
     const entry = join(dir, 'index.mjs')
     await writeFile(entry, 'process.exit(1)\n', 'utf8')
     expect(host(entry, dir).start()).rejects.toThrow()
   })
 
   test('从不发 ready 的插件在超时后报错', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'qywork-plugin-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-plugin-'))
     const entry = join(dir, 'index.mjs')
     // 挂住不动，不发 ready。
     await writeFile(entry, 'setInterval(() => {}, 1000)\n', 'utf8')
@@ -133,12 +133,12 @@ describe('进程生命周期', () => {
 
 describe('隔离：插件拿不到宿主的模块', () => {
   test('宿主环境变量不透传 —— API Key 不该白送给插件', async () => {
-    process.env.QYWORK_TEST_SECRET = 'sk-绝密'
+    process.env.OPH_AUTORESEARCH_TEST_SECRET = 'sk-绝密'
     const { dir, entry } = await pluginWith(`
       function handle(msg) {
         if (msg.type === 'call') {
           send({ id: msg.id, ok: true, result: {
-            secret: process.env.QYWORK_TEST_SECRET ?? null,
+            secret: process.env.OPH_AUTORESEARCH_TEST_SECRET ?? null,
             hasAnthropicKey: 'ANTHROPIC_API_KEY' in process.env,
             hasDeepseekKey: 'DEEPSEEK_API_KEY' in process.env,
           } })
@@ -153,15 +153,15 @@ describe('隔离：插件拿不到宿主的模块', () => {
     expect(r.hasAnthropicKey).toBe(false)
     expect(r.hasDeepseekKey).toBe(false)
     h.stop()
-    delete process.env.QYWORK_TEST_SECRET
+    delete process.env.OPH_AUTORESEARCH_TEST_SECRET
   })
 
   test('插件只拿到自己的 id 与权限声明', async () => {
     const { dir, entry } = await pluginWith(`
       function handle(msg) {
         if (msg.type === 'call') send({ id: msg.id, ok: true, result: {
-          id: process.env.QYWORK_PLUGIN,
-          perms: process.env.QYWORK_PLUGIN_PERMISSIONS,
+          id: process.env.OPH_AUTORESEARCH_PLUGIN,
+          perms: process.env.OPH_AUTORESEARCH_PLUGIN_PERMISSIONS,
         } })
       }
     `)

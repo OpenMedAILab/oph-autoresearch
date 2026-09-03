@@ -85,7 +85,7 @@ const KNOWN: KnownCli[] = [
     // `--skip-git-repo-check` 不是可选项：codex 默认拒绝在非 git 目录里跑
     // （原话「Not inside a trusted directory」），因此派给它的节点在任何一个
     // 不是 git 仓库的工作区里必然失败。工作区是用户自己选的、模型是他自己派的，
-    // 这层判断该由 qywork 的权限模式管，不该由被调度的 CLI 再拦一道。
+    // 这层判断该由 oph-autoresearch 的权限模式管，不该由被调度的 CLI 再拦一道。
     args: ['exec', '--json', '--skip-git-repo-check', '{prompt}'],
     output: 'jsonl',
     // 答案在 `item.completed` 那种行的 `item.text` 上，顶层没有 `result`。

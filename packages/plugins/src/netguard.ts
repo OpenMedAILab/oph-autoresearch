@@ -79,7 +79,7 @@ export const BLOCKED_MODULES = [
  *
  * 写成一个字符串常量而不是单独的 .ts 文件：发布产物是**单文件二进制**，
  * 里面没有可供 `--import` 的磁盘路径。插件运行时解析上有同一类约束
- * （`process.execPath` 在二进制里指向 qy 自身），见 `runtime.ts` 头注释。
+ * （`process.execPath` 在二进制里指向 oph 自身），见 `runtime.ts` 头注释。
  *
  * 脚本本身必须是纯 CommonJS 且不 import 任何模块——它跑在权限模型下，
  * 多一个依赖就多一条可能被拒的读路径。
@@ -87,7 +87,7 @@ export const BLOCKED_MODULES = [
 export function netGuardSource(): string {
   const blocked = JSON.stringify(BLOCKED_MODULES)
   return `'use strict'
-// qywork 出网闸。由宿主生成，随插件进程启动注入。
+// oph-autoresearch 出网闸。由宿主生成，随插件进程启动注入。
 const BLOCKED = new Set(${blocked})
 
 function bare(spec) {
@@ -98,9 +98,9 @@ function bare(spec) {
 
 function deny(name) {
   const e = new Error(
-    '[qywork] 插件不能直接使用 ' + name + '：出网请用 host.net.fetch（它过 SSRF 与权限校验）'
+    '[oph-autoresearch] 插件不能直接使用 ' + name + '：出网请用 host.net.fetch（它过 SSRF 与权限校验）'
   )
-  e.code = 'ERR_QYWORK_NET_BLOCKED'
+  e.code = 'ERR_OPH_AUTORESEARCH_NET_BLOCKED'
   return e
 }
 
@@ -157,7 +157,7 @@ for (const name of ['fetch', 'WebSocket', 'EventSource', 'XMLHttpRequest', 'navi
 
 /** 引导脚本的落盘位置。放临时目录，不污染工作区也不污染插件目录。 */
 export function netGuardDir(): string {
-  return join(tmpdir(), 'qywork-netguard')
+  return join(tmpdir(), 'oph-autoresearch-netguard')
 }
 
 export function netGuardPath(): string {

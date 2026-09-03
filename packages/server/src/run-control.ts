@@ -13,8 +13,15 @@
  * 要防的第一件事。两处差着一整个生命周期。
  */
 
-import { buildAdapter, ProviderError, type ProviderProfile } from '@qywork/ai'
-import type { AgentEvent, Attachment, ConversationId, Goal, RunId, StopReason } from '@qywork/core'
+import { buildAdapter, ProviderError, type ProviderProfile } from '@oph-autoresearch/ai'
+import type {
+  AgentEvent,
+  Attachment,
+  ConversationId,
+  Goal,
+  RunId,
+  StopReason,
+} from '@oph-autoresearch/core'
 import {
   configPath,
   contextPanel,
@@ -22,8 +29,14 @@ import {
   RuntimeCompaction,
   resolveModel,
   Session,
-} from '@qywork/runtime'
-import { createGoal, currentGoal, getConversation, updateGoal, workspaceOf } from '@qywork/store'
+} from '@oph-autoresearch/runtime'
+import {
+  createGoal,
+  currentGoal,
+  getConversation,
+  updateGoal,
+  workspaceOf,
+} from '@oph-autoresearch/store'
 import { makeDelegate } from './delegate.ts'
 import type { CommandDeps } from './deps.ts'
 import { publishGitState } from './http-util.ts'
@@ -181,7 +194,7 @@ export async function startRun(
       // 错误码是给前端决定引导动作用的，压平成 internal_error 就等于没有分类。
       const pe = err instanceof ProviderError ? err : null
       const base = pe?.message ?? (err instanceof Error ? err.message : String(err))
-      // 桌面端用户手边不一定有终端，「运行 qy init」对他们只是一句空话。
+      // 桌面端用户手边不一定有终端，「运行 oph init」对他们只是一句空话。
       // 把配置文件路径带上——那是他们真正能打开的位置。
       const message =
         pe?.code === 'no_api_key' || pe?.code === 'auth_failed'
@@ -526,7 +539,7 @@ function abortGoalLoop(
   err: unknown,
 ): void {
   deps.runs.disarm(conversationId)
-  process.stderr.write(`[qy] 目标续起中止：${err instanceof Error ? err.message : String(err)}\n`)
+  process.stderr.write(`[oph] 目标续起中止：${err instanceof Error ? err.message : String(err)}\n`)
 }
 
 function publishGoal(deps: Omit<CommandDeps, 'ws'>, goal: Goal): void {

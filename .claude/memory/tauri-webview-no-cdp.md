@@ -8,7 +8,7 @@ metadata:
   modified: 2026-08-11T03:40:41.989Z
 ---
 
-**qywork 桌面端的 WebView 没法用 CDP 驱动**，所以「在桌面窗口里点一下」这类验证
+**oph-autoresearch 桌面端的 WebView 没法用 CDP 驱动**，所以「在桌面窗口里点一下」这类验证
 目前做不到自动化。
 
 原因：Tauri 在 Windows 上用自己的 `additional_browser_args` 覆盖了环境变量

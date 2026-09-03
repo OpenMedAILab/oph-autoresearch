@@ -1,7 +1,7 @@
 /**
- * 建一个子 agent（角色），写进工作区的 `.qy/team.json`。
+ * 建一个子 agent（角色），写进工作区的 `.oph/team.json`。
  *
- * **为什么必须是一个专门的工具。** `.qy` 是受保护目录（`paths.ts` 的 `PROTECTED_DIRS`），
+ * **为什么必须是一个专门的工具。** `.oph` 是受保护目录（`paths.ts` 的 `PROTECTED_DIRS`），
  * `write_file` 写不进去。那道墙挡的是**自我提权**——改 `.agents/` 就是给自己加工具。但「建一个角
  * 色」不属于那一类：角色的 `allowedTools` 只能从现有工具里**收窄**，它拿不到任何新能力。
  *
@@ -15,10 +15,10 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { ToolContext, ToolSpec } from '@qywork/agent'
+import type { ToolContext, ToolSpec } from '@oph-autoresearch/agent'
 
 /** 角色配置落在这里。与 `runtime` 的 `TEAM_CONFIG` 同一个值——那边是加载方，这边是写入方。 */
-const TEAM_CONFIG = '.qy/team.json'
+const TEAM_CONFIG = '.oph/team.json'
 
 /** id 只收这几类字符：它要出现在编排图里被引用，也要能当文件里的键。 */
 const ID_OK = /^[a-zA-Z0-9_-]{1,40}$/
@@ -26,7 +26,7 @@ const ID_OK = /^[a-zA-Z0-9_-]{1,40}$/
 export const defineSubagentTool: ToolSpec = {
   name: 'define_subagent',
   description:
-    '建一个子 agent（角色）或改一个已有的，写进工作区的 .qy/team.json。' +
+    '建一个子 agent（角色）或改一个已有的，写进工作区的 .oph/team.json。' +
     '角色是可以被 subagent / workflow 派活的对象：它有自己的系统提示词、可选的模型与步数上限。' +
     '同名 id 直接覆盖。',
   parameters: {

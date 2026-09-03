@@ -17,7 +17,7 @@
 
 import { type FSWatcher, watch } from 'node:fs'
 import { join } from 'node:path'
-import { mostRecentWorkspace, type Store } from '@qywork/store'
+import { mostRecentWorkspace, type Store } from '@oph-autoresearch/store'
 import type { EventBus } from './bus.ts'
 import { publishGitState } from './http-util.ts'
 

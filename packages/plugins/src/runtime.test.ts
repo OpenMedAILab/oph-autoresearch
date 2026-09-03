@@ -4,7 +4,7 @@
  * 这一组里最重要的两条都不是「功能对不对」：
  *
  * - **不能拿 `process.execPath` 当默认运行时。** 发布产物是单文件二进制，
- *   那个路径是 qy 自己，拿它跑插件只会打出用法说明——插件在开发机上正常，
+ *   那个路径是 oph 自己，拿它跑插件只会打出用法说明——插件在开发机上正常，
  *   装了包的用户那里一个都起不来。
  * - **隔离的范围要如实报，而且要分维度报。** 沙箱（`--permission`）与出网闸
  *   （`netguard.ts`）的成立条件不同——版本要求不同，bun 上一个都没有。
@@ -25,7 +25,7 @@ import { resolvePluginRuntime, sandboxArgs } from './runtime.ts'
 
 const req = (permissions: PluginPermission[] = []) => ({
   workspaceRoot: '/ws',
-  pluginDir: '/ws/.qy/plugins/p',
+  pluginDir: '/ws/.oph/plugins/p',
   permissions,
 })
 
@@ -43,7 +43,7 @@ describe('沙箱参数', () => {
   })
 
   test('插件目录永远可读 —— 否则连入口文件都加载不了', () => {
-    expect(sandboxArgs(24, req())?.args).toContain('--allow-fs-read=/ws/.qy/plugins/p')
+    expect(sandboxArgs(24, req())?.args).toContain('--allow-fs-read=/ws/.oph/plugins/p')
   })
 
   test('没声明 workspace:read 就读不到工作区', () => {
@@ -167,7 +167,7 @@ describe('运行时解析', () => {
 
   /**
    * 自动解析必须落到一个**真的能执行 JS** 的运行时上。
-   * 单文件二进制里 `process.execPath` 是 qy 自己，选中它等于插件全部起不来。
+   * 单文件二进制里 `process.execPath` 是 oph 自己，选中它等于插件全部起不来。
    */
   test('自动解析出的运行时是 node 或 bun，绝不是宿主二进制', () => {
     const rt = resolvePluginRuntime(req(['workspace:read']))
@@ -190,7 +190,7 @@ describe('运行时解析', () => {
 
 describe('沙箱实测：只声明 workspace:read 的插件', () => {
   async function probePlugin() {
-    const dir = await mkdtemp(join(tmpdir(), 'qywork-sb-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-sb-'))
     const entry = join(dir, 'index.mjs')
     const NL = String.fromCharCode(10)
     await writeFile(
@@ -279,7 +279,7 @@ describe('沙箱实测：只声明 workspace:read 的插件', () => {
  */
 describe('出网闸实测：每条逃逸路径', () => {
   async function escapeProbe(permissions: PluginPermission[] = ['network']) {
-    const dir = await mkdtemp(join(tmpdir(), 'qywork-ng-'))
+    const dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-ng-'))
     const entry = join(dir, 'index.mjs')
     const NL = String.fromCharCode(10)
     // 每条探针都写成「拿到了 = OK，抛了 = BLOCKED」。

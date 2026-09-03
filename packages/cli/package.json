@@ -1,20 +1,20 @@
 {
-  "name": "@qywork/cli",
+  "name": "@oph-autoresearch/cli",
   "version": "0.1.8",
   "private": true,
   "type": "module",
   "bin": {
-    "qy": "./src/index.ts"
+    "oph": "./src/index.ts"
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --compile --minify --outfile ../../dist/qy"
+    "build": "bun build ./src/index.ts --compile --minify --outfile ../../dist/oph"
   },
   "dependencies": {
-    "@qywork/core": "workspace:*",
-    "@qywork/runtime": "workspace:*",
-    "@qywork/server": "workspace:*",
-    "@qywork/store": "workspace:*",
-    "@qywork/tools": "workspace:*",
+    "@oph-autoresearch/core": "workspace:*",
+    "@oph-autoresearch/runtime": "workspace:*",
+    "@oph-autoresearch/server": "workspace:*",
+    "@oph-autoresearch/store": "workspace:*",
+    "@oph-autoresearch/tools": "workspace:*",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {

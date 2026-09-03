@@ -3,7 +3,7 @@
  *
  * **这个模块不许 import 本包内的任何模块。** 它必须是叶子：`ui.ts` 要用它，
  * 而 `connection.ts` 又 import 了 `ui.ts`——桥只要落在 `settings.ts` 那一侧，
- * 这条边就成环，表现是 `Cannot access 'QyClient' before initialization`。
+ * 这条边就成环，表现是 `Cannot access 'OphClient' before initialization`。
  */
 
 /**

@@ -1,4 +1,4 @@
-import { isInlineImage } from '@qywork/core'
+import { isInlineImage } from '@oph-autoresearch/core'
 import { createSignal, onCleanup, onMount, Show } from 'solid-js'
 import { attachmentBlobUrl } from '../lib/store/index.ts'
 import { IconFile } from './Icons.tsx'

@@ -8,8 +8,14 @@
  * 所以账本不设外键：`run_id` / `conversation_id` 只是线索，指向的行没了不影响账目成立。
  */
 
-import type { Currency, UsageBucket, UsageKind, UsageLedgerRow, UsageTotals } from '@qywork/core'
-import { newUsageId } from '@qywork/core'
+import type {
+  Currency,
+  UsageBucket,
+  UsageKind,
+  UsageLedgerRow,
+  UsageTotals,
+} from '@oph-autoresearch/core'
+import { newUsageId } from '@oph-autoresearch/core'
 import type { Store } from './db.ts'
 
 export interface UsageEntry {
@@ -81,7 +87,7 @@ export function recordUsage(store: Store, entry: UsageEntry): boolean {
     // 但「不失败」不等于「不吭声」。
     const msg = err instanceof Error ? err.message : String(err)
     if (!/UNIQUE constraint failed/i.test(msg)) {
-      process.stderr.write(`[qy] 记账失败（kind=${entry.kind}）：${msg}\n`)
+      process.stderr.write(`[oph] 记账失败（kind=${entry.kind}）：${msg}\n`)
     }
     return false
   }

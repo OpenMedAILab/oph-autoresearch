@@ -11,7 +11,7 @@ import {
   type WorkflowAgentNode,
   type WorkflowAppliedReview,
   type WorkflowCheckpointNode,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import { runCli } from './cli-backend.ts'
 import type { CliAgent, NodeResult, PlanNode, Role, TeamConfig } from './types.ts'
 import { CLI_PREFIX } from './types.ts'

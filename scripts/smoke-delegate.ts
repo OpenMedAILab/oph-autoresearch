@@ -10,10 +10,10 @@
 
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { AgentEvent, ConversationId, EventEnvelope } from '@qywork/core'
-import { loadConfig } from '@qywork/runtime'
-import { serve } from '@qywork/server'
-import { getConversation, Store } from '@qywork/store'
+import type { AgentEvent, ConversationId, EventEnvelope } from '@oph-autoresearch/core'
+import { loadConfig } from '@oph-autoresearch/runtime'
+import { serve } from '@oph-autoresearch/server'
+import { getConversation, Store } from '@oph-autoresearch/store'
 
 const WS_DIR = join(import.meta.dir, '..', '.tmp', 'smoke-ws', 'delegate')
 const DB = join(WS_DIR, 'delegate.sqlite3')
@@ -168,7 +168,7 @@ async function main(): Promise<number> {
     const workflowCalls = named('workflow')
 
     process.stdout.write('\n不指定 agent 就能派\n')
-    check('模型没先定义角色', !(await Bun.file(join(WS_DIR, '.qy', 'team.json')).exists()))
+    check('模型没先定义角色', !(await Bun.file(join(WS_DIR, '.oph', 'team.json')).exists()))
     check(
       'subagent 派出去了',
       subagentCalls.length > 0,

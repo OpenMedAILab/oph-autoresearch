@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { networkInterfaces } from 'node:os'
-import { decodePairingUrl } from '@qywork/core'
+import { decodePairingUrl } from '@oph-autoresearch/core'
 import { lanCandidates, Pairing, repairMojibake } from './pairing.ts'
 
 type Ifaces = ReturnType<typeof networkInterfaces>

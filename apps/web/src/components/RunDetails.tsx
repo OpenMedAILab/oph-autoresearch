@@ -5,8 +5,8 @@ import type {
   Run,
   UsageLedgerRow,
   UsageTotals,
-} from '@qywork/core'
-import { formatCosts, formatMoney } from '@qywork/core'
+} from '@oph-autoresearch/core'
+import { formatCosts, formatMoney } from '@oph-autoresearch/core'
 import { createMemo, createResource, createSignal, For, Show } from 'solid-js'
 import { loaded } from '../lib/resource.ts'
 import { compact, stopReasonLabel } from '../lib/step-view.ts'

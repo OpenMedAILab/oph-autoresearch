@@ -14,7 +14,7 @@
  * 不抛异常：注册表会把异常压成一句「工具执行出错」，模型据此换不了做法。
  */
 
-import type { ToolContext, ToolSpec } from '@qywork/agent'
+import type { ToolContext, ToolSpec } from '@oph-autoresearch/agent'
 import { idArg } from './args.ts'
 
 export const subagentTool: ToolSpec = {

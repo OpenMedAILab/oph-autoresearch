@@ -33,7 +33,7 @@ import { EmptyBox, EntryCard, Section } from './Page.tsx'
  * 子填不全。同记忆 / 技能 / MCP / 插件 / 定时任务五页，「添加」把话头递给模型。
  *
  * **编排跟着仓库走。** 角色与编排图全是项目属性，跟到别的仓库去只会派错人。所以配置在工作区的
- * `.qy/team.json`，不在用户全局配置里。
+ * `.oph/team.json`，不在用户全局配置里。
  */
 
 interface RoleJson {
@@ -62,7 +62,7 @@ interface RoleForm {
 
 /** 「添加」递给模型的话头。 */
 const NEW_ROLE =
-  '我们一起来加一个子 agent 吧。先说明子 agent 在 qywork 里怎么工作、配置写在哪个文件；然后问我要它干什么、能用哪些工具、步数给多少。'
+  '我们一起来加一个子 agent 吧。先说明子 agent 在 oph-autoresearch 里怎么工作、配置写在哪个文件；然后问我要它干什么、能用哪些工具、步数给多少。'
 
 export default function AgentsSettings() {
   const [team, { refetch: refetchTeam }] = createResource(loadTeam)

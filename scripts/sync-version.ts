@@ -4,7 +4,7 @@
  *
  * 版本号散落在多处：每个 package.json、Cargo.toml、tauri.conf.json，外加 sidecar
  * 编译期内联读的 VERSION 本身。发版时手改必漏一个，而漏掉的那个通常是
- * tauri.conf.json——安装包版本和 `qy --version` 对不上，用户报 bug 时说的版本号
+ * tauri.conf.json——安装包版本和 `oph --version` 对不上，用户报 bug 时说的版本号
  * 是错的。
  *
  *   bun run scripts/sync-version.ts          # 按 VERSION 刷

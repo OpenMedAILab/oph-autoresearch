@@ -50,7 +50,7 @@
  * - 只有**最后**一轮工具调用被检查；但每一轮都带上，不去赌它的实现细节。
  */
 
-import type { ReasoningEcho } from '@qywork/core'
+import type { ReasoningEcho } from '@oph-autoresearch/core'
 import { effortIsTransmittable, type ModelSpec } from '../catalog.ts'
 import { classifyProviderError, namelessToolCall, ProviderError } from '../errors.ts'
 import { estimateRequest } from '../tokens.ts'

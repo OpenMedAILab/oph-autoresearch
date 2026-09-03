@@ -10,8 +10,10 @@ function fresh(): ContentStore {
 
 describe('路径推导', () => {
   test('正文库挨着主账本放', () => {
-    expect(contentPathFor('/data/qywork.sqlite3')).toBe('/data/qywork_content.sqlite3')
-    expect(contentPathFor('C:\\x\\qywork.db')).toBe('C:\\x\\qywork_content.db')
+    expect(contentPathFor('/data/oph-autoresearch.sqlite3')).toBe(
+      '/data/oph-autoresearch_content.sqlite3',
+    )
+    expect(contentPathFor('C:\\x\\oph-autoresearch.db')).toBe('C:\\x\\oph-autoresearch_content.db')
   })
   test(':memory: 原样透传', () => {
     expect(contentPathFor(':memory:')).toBe(':memory:')

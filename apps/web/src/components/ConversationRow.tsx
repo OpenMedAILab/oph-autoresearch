@@ -1,4 +1,4 @@
-import type { Conversation } from '@qywork/core'
+import type { Conversation } from '@oph-autoresearch/core'
 import { createSignal, onCleanup, onMount, Show } from 'solid-js'
 import { archiveConversation, deleteConversation, renameConversation } from '../lib/store/index.ts'
 import { AnchoredMenu } from './AnchoredMenu.tsx'

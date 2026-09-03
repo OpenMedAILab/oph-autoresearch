@@ -15,7 +15,7 @@ import type {
   CompactionPort,
   CompactionRunInput,
   Summarizer,
-} from '@qywork/agent'
+} from '@oph-autoresearch/agent'
 import {
   compact,
   condenseCutOf,
@@ -26,9 +26,9 @@ import {
   softLimit,
   summaryCutOf,
   unitKey,
-} from '@qywork/agent'
-import type { TokenDensity, WireMessage } from '@qywork/ai'
-import { estimateMessages, MEDIA_TOKENS } from '@qywork/ai'
+} from '@oph-autoresearch/agent'
+import type { TokenDensity, WireMessage } from '@oph-autoresearch/ai'
+import { estimateMessages, MEDIA_TOKENS } from '@oph-autoresearch/ai'
 import type {
   ActionKind,
   CompactionCut,
@@ -36,7 +36,7 @@ import type {
   ConversationId,
   MessageId,
   Step,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import {
   getConversation,
   latestSentProviderRequest,
@@ -47,7 +47,7 @@ import {
   type Store,
   setCompactionManifest,
   summaryOutputPercentile,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import { attachmentsOf, stepsToUnits } from './transcript.ts'
 
 /**

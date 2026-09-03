@@ -18,8 +18,8 @@
  * 信息下结论——那比不给它更糟，因为它不知道自己不知道。
  */
 
-import type { SinkPort } from '@qywork/agent'
-import type { ResourceCoverage, ResourceStatus } from '@qywork/core'
+import type { SinkPort } from '@oph-autoresearch/agent'
+import type { ResourceCoverage, ResourceStatus } from '@oph-autoresearch/core'
 
 export type { SinkPort }
 
@@ -47,7 +47,7 @@ export function isContentAuthority(toolName: string): boolean {
  * 投递给模型的正文上限（字节）。
  *
  * **它是「摘录多长」，不是「容量闸」。** 容量那一半由 `chargeBatchBudget`
- * （`@qywork/agent`）管，那条还管一整个波次的累计量。
+ * （`@oph-autoresearch/agent`）管，那条还管一整个波次的累计量。
  *
  * **不要把它改成窗口比例**：摘录长度是可读性问题（头尾各留一半，
  * 错误信息通常在尾部），不是容量问题。8 KB 的依据是实测——

@@ -9,14 +9,19 @@
  *    不是同一份字节。截断丢掉的部分再也拿不回来，所以必须先落盘。
  */
 
-import { chargeBatchBudget, deliveredTokens, type ToolContext, type ToolSpec } from '@qywork/agent'
-import type { IntermediateResourceRef } from '@qywork/core'
+import {
+  chargeBatchBudget,
+  deliveredTokens,
+  type ToolContext,
+  type ToolSpec,
+} from '@oph-autoresearch/agent'
+import type { IntermediateResourceRef } from '@oph-autoresearch/core'
 import { badIntMessage, intArg } from './args.ts'
 import { type SafetyOptions, safeFetch } from './net-safety.ts'
 import { deliver } from './sink.ts'
 
 /** 用户配置注入 ctx.resources 的键。没配就用默认（最严格）策略。 */
-export const NET_POLICY_KEY = 'qywork.netPolicy'
+export const NET_POLICY_KEY = 'oph-autoresearch.netPolicy'
 
 function policyOf(ctx: ToolContext): SafetyOptions {
   const raw = ctx.resources.get(NET_POLICY_KEY)

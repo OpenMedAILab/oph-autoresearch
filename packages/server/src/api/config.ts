@@ -1,7 +1,7 @@
 /**
  * 配置读写。
  *
- * 没有这条接口时，改配置只有两条路：手编 JSON，或跑 `qy init` 覆盖重来。
+ * 没有这条接口时，改配置只有两条路：手编 JSON，或跑 `oph init` 覆盖重来。
  *
  * **明文 key 永远不出这个进程**：GET 只回 `hasApiKey` 布尔，PUT 时若某档案
  * 没带 apiKey 但标了 hasApiKey，就沿用库里那一份。否则「打开设置页看一眼再保存」
@@ -13,23 +13,23 @@ import {
   configPath,
   diagnoseConfig,
   loadConfig,
-  type QyConfig,
+  type OphConfig,
   type StoredProvider,
   saveConfig,
-} from '@qywork/runtime'
-import { DEFAULT_ENV_ALLOW } from '@qywork/tools'
+} from '@oph-autoresearch/runtime'
+import { DEFAULT_ENV_ALLOW } from '@oph-autoresearch/tools'
 import { type ApiHandler, json } from './types.ts'
 
 /** 接口的对外形状：`apiKey` 换成一个布尔。 */
 export type RedactedProvider = Omit<StoredProvider, 'apiKey'> & { hasApiKey: boolean }
-export type RedactedConfig = Omit<QyConfig, 'providers'> & {
+export type RedactedConfig = Omit<OphConfig, 'providers'> & {
   providers: Record<string, RedactedProvider>
 }
 
 /**
  * 明文 key 不出进程。只脱 `apiKey`，换成一个「有没有」的布尔。
  */
-export function redactConfig(cfg: QyConfig): RedactedConfig {
+export function redactConfig(cfg: OphConfig): RedactedConfig {
   const providers: Record<string, RedactedProvider> = {}
   for (const [name, p] of Object.entries(cfg.providers)) {
     const { apiKey, ...rest } = p
@@ -54,7 +54,7 @@ export function redactConfig(cfg: QyConfig): RedactedConfig {
  * 但那行守卫写了等于没写，而一个不起作用的守卫比没有守卫更容易骗人。
  * `config.test.ts` 钉着这一条。
  */
-export function mergeConfig(current: QyConfig, incoming: RedactedConfig): QyConfig {
+export function mergeConfig(current: OphConfig, incoming: RedactedConfig): OphConfig {
   const providers: Record<string, StoredProvider> = {}
   for (const [name, p] of Object.entries(incoming.providers ?? {})) {
     const { hasApiKey, apiKey: explicit, ...rest } = p as RedactedProvider & { apiKey?: string }
@@ -77,7 +77,7 @@ export const handleConfigApi: ApiHandler = async (url, req, d) => {
      *
      * 保存走的是「读回整份 → 改一格 → 整份写回」，所以这里回什么，下一次 PUT
      * 就把什么写进文件。回启动时那份的话，进程运行期间由别处写进文件的改动
-     * （`qy probe` 落校准结果、手编 JSON、另一个 qywork 实例）会在用户下一次
+     * （`oph probe` 落校准结果、手编 JSON、另一个 oph-autoresearch 实例）会在用户下一次
      * 改任何一格设置时被整份盖掉，全程没有提示。
      *
      * 就地改而不是换引用：`d.config` 被 run、权限、模型解析各处按引用持有。

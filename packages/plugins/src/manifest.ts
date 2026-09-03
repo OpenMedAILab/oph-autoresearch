@@ -9,7 +9,7 @@
  * （或自带渲染器）即可。
  */
 
-import type { ProviderKind } from '@qywork/core'
+import type { ProviderKind } from '@oph-autoresearch/core'
 
 export const MANIFEST_VERSION = 1
 

@@ -28,7 +28,7 @@ const FOLLOWUP_MODES: { id: FollowUpMode; label: string }[] = [
 ]
 
 /**
- * 运行环境：qywork 要调的那几个外部程序在不在。
+ * 运行环境：oph-autoresearch 要调的那几个外部程序在不在。
  *
  * **三态，不是两态。** 已拥有 / 需要安装 / 未安装（可选）。**中间那档不能省**：rg 缺了只是搜索慢一
  * 点（内置遍历顶上），node 只有装插件才用——把它们也标成「需要安装」，用户第一次点开设置页看到的
@@ -97,7 +97,7 @@ function EnvironmentRows() {
       <Show when={deps().some((d) => d.canInstall)}>
         <div class="setting-row stack">
           <span class="setting-row-hint">
-            安装会打开一个终端窗口执行 winget；完成后需重启 qywork。
+            安装会打开一个终端窗口执行 winget；完成后需重启 oph-autoresearch。
           </span>
         </div>
       </Show>

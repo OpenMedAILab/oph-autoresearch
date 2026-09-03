@@ -1,5 +1,5 @@
 /**
- * `qy serve` —— 本地 HTTP + WebSocket 服务。
+ * `oph serve` —— 本地 HTTP + WebSocket 服务。
  *
  * 桌面端和手机端连的是**同一个**服务、走**同一套**协议。桌面端并不通过 Tauri IPC
  * 拿数据，它就是这个服务的一个 Web 客户端——这样手机端不需要第二套后端，
@@ -12,10 +12,21 @@
 
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AgentEvent, ClientCommand, EventEnvelope, HelloFrame, Workspace } from '@qywork/core'
-import type { QyConfig } from '@qywork/runtime'
-import { acquireExtensions, collectSecrets, configDir, releaseExtensions } from '@qywork/runtime'
-import type { ProcessExitObservation, Store } from '@qywork/store'
+import type {
+  AgentEvent,
+  ClientCommand,
+  EventEnvelope,
+  HelloFrame,
+  Workspace,
+} from '@oph-autoresearch/core'
+import type { OphConfig } from '@oph-autoresearch/runtime'
+import {
+  acquireExtensions,
+  collectSecrets,
+  configDir,
+  releaseExtensions,
+} from '@oph-autoresearch/runtime'
+import type { ProcessExitObservation, Store } from '@oph-autoresearch/store'
 import {
   ContentStore,
   contentPathFor,
@@ -24,8 +35,8 @@ import {
   mostRecentWorkspace,
   recoverStaleRuns,
   upsertWorkspace,
-} from '@qywork/store'
-import { isDue, loadSchedules, type Schedule, updateSchedules } from '@qywork/tools'
+} from '@oph-autoresearch/store'
+import { isDue, loadSchedules, type Schedule, updateSchedules } from '@oph-autoresearch/tools'
 import type { ServerWebSocket } from 'bun'
 import { handleApi, json } from './api/index.ts'
 import { EventBus } from './bus.ts'
@@ -42,7 +53,7 @@ import { RunManager } from './runs.ts'
 
 export interface ServeOptions {
   store: Store
-  config: QyConfig
+  config: OphConfig
   /**
    * 正文库。不传则自动挨着主账本开一个（`:memory:` 账本对应内存正文库）。
    * 超预算的工具输出落在这里，模型用 read_resource 读回。
@@ -64,7 +75,7 @@ export interface ServeOptions {
   staticDir?: string
   /** 由外部注入的令牌（Tauri spawn 时用环境变量传），不传则自己生成。 */
   token?: string
-  /** 桌面外壳刚观察到的上一份 qy serve 终态。只用于本次启动的孤儿 run 回收。 */
+  /** 桌面外壳刚观察到的上一份 oph serve 终态。只用于本次启动的孤儿 run 回收。 */
   previousProcessExit?: ProcessExitObservation
 }
 
@@ -76,14 +87,14 @@ const DEFAULT_WORKSPACE_NAME = '默认工作区'
  *
  * 三条路，优先级从高到低：
  *
- * 1. 显式给了根 —— 照用（`qy serve --cwd <目录>` 是 CLI 的正常用法）。
+ * 1. 显式给了根 —— 照用（`oph serve --cwd <目录>` 是 CLI 的正常用法）。
  * 2. 账本里已有项目 —— 用最近打开的那个（`mostRecentWorkspace`）。
  *    **首次之后每次启动都走这条**，所以用户在界面里切过的项目不会被启动目录顶掉。
  *    注意它和侧栏顺序是两回事：侧栏按「置顶 > 添加先后」稳定排列，不跟着切换重排。
- * 3. 一个都没有 —— 在 `~/.qywork/workspaces/默认工作区/` 建一个。
+ * 3. 一个都没有 —— 在 `~/.oph-autoresearch/workspaces/默认工作区/` 建一个。
  *
  * 第 3 条是关键：**不能无条件登记启动目录**，那样首次运行就「挂在启动目录上」——
- * 桌面端的启动目录是 qywork 的源码树，用户拿到的默认项目会是这个仓库本身。
+ * 桌面端的启动目录是 oph-autoresearch 的源码树，用户拿到的默认项目会是这个仓库本身。
  *
  * 目录用 `mkdirSync`：账本这一行必须和目录同生共死，异步建目录会留下一段
  * 「行已经在了、目录还没有」的窗口，而那段时间里任何工具调用都会因为根不存在而炸。
@@ -106,7 +117,7 @@ function bootstrapWorkspace(
 
   const rootPath = join(configDir(), 'workspaces', DEFAULT_WORKSPACE_NAME)
   mkdirSync(rootPath, { recursive: true })
-  process.stderr.write(`[qy] 首次运行，已创建默认工作区 ${rootPath}\n`)
+  process.stderr.write(`[oph] 首次运行，已创建默认工作区 ${rootPath}\n`)
   return { workspace: upsertWorkspace(store, rootPath, DEFAULT_WORKSPACE_NAME), rootPath }
 }
 
@@ -124,12 +135,12 @@ export function serve(opts: ServeOptions) {
   /*
    * 启动时的项目。三条路，优先级从高到低：
    *
-   * 1. **显式给了 `workspaceRoot`** —— 照用（`qy serve --cwd <目录>`）。
+   * 1. **显式给了 `workspaceRoot`** —— 照用（`oph serve --cwd <目录>`）。
    * 2. **账本里已有项目** —— 用最近打开的那个（`mostRecentWorkspace`）。
    * 3. **一个都没有（首次运行）** —— 建一个默认工作区。
    *
    * 第 3 条不能省：无条件登记 `opts.workspaceRoot` 的话，首次运行就「挂在启动
-   * 目录上」——桌面端的启动目录是这个仓库自己，用户拿到的默认项目会是 qywork
+   * 目录上」——桌面端的启动目录是这个仓库自己，用户拿到的默认项目会是 oph-autoresearch
    * 的源码树。
    */
   const { workspace, rootPath: workspaceRoot } = bootstrapWorkspace(opts.store, opts.workspaceRoot)
@@ -148,7 +159,7 @@ export function serve(opts: ServeOptions) {
    * 预热启动那个项目的扩展，并全程持有一份引用。
    *
    * **扩展清单不在这里存一份给握手用。** 扩展里的 MCP 与编排是按工作区的
-   * （`.agents/mcp.json`、`.qy/team.json` 在项目目录下），而一条 WebSocket 连接
+   * （`.agents/mcp.json`、`.oph/team.json` 在项目目录下），而一条 WebSocket 连接
    * 横跨用户开着的所有项目——存一份就等于「A 项目的 MCP 显示在 B 项目上」，
    * 而且只在重连时才更新。要看清单去各自的设置页，它们按项目现取。
    *
@@ -160,16 +171,16 @@ export function serve(opts: ServeOptions) {
   void acquireExtensions(workspaceRoot, (line) => process.stderr.write(`${line}\n`))
     .then((ext) => {
       for (const f of ext.mcp.failures) {
-        process.stderr.write(`[qy] MCP ${f.server}：${f.reason}\n`)
+        process.stderr.write(`[oph] MCP ${f.server}：${f.reason}\n`)
       }
       for (const f of ext.plugins.failures) {
-        process.stderr.write(`[qy] 插件加载失败 ${f.dir}：${f.reason}\n`)
+        process.stderr.write(`[oph] 插件加载失败 ${f.dir}：${f.reason}\n`)
       }
-      if (ext.team.error) process.stderr.write(`[qy] team 配置：${ext.team.error}\n`)
+      if (ext.team.error) process.stderr.write(`[oph] team 配置：${ext.team.error}\n`)
       pluginTeardown = () => releaseExtensions(workspaceRoot)
     })
     .catch((err) => {
-      process.stderr.write(`[qy] 扩展加载失败：${String(err)}\n`)
+      process.stderr.write(`[oph] 扩展加载失败：${String(err)}\n`)
     })
 
   // 回收上次进程留下的 running run。必须在开始服务**之前**做：
@@ -184,7 +195,7 @@ export function serve(opts: ServeOptions) {
   const stale = recoverStaleRuns(opts.store, previousExit)
   if (stale.recovered > 0) {
     process.stderr.write(
-      `[qy] 已回收上次残留的 ${stale.recovered} 个执行记录` +
+      `[oph] 已回收上次残留的 ${stale.recovered} 个执行记录` +
         (stale.ambiguous > 0 ? `，其中 ${stale.ambiguous} 个在工具执行期间中断，结果不可信` : '') +
         '\n',
     )
@@ -193,7 +204,7 @@ export function serve(opts: ServeOptions) {
   // 而这两种在排查「为什么那条会话还显示执行中」时是完全不同的方向。
   if (stale.heldByOthers > 0) {
     process.stderr.write(
-      `[qy] 另有 ${stale.heldByOthers} 个执行记录由其它运行中的进程持有，未回收\n`,
+      `[oph] 另有 ${stale.heldByOthers} 个执行记录由其它运行中的进程持有，未回收\n`,
     )
   }
 
@@ -392,7 +403,7 @@ export function serve(opts: ServeOptions) {
         const served = await serveStatic(opts.staticDir, url.pathname)
         if (served) return served
       }
-      return new Response('qywork server', { status: 200 })
+      return new Response('oph-autoresearch server', { status: 200 })
     },
 
     websocket: {

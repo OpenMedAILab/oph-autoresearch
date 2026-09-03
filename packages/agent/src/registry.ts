@@ -10,7 +10,7 @@
  * 3. **重名即装配错误。** 同名注册直接抛，不静默覆盖——覆盖会无声吞掉一整个插件的工具。
  */
 
-import { estimateJson, type TokenDensity, type ToolSchema } from '@qywork/ai'
+import { estimateJson, type TokenDensity, type ToolSchema } from '@oph-autoresearch/ai'
 import type {
   ActionDescriptor,
   ActionKind,
@@ -24,7 +24,7 @@ import type {
   ToolOutcomeWire,
   WorkflowCall,
   WorkflowTransition,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 
 // ─────────────────────────────── 执行上下文 ───────────────────────────────
 
@@ -35,7 +35,7 @@ import type {
  * 而 tools 依赖 agent，反向引用会成环。实现由 runtime 装配注入
  * （只有它同时握着内容库和账本）。
  *
- * `null` 是合法值——`qy exec` 这类一次性执行不一定要正文库。
+ * `null` 是合法值——`oph exec` 这类一次性执行不一定要正文库。
  * 工具必须能在没有 sink 的情况下降级工作，不能假设它存在。
  */
 export interface SinkPort {
@@ -204,7 +204,7 @@ export interface FileReadPort {
 /**
  * 目标端口 —— 「立一个目标，一轮接一轮做下去」的那个目标。
  *
- * **为什么是端口。** 与 `SinkPort` 同一条理由：目标落**账本**（`@qywork/store`），而 tools 在依赖图
+ * **为什么是端口。** 与 `SinkPort` 同一条理由：目标落**账本**（`@oph-autoresearch/store`），而 tools 在依赖图
  * 上 **低于** store，工具直接引它就是一条反向边。所以接口定义在这里（agent），实现由 runtime 注入
  * ——它同时握着账本和事件通道。
  *
@@ -218,7 +218,7 @@ export interface FileReadPort {
  * 「目标变了」和「把它写下去」是同一件事，拆成两步就会有人只做一半。
  * （待办那条通道是另一回事——待办不落账本，工具是它唯一的真源。）
  *
- * `undefined` 是合法值：`qy exec` 这类一次性执行没有会话，也就没有目标。
+ * `undefined` 是合法值：`oph exec` 这类一次性执行没有会话，也就没有目标。
  * 工具必须能降级——明确报「这里没有目标账本」，不能假装记下了。
  */
 /**
@@ -232,7 +232,7 @@ export interface FileReadPort {
  * 而 `ctx.state` 是 run 级的（一条消息一个 run，Map 新建），在里面永远查不到
  * 上一轮的清单，动作词因此只能恒为「创建」或恒为「修改」。
  *
- * 可选：`qy exec` 这类一次性执行没有会话，也就读不回上一份。工具必须能降级，
+ * 可选：`oph exec` 这类一次性执行没有会话，也就读不回上一份。工具必须能降级，
  * 见 `write_todos` 的 `actionKind`——读不到时说「创建」，那是把一次修订说小了；
  * 反过来说「修改」会在没有清单时声称改过一份不存在的清单。
  */
@@ -535,7 +535,7 @@ export interface ToolContext {
    * `values` 是 key 明文。起子进程的工具（目前只有 `run_command`）**必须**
    * 用它过一遍环境变量与输出。
    *
-   * 这里刻意写成结构类型而不是 `import type { SecretSet } from '@qywork/tools'`：
+   * 这里刻意写成结构类型而不是 `import type { SecretSet } from '@oph-autoresearch/tools'`：
    * tools 依赖 agent，反向 import 会成环。为一个单字段的对象引一条循环依赖不划算。
    *
    * 可选是为了让现有的测试装配不必全部改；**但工具侧不能因为它缺失就跳过脱敏**，
@@ -775,7 +775,7 @@ export class ToolRegistry {
 
   register(spec: ToolSpec): void {
     if (this.tools.has(spec.name)) {
-      throw new Error(`[qywork] 工具重复注册，拒绝静默覆盖：${spec.name}`)
+      throw new Error(`[oph-autoresearch] 工具重复注册，拒绝静默覆盖：${spec.name}`)
     }
     validate(spec)
     this.tools.set(spec.name, spec)
@@ -917,29 +917,29 @@ export function sanitizeToolName(raw: string): string {
 }
 
 function validate(spec: ToolSpec): void {
-  if (!spec.name.trim()) throw new Error('[qywork] 工具缺少 name')
+  if (!spec.name.trim()) throw new Error('[oph-autoresearch] 工具缺少 name')
   if (!TOOL_NAME_PATTERN.test(spec.name)) {
     throw new Error(
-      `[qywork] 工具名 ${spec.name} 含 provider 不接受的字符（只允许字母、数字、下划线、短横线，最长 64）`,
+      `[oph-autoresearch] 工具名 ${spec.name} 含 provider 不接受的字符（只允许字母、数字、下划线、短横线，最长 64）`,
     )
   }
   if (!spec.description.trim()) {
     // 描述是模型判断「何时调用」的唯一依据，空描述等于这个工具不会被正确使用。
-    throw new Error(`[qywork] 工具 ${spec.name} 缺少 description`)
+    throw new Error(`[oph-autoresearch] 工具 ${spec.name} 缺少 description`)
   }
   if (!spec.permissionEffect) {
-    throw new Error(`[qywork] 工具 ${spec.name} 未声明 permissionEffect`)
+    throw new Error(`[oph-autoresearch] 工具 ${spec.name} 未声明 permissionEffect`)
   }
   // 三条轴一样对待：漏标就是装配错误，当场抛。给默认值的话新工具会静默落进
   // 一个与它无关的类目，而分类表看起来完整——那种错没人会发现。
   if (!TOOL_CATEGORIES.includes(spec.category)) {
     throw new Error(
-      `[qywork] 工具 ${spec.name} 的 category 无法识别：${String(spec.category)}` +
+      `[oph-autoresearch] 工具 ${spec.name} 的 category 无法识别：${String(spec.category)}` +
         `（可用：${TOOL_CATEGORIES.join('、')}）`,
     )
   }
-  if (!spec.facet?.trim()) throw new Error(`[qywork] 工具 ${spec.name} 未声明 facet`)
-  if (!spec.summary?.trim()) throw new Error(`[qywork] 工具 ${spec.name} 未声明 summary`)
+  if (!spec.facet?.trim()) throw new Error(`[oph-autoresearch] 工具 ${spec.name} 未声明 facet`)
+  if (!spec.summary?.trim()) throw new Error(`[oph-autoresearch] 工具 ${spec.name} 未声明 summary`)
 }
 
 /** 给用户看的授权预览。要具体到能判断该不该批，不能只说「要写文件」。 */

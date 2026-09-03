@@ -1,5 +1,5 @@
 {
-  "name": "@qywork/runtime",
+  "name": "@oph-autoresearch/runtime",
   "version": "0.1.8",
   "private": true,
   "type": "module",
@@ -7,13 +7,13 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@qywork/agent": "workspace:*",
-    "@qywork/ai": "workspace:*",
-    "@qywork/core": "workspace:*",
-    "@qywork/plugins": "workspace:*",
-    "@qywork/store": "workspace:*",
-    "@qywork/team": "workspace:*",
-    "@qywork/tools": "workspace:*",
-    "@qywork/mcp": "workspace:*"
+    "@oph-autoresearch/agent": "workspace:*",
+    "@oph-autoresearch/ai": "workspace:*",
+    "@oph-autoresearch/core": "workspace:*",
+    "@oph-autoresearch/plugins": "workspace:*",
+    "@oph-autoresearch/store": "workspace:*",
+    "@oph-autoresearch/team": "workspace:*",
+    "@oph-autoresearch/tools": "workspace:*",
+    "@oph-autoresearch/mcp": "workspace:*"
   }
 }

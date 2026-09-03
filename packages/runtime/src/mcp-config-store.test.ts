@@ -9,14 +9,14 @@ async function workspace(prefix: string): Promise<string> {
 }
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const before = process.env.QYWORK_HOME
-  const home = await workspace('qywork-mcp-config-home-')
-  process.env.QYWORK_HOME = home
+  const before = process.env.OPH_AUTORESEARCH_HOME
+  const home = await workspace('oph-autoresearch-mcp-config-home-')
+  process.env.OPH_AUTORESEARCH_HOME = home
   try {
     return await fn(home)
   } finally {
-    if (before === undefined) delete process.env.QYWORK_HOME
-    else process.env.QYWORK_HOME = before
+    if (before === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = before
   }
 }
 
@@ -28,7 +28,7 @@ async function servers(file: string): Promise<Record<string, unknown>> {
 describe('MCP 配置写入与迁移', () => {
   test('明确指定 global 时只写全局 mcp.json', async () => {
     await withTempHome(async (home) => {
-      const root = await workspace('qywork-mcp-config-ws-')
+      const root = await workspace('oph-autoresearch-mcp-config-ws-')
       const port = makeMcpConfigPort(root)
       const result = await port.writeServer({
         name: 'docs',
@@ -43,7 +43,7 @@ describe('MCP 配置写入与迁移', () => {
 
   test('迁移成功后来源层删除，只保留目标层', async () => {
     await withTempHome(async (home) => {
-      const root = await workspace('qywork-mcp-config-ws-')
+      const root = await workspace('oph-autoresearch-mcp-config-ws-')
       const port = makeMcpConfigPort(root)
       await port.writeServer({
         name: 'local',
@@ -63,7 +63,7 @@ describe('MCP 配置写入与迁移', () => {
 
   test('目标层同名时拒绝迁移，两边原配置都不改', async () => {
     await withTempHome(async (home) => {
-      const root = await workspace('qywork-mcp-config-ws-')
+      const root = await workspace('oph-autoresearch-mcp-config-ws-')
       const port = makeMcpConfigPort(root)
       await port.writeServer({
         name: 'same',

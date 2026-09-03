@@ -13,14 +13,14 @@
  *
  * 索引同样**永不进冻结前缀**——用户装一个技能就会让整个 provider 缓存失效。
  *
- * **三层作用域，读跨层，写默认项目层。** 工作区 `.agents/skills/`（项目层）和 `~/.qywork/skills/`
+ * **三层作用域，读跨层，写默认项目层。** 工作区 `.agents/skills/`（项目层）和 `~/.oph-autoresearch/skills/`
  * （全局层）都扫，同名先到的赢。用户明确指定全局时写入全局；迁移由单个工具完成，目标冲突时不改来源，
  * 成功后不保留双份。
  */
 
 import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import type { ToolSpec } from '@qywork/agent'
+import type { ToolSpec } from '@oph-autoresearch/agent'
 import { resolveInWorkspace } from './paths.ts'
 import {
   type Scope,
@@ -174,8 +174,8 @@ async function commitSkill(
   const existed = (await stat(target).catch(() => null)) !== null
   const parent = join(target, '..')
   await mkdir(parent, { recursive: true })
-  const temp = `${target}.qywork-writing-${crypto.randomUUID()}`
-  const backup = `${target}.qywork-backup-${crypto.randomUUID()}`
+  const temp = `${target}.oph-autoresearch-writing-${crypto.randomUUID()}`
+  const backup = `${target}.oph-autoresearch-backup-${crypto.randomUUID()}`
   try {
     if (existed) await cp(target, temp, { recursive: true, errorOnExist: true, force: false })
     else await mkdir(temp, { recursive: false })
@@ -250,7 +250,7 @@ export const readSkillTool: ToolSpec = {
 export const writeSkillTool: ToolSpec = {
   name: 'write_skill',
   description:
-    '创建或更新一个 qywork 技能。默认写项目层；用户明确要求全局时 scope 必须传 global。content 是 SKILL.md 的正文，不含前置元信息；附带脚本或模板放在 files。',
+    '创建或更新一个 oph-autoresearch 技能。默认写项目层；用户明确要求全局时 scope 必须传 global。content 是 SKILL.md 的正文，不含前置元信息；附带脚本或模板放在 files。',
   parameters: {
     type: 'object',
     properties: {
@@ -382,7 +382,7 @@ export const moveSkillTool: ToolSpec = {
     }
 
     await mkdir(join(target, '..'), { recursive: true })
-    const temp = `${target}.qywork-moving-${crypto.randomUUID()}`
+    const temp = `${target}.oph-autoresearch-moving-${crypto.randomUUID()}`
     try {
       await cp(hit.dir, temp, { recursive: true, errorOnExist: true, force: false })
       await rename(temp, target)

@@ -1,12 +1,12 @@
 /**
- * `@qywork/runtime` 的对外面。**这里列的就是承诺，没列的就是内部实现。**
+ * `@oph-autoresearch/runtime` 的对外面。**这里列的就是承诺，没列的就是内部实现。**
  * 具名导出，不用 `export *`（B6）；加一行之前先确认它真有包外调用点（B3）。
  *
  * 这个包是装配层：把 agent / ai / store / tools / mcp / plugins / team 拼成一个
  * `Session`。**下游只该看见装配结果**，不该看见它是怎么拼的。
  */
 
-// 会话导出：`qy export`
+// 会话导出：`oph export`
 export { exportConversation, exportConversationDiagnostics } from './archive.ts'
 // 压缩端口：server 的手动压缩与 loop 的自动压缩共用
 export { RuntimeCompaction } from './compaction.ts'
@@ -22,7 +22,7 @@ export {
   isWorkspaceTrusted,
   loadConfig,
   type ModelRef,
-  type QyConfig,
+  type OphConfig,
   resolveModel,
   type StoredCatalogEntry,
   type StoredModel,
@@ -34,7 +34,7 @@ export {
 export { type ContextPanel, contextPanel } from './context-panel.ts'
 // 扩展装配：插件 + MCP + team。
 // `toolNamePrefix` / `pluginToolPrefix` 由这里转出——CLI 不直接依赖 mcp / plugins
-// 两个包，但 `qy mcp` / `qy doctor` / `qy plugins` 都要按前缀数工具，
+// 两个包，但 `oph mcp` / `oph doctor` / `oph plugins` 都要按前缀数工具，
 // 而自己拼未消毒的前缀会一条都匹配不上。
 export {
   acquireExtensions,

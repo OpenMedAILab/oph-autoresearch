@@ -1,7 +1,7 @@
 /**
  * MCP 客户端：JSON-RPC 2.0，传输可换（stdio / streamable HTTP）。
  *
- * 与插件宿主（`@qywork/plugins`）看起来很像，但**刻意不共用一份实现**：
+ * 与插件宿主（`@oph-autoresearch/plugins`）看起来很像，但**刻意不共用一份实现**：
  * 插件协议由本仓定义、可以随时改；MCP 是外部规范，帧格式、握手、
  * 错误语义都得照它来。合并成一个「通用 RPC」的结果必然是
  * 某一次改动为了迁就自家协议而破坏了 MCP 的兼容性——那种 bug 只会在
@@ -61,7 +61,7 @@ const KNOWN_VERSIONS = new Set<string>(KNOWN_VERSION_LIST)
 /**
  * 从这一版起，能力声明**不在 `initialize` 的结果里**，改由 `server/discover` 给。
  *
- * 这不是一条可以「以后再说」的版本差异：qywork 是否注册 resource 工具、
+ * 这不是一条可以「以后再说」的版本差异：oph-autoresearch 是否注册 resource 工具、
  * 是否报「声明了但未接入的能力」，全都读 `capabilities`。
  * 只读 initialize 的话，一个现代 server 上那个字段是空的，因此
  * **resource 工具一个都不注册、也不报任何错**——同一个静默失败换个版本复发。
@@ -84,7 +84,7 @@ export interface McpServerCapabilities {
   [k: string]: unknown
 }
 
-/** qywork 目前真正消费的能力。其余的声明了也只会被报成「未接」。 */
+/** oph-autoresearch 目前真正消费的能力。其余的声明了也只会被报成「未接」。 */
 export const SUPPORTED_CAPABILITIES = ['tools', 'resources'] as const
 
 /**
@@ -243,7 +243,7 @@ export class McpClient {
             // 只声明已经实现的。声明了没实现的能力，server 会据此发来
             // 处理不了的请求——那比不声明糟得多。
             capabilities: {},
-            clientInfo: { name: 'qywork', version: PKG_VERSION },
+            clientInfo: { name: 'oph-autoresearch', version: PKG_VERSION },
           },
           INIT_TIMEOUT_MS,
         )) as never
@@ -423,7 +423,7 @@ export class McpClient {
         ?.send({
           jsonrpc: '2.0',
           id: msg.id,
-          error: { code: -32601, message: `qywork 未实现该方法：${msg.method}` },
+          error: { code: -32601, message: `oph-autoresearch 未实现该方法：${msg.method}` },
         })
         .catch(() => {
           // 回一条「不支持」都失败了，说明连接已经没了。那件事会由 onClose 处理，

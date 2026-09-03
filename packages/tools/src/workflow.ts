@@ -4,8 +4,8 @@
  * workflow 每次调用只推进到下一个 checkpoint 或结束。检查点回执回到当前
  * 会话后，由当前会话决定 approve 或 revise；续发仍使用同一个 workflowId。
  */
-import type { ToolContext, ToolSpec } from '@qywork/agent'
-import { parseWorkflowCall, type WorkflowTransition } from '@qywork/core'
+import type { ToolContext, ToolSpec } from '@oph-autoresearch/agent'
+import { parseWorkflowCall, type WorkflowTransition } from '@oph-autoresearch/core'
 
 export const workflowTool: ToolSpec = {
   name: 'workflow',

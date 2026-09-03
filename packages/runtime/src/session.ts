@@ -1,7 +1,7 @@
 /**
  * 把 store / adapter / registry / loop 接成一个可执行的 run。
  *
- * 这是唯一的装配点：TUI、`qy exec`、`qy serve` 都从这里起 run，
+ * 这是唯一的装配点：TUI、`oph exec`、`oph serve` 都从这里起 run，
  * 不各自再拼一遍——三套装配就是三套会漂移的行为。
  */
 
@@ -19,7 +19,7 @@ import {
   type Summarizer,
   type ToolContextBase,
   ToolRegistry,
-} from '@qywork/agent'
+} from '@oph-autoresearch/agent'
 import {
   buildAdapter,
   type ContentBlock,
@@ -30,7 +30,7 @@ import {
   type ProviderUsage,
   type TokenDensity,
   type WireToolCall,
-} from '@qywork/ai'
+} from '@oph-autoresearch/ai'
 import type {
   AgentEvent,
   Attachment,
@@ -42,7 +42,7 @@ import type {
   RunId,
   RunInterruption,
   Step,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import {
   deriveConversationTitle,
   envelopeHeadTokens,
@@ -50,7 +50,7 @@ import {
   isInlineVideo,
   mimeOf,
   toPosixPath,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import {
   appendMessage,
   appendStep,
@@ -90,7 +90,7 @@ import {
   updateGoal,
   updateRunUsage,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 import {
   EXTERNAL_SCHEMA_BUDGET_TOKENS,
   externalSchemaTokens,
@@ -102,9 +102,9 @@ import {
   registerBuiltinTools,
   scanSkills,
   scopeRoots,
-} from '@qywork/tools'
+} from '@oph-autoresearch/tools'
 import { RuntimeCompaction } from './compaction.ts'
-import { collectSecrets, type ModelRef, type QyConfig, resolveModel } from './config.ts'
+import { collectSecrets, type ModelRef, type OphConfig, resolveModel } from './config.ts'
 import { acquireExtensions, type Extensions, releaseExtensions } from './extensions.ts'
 import { makeMcpConfigPort } from './mcp-config-store.ts'
 import { buildSystemPrompt, buildTailNotes } from './prompt.ts'
@@ -113,11 +113,11 @@ import { buildHistory } from './transcript.ts'
 
 export interface SessionOptions {
   store: Store
-  config: QyConfig
+  config: OphConfig
   workspaceRoot: string
   /**
    * 正文库。不传 = 本次执行不落盘中间资源，超预算的输出只截断不保存。
-   * `qy exec` 这类一次性执行可以省掉它；`qy serve` 必须给。
+   * `oph exec` 这类一次性执行可以省掉它；`oph serve` 必须给。
    */
   content?: ContentStore
   signal: AbortSignal
@@ -244,7 +244,7 @@ export class Session {
    * 解析出这一轮该走哪个接口、带什么凭证。
    *
    * 入参是 `ModelRef` 时**接口是指定死的**（会话自己记着归谁），是裸模型名时
-   * 按模型 id 反查接口——后者留给 `qy ask --model x` 那种用户点名模型不点名接口
+   * 按模型 id 反查接口——后者留给 `oph ask --model x` 那种用户点名模型不点名接口
    * 的入口。规则只有 `resolveModel` 那一份：界面上列出来的协议和这一轮真的
    * 发出去的必须是同一个结论。
    *
@@ -523,7 +523,7 @@ export class Session {
      * 心跳：**告诉别的进程「这一轮还有人在跑」。**
      *
      * 账本是共享的，一台机器上同时有好几个写入者（两个工作区的 sidecar、
-     * 开发态热重载、终端里的 `qy exec`）。后起的那个进程在启动时回收残留 run，
+     * 开发态热重载、终端里的 `oph exec`）。后起的那个进程在启动时回收残留 run，
      * 判据就是这个心跳加 `owner_pid`（见 `store/repos.ts` 的 `isOrphan`）——
      * 不推心跳的话，别人一启动就把这条正在跑的判成中断。
      *
@@ -694,7 +694,7 @@ export class Session {
         try {
           this.registry.register(spec)
         } catch (err) {
-          process.stderr.write(`[qy] 工具注册失败 ${spec.name}：${String(err)}
+          process.stderr.write(`[oph] 工具注册失败 ${spec.name}：${String(err)}
 `)
         }
       }
@@ -710,16 +710,16 @@ export class Session {
       const invalid = [...allow].filter((n) => !this.registry.has(n))
       if (invalid.length) {
         process.stderr.write(
-          `[qy] 角色 allowedTools 含无效工具引用，已忽略：${invalid.join('、')}\n`,
+          `[oph] 角色 allowedTools 含无效工具引用，已忽略：${invalid.join('、')}\n`,
         )
       }
     }
 
     for (const f of ext.plugins.failures) {
-      process.stderr.write(`[qy] 插件加载失败 ${f.dir}：${f.reason}\n`)
+      process.stderr.write(`[oph] 插件加载失败 ${f.dir}：${f.reason}\n`)
     }
     for (const f of ext.mcp.failures) {
-      process.stderr.write(`[qy] MCP ${f.server}：${f.reason}\n`)
+      process.stderr.write(`[oph] MCP ${f.server}：${f.reason}\n`)
     }
   }
 

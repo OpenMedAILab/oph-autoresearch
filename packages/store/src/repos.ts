@@ -30,7 +30,7 @@ import type {
   ToolActionStatus,
   Workspace,
   WorkspaceId,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import {
   emptyBreakdown,
   emptyOmitted,
@@ -40,7 +40,7 @@ import {
   newRunId,
   newStepId,
   newWorkspaceId,
-} from '@qywork/core'
+} from '@oph-autoresearch/core'
 import type { Store } from './db.ts'
 import { readJson, writeJson } from './db.ts'
 import type {
@@ -291,7 +291,7 @@ export function getConversation(store: Store, id: ConversationId): Conversation 
  * 跨工作区的最近会话。
  *
  * `listConversations` 要工作区 id，那是界面用的——界面永远开在某个工作区里。
- * CLI 不是：`qy export` 可能在任何目录下跑，而账本是全局一份，
+ * CLI 不是：`oph export` 可能在任何目录下跑，而账本是全局一份，
  * 用户想导的很可能是别的工作区里那个会话。要求它先切目录才能列出来，是把
  * 数据模型的形状强加给使用方式。
  */
@@ -806,7 +806,7 @@ export function finishRun(
  * 会让所有 run 都被判成「安全可重放」，正好是最危险的那个方向。
  *
  * **只回收没人在跑的那些，不能无差别扫全库**：账本是共享的，一台机器上同时有好几个写入者（两个工作
- * 区的 sidecar、开发态热重载、终端里的 `qy exec`），扫全库就是**后起的进程把别的进程正在跑的那一轮
+ * 区的 sidecar、开发态热重载、终端里的 `oph exec`），扫全库就是**后起的进程把别的进程正在跑的那一轮
  * 判死**。判据见 `isOrphan`，两个信号缺一不可。
  */
 export interface ProcessExitObservation {

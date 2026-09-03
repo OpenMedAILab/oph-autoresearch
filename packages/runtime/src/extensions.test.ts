@@ -9,8 +9,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ToolRegistry } from '@qywork/agent'
-import { configPath, isWorkspaceTrusted, type QyConfig, setWorkspaceTrust } from './config.ts'
+import { ToolRegistry } from '@oph-autoresearch/agent'
+import { configPath, isWorkspaceTrusted, type OphConfig, setWorkspaceTrust } from './config.ts'
 import {
   acquireExtensions,
   globalPluginsDir,
@@ -22,20 +22,20 @@ import {
 } from './extensions.ts'
 
 /**
- * 插件装在全局目录里，所以要给这一轮一个临时的 `QYWORK_HOME`。
+ * 插件装在全局目录里，所以要给这一轮一个临时的 `OPH_AUTORESEARCH_HOME`。
  *
  * **加载完就还回去**：`globalScopeRoot()` 每次调用都现读环境变量，留着不还会把
  * 同一个进程里后面那些测试的配置目录也指到这个临时目录上。
  */
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const home = await mkdtemp(join(tmpdir(), 'qywork-home-'))
-  const before = process.env.QYWORK_HOME
-  process.env.QYWORK_HOME = home
+  const home = await mkdtemp(join(tmpdir(), 'oph-autoresearch-home-'))
+  const before = process.env.OPH_AUTORESEARCH_HOME
+  process.env.OPH_AUTORESEARCH_HOME = home
   try {
     return await fn(home)
   } finally {
-    if (before === undefined) delete process.env.QYWORK_HOME
-    else process.env.QYWORK_HOME = before
+    if (before === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = before
   }
 }
 
@@ -102,13 +102,13 @@ send({ type: 'ready' })
  */
 async function workspaceWith(extra: string[]) {
   const permissions = ['workspace:read', ...extra.filter((p) => p !== 'workspace:read')]
-  const root = await mkdtemp(join(tmpdir(), 'qywork-ext-'))
+  const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-ext-'))
   return withTempHome(async () => {
     const dir = join(globalPluginsDir(), 'probe')
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, 'index.mjs'), PLUGIN_SOURCE, 'utf8')
     await writeFile(
-      join(dir, 'qywork.plugin.json'),
+      join(dir, 'oph-autoresearch.plugin.json'),
       JSON.stringify({
         manifestVersion: 1,
         id: 'test.probe',
@@ -206,7 +206,7 @@ describe('插件端到端', () => {
     const got = await probe('storage.get', { key: 'k' })
     expect((got.data as { r: { value: number } }).r.value).toBe(42)
     // 落成用户看得见的普通文件，插件行为异常时能直接翻。
-    expect(await Bun.file(join(root, '.qy/plugin-data/test.probe.json')).exists()).toBe(true)
+    expect(await Bun.file(join(root, '.oph/plugin-data/test.probe.json')).exists()).toBe(true)
     stop()
   })
 
@@ -225,15 +225,15 @@ describe('插件端到端', () => {
   })
 
   test('声明了 process:exec 能跑，且拿不到宿主的密钥', async () => {
-    process.env.QYWORK_EXT_SECRET = 'leaked-secret'
+    process.env.OPH_AUTORESEARCH_EXT_SECRET = 'leaked-secret'
     try {
       const { probe, stop } = await workspaceWith(['process:exec'])
-      const r = await probe('exec.run', { command: 'echo "[$QYWORK_EXT_SECRET]"' })
+      const r = await probe('exec.run', { command: 'echo "[$OPH_AUTORESEARCH_EXT_SECRET]"' })
       expect(r.status).toBe('success')
       expect((r.data as { r: { stdout: string } }).r.stdout).not.toContain('leaked-secret')
       stop()
     } finally {
-      delete process.env.QYWORK_EXT_SECRET
+      delete process.env.OPH_AUTORESEARCH_EXT_SECRET
     }
   })
 
@@ -244,11 +244,11 @@ describe('插件端到端', () => {
   })
 
   test('坏插件不影响整体加载 —— 记进 failures 而不是抛', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-ext-bad-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-ext-bad-'))
     const ext = await withTempHome(async () => {
       const dir = join(globalPluginsDir(), 'broken')
       await mkdir(dir, { recursive: true })
-      await writeFile(join(dir, 'qywork.plugin.json'), '{ 坏的', 'utf8')
+      await writeFile(join(dir, 'oph-autoresearch.plugin.json'), '{ 坏的', 'utf8')
       return loadExtensions(root)
     })
     expect(ext.plugins.failures).toHaveLength(1)
@@ -263,12 +263,12 @@ describe('插件端到端', () => {
    * ——它不在扫描范围里，报 failure 反而是错的。
    */
   test('工作区 .agents/plugins 里的插件不再被加载', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-ext-ws-plugin-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-ext-ws-plugin-'))
     const dir = join(root, '.agents', 'plugins', 'probe')
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, 'index.mjs'), PLUGIN_SOURCE, 'utf8')
     await writeFile(
-      join(dir, 'qywork.plugin.json'),
+      join(dir, 'oph-autoresearch.plugin.json'),
       JSON.stringify({
         manifestVersion: 1,
         id: 'test.probe',
@@ -324,20 +324,20 @@ describe('MCP 接线', () => {
   ].join('\n')
 
   /*
-   * 这一组要写 `config.json` 授权工作区，所以整组都在临时 `QYWORK_HOME` 下跑。
+   * 这一组要写 `config.json` 授权工作区，所以整组都在临时 `OPH_AUTORESEARCH_HOME` 下跑。
    * 不隔离的话写的是本机真配置。
    */
-  const prevHome = process.env.QYWORK_HOME
+  const prevHome = process.env.OPH_AUTORESEARCH_HOME
   beforeEach(async () => {
-    process.env.QYWORK_HOME = await mkdtemp(join(tmpdir(), 'qywork-mcphome-'))
+    process.env.OPH_AUTORESEARCH_HOME = await mkdtemp(join(tmpdir(), 'oph-autoresearch-mcphome-'))
   })
   afterEach(() => {
-    if (prevHome === undefined) delete process.env.QYWORK_HOME
-    else process.env.QYWORK_HOME = prevHome
+    if (prevHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = prevHome
   })
 
   async function withMcp(extra: Record<string, unknown> = {}) {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-mcpext-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-mcpext-'))
     await mkdir(join(root, '.agents'), { recursive: true })
     // 项目层的 server 要先授权才加载，这一组验的是加载之后的事。
     await writeFile(configPath(), JSON.stringify({ trustedWorkspaces: [root] }), 'utf8')
@@ -376,14 +376,14 @@ describe('MCP 接线', () => {
   })
 
   test('连不上的 server 只记 failure，不影响能连上的', async () => {
-    const { ext } = await withMcp({ broken: { command: 'qywork-绝对不存在', args: [] } })
+    const { ext } = await withMcp({ broken: { command: 'oph-autoresearch-绝对不存在', args: [] } })
     expect(ext.mcp.servers.map((s) => s.name)).toEqual(['demo'])
     expect(ext.mcp.failures.map((f) => f.server)).toEqual(['broken'])
     ext.stop()
   }, 20_000)
 
   test('没有 mcp.json 时是空注册表，不是错误', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-nomcp-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-nomcp-'))
     const ext = await loadExtensions(root)
     expect(ext.mcp.servers).toEqual([])
     expect(ext.mcp.failures).toEqual([])
@@ -393,7 +393,7 @@ describe('MCP 接线', () => {
 
 describe('扩展按工作区共享', () => {
   test('两次 acquire 只加载一份，release 到零才停', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-share-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-share-'))
     const a = await acquireExtensions(root)
     const b = await acquireExtensions(root)
     // 同一个对象说明只加载了一次——server 每条消息新建一个 Session，
@@ -429,7 +429,7 @@ describe('项目层 MCP 要先授权', () => {
   }
 
   async function workspaceWith(config: unknown): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), 'qywork-trust-'))
+    const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-trust-'))
     await mkdir(join(root, '.agents'), { recursive: true })
     await writeFile(join(root, '.agents', 'mcp.json'), JSON.stringify(config), 'utf8')
     return root
@@ -478,7 +478,7 @@ describe('项目层 MCP 要先授权', () => {
   })
 
   test('授权可以撤销，撤到空时键整个删掉', () => {
-    const base = { active: { provider: 'x', model: 'y' }, providers: {} } as QyConfig
+    const base = { active: { provider: 'x', model: 'y' }, providers: {} } as OphConfig
     const on = setWorkspaceTrust(base, '/tmp/ws', true)
     expect(isWorkspaceTrusted(on, '/tmp/ws')).toBe(true)
     const off = setWorkspaceTrust(on, '/tmp/ws', false)

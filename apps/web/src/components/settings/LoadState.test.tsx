@@ -5,7 +5,7 @@
  * 的测试要的是 Bun 原生的——装成全局，一百多个测试当场变红。
  *
  * **为什么要动态 import。** `LoadState.tsx` 逐层 import 到 `lib/store`，那里顶层
- * `new QyClient(...)` 会读 `location` / `sessionStorage`。静态 import 在 `beforeAll` 之前就求值了，
+ * `new OphClient(...)` 会读 `location` / `sessionStorage`。静态 import 在 `beforeAll` 之前就求值了，
  * 读不到。
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'

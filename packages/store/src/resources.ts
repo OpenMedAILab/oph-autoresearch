@@ -5,7 +5,7 @@
  * 两者跨库，没有外键，所以顺序是硬约束：**先在正文库定稿 blob，再往这里登记。**
  */
 
-import { newResourceId, type ResourceId } from '@qywork/core'
+import { newResourceId, type ResourceId } from '@oph-autoresearch/core'
 import type { Store } from './db.ts'
 import { readJson, writeJson } from './db.ts'
 import type { IntermediateResourceRow } from './schema.ts'

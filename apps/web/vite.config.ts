@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import solid from 'vite-plugin-solid'
 
 /** sidecar 在哪个端口。由 `scripts/dev.ts` 灌进来，单独跑 vite 时回落到默认值。 */
-const AGENT_PORT = process.env.QYWORK_PORT ?? '7717'
+const AGENT_PORT = process.env.OPH_AUTORESEARCH_PORT ?? '7717'
 
 export default defineConfig({
   plugins: [solid()],
@@ -15,8 +15,8 @@ export default defineConfig({
     // 端口被占时**宁可直接失败**，不要顺延到 5181：顺延之后 vite 自己是好的，
     // 但 Tauri 的 devUrl 还指着 5180，表现成同一个超时，排查方向完全被带偏。
     strictPort: true,
-    // 开发时前端和 qy serve 分开跑，代理过去省得配 CORS。
-    // **端口跟着 `QYWORK_PORT` 走**：`scripts/dev.ts` 起不来 7717 时会往上挪一个
+    // 开发时前端和 oph serve 分开跑，代理过去省得配 CORS。
+    // **端口跟着 `OPH_AUTORESEARCH_PORT` 走**：`scripts/dev.ts` 起不来 7717 时会往上挪一个
     // （上次留下的后台进程可能还攥着那个端口），写死在这里就代理到一个空端口上。
     proxy: {
       '/api': { target: `http://127.0.0.1:${AGENT_PORT}`, changeOrigin: true },

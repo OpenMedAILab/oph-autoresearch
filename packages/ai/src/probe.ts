@@ -5,13 +5,13 @@
  * 模型时，`lookupModel` 回落到 `unknownModel()` 的保守默认值：不声明思考、
  * 不声明 effort、计价为 0。保守是对的——**但它是猜的**，而现在没有任何办法验证。
  *
- * 表现：接上一个支持思考的端点，qywork 从不开思考；接上一个不支持的，
+ * 表现：接上一个支持思考的端点，oph-autoresearch 从不开思考；接上一个不支持的，
  * 又可能因为模型名恰好匹配上内置条目而每次请求都 400。两种都只能靠人试出来。
  *
  * 所以这里做的事只有一件：**发几个极小的请求，看哪些被拒**。
  *
  * - 每个探针的 `max_tokens` 压到最小，prompt 一个字。整轮探测的成本约等于一次问候。
- * - **只由用户显式触发**（`qy probe`）。自动探测意味着有人在不知情的情况下被扣钱，
+ * - **只由用户显式触发**（`oph probe`）。自动探测意味着有人在不知情的情况下被扣钱，
  *   而且探测结果会在他没改任何配置的时候静默改变行为。
  * - 探不出来的维度**不猜**：上下文窗口、计价、视觉都没法用一个小请求问出来，
  *   思考形态（adaptive / budget_tokens）同样没有观测面——本项目从不请求它，
@@ -19,7 +19,7 @@
  *   探测的价值在于它报的每一条都是实测的。
  */
 
-import type { EffortLevel, ProviderKind } from '@qywork/core'
+import type { EffortLevel, ProviderKind } from '@oph-autoresearch/core'
 import { ProviderError } from './errors.ts'
 import { buildAdapter } from './factory.ts'
 import type { ChatRequest, ProviderProfile } from './types.ts'

@@ -1,6 +1,6 @@
-# 写一个 qywork 插件
+# 写一个 oph-autoresearch 插件
 
-插件放在 `~/.qywork/plugins/<任意目录名>/`，至少要有一个 `qywork.plugin.json`。
+插件放在 `~/.oph-autoresearch/plugins/<任意目录名>/`，至少要有一个 `oph-autoresearch.plugin.json`。
 **插件不分层，只有这一个目录**——它贡献的是工具、预览器、供应商，那些是这个 agent
 的能力，不是某个仓库的内容，所以装一次对所有项目生效。
 加载顺序按目录名字典序——插件之间存在先到先得的资源（工具名、预览器扩展名归属），
@@ -68,11 +68,11 @@
 [other.plugin]    运行时 /usr/bin/bun（沙箱 无 · 出网闸 无）：bun 既没有权限模型也没有出网闸所需的 module.registerHooks；装一个 node 22.15+ 两样都能有
 ```
 
-### 自查：`qy plugins`
+### 自查：`oph plugins`
 
 ```bash
-qy plugins            # 装上了哪些、隔离到什么程度、哪些没装上及原因
-qy plugins --tools    # 连带列出每个插件提供的工具，以及启动日志
+oph plugins            # 装上了哪些、隔离到什么程度、哪些没装上及原因
+oph plugins --tools    # 连带列出每个插件提供的工具，以及启动日志
 ```
 
 ```
@@ -84,7 +84,7 @@ ode.exe
 ✗ broken  清单缺少必填字段：main
 ```
 
-有插件装不上时退非零，可以直接当 CI 里的一条检查（与 `qy mcp` 一致）。
+有插件装不上时退非零，可以直接当 CI 里的一条检查（与 `oph mcp` 一致）。
 
 **这条命令是隔离状态唯一的用户可见出口。** 在它之前，`sandboxed` / `netGuarded`
 只出现在一行 stderr 里，而桌面外壳会把那些输出吞掉——用户装完插件之后
@@ -92,7 +92,7 @@ ode.exe
 
 ### 需要 node 或 bun 在 PATH 上
 
-插件跑在独立进程里，而 qywork 的发布产物是 Bun 编译的单文件二进制——
+插件跑在独立进程里，而 oph-autoresearch 的发布产物是 Bun 编译的单文件二进制——
 **它自己不能当 JS 运行时**。找不到 node 也找不到 bun 时插件会加载失败并说明原因，
 不会拿一个不会执行 JS 的可执行文件去试。
 
@@ -228,14 +228,14 @@ stdin/stdout 上的行分隔 JSON，每行一个对象。**stdout 只能走协�
 未登记的方法一律拒绝，而不是放行——忘了登记的后果是「新能力用不了」，
 不是「新能力对所有插件无条件开放」。
 
-私有存储落成 `.qy/plugin-data/<插件 id>.json`。不放 SQLite 是因为插件行为异常时
+私有存储落成 `.oph/plugin-data/<插件 id>.json`。不放 SQLite 是因为插件行为异常时
 「用户能直接打开看、直接删」比性能重要得多。
 
 ---
 
 ## 一个能跑的最小例子
 
-`~/.qywork/plugins/lines/qywork.plugin.json`：
+`~/.oph-autoresearch/plugins/lines/oph-autoresearch.plugin.json`：
 
 ```json
 {
@@ -259,7 +259,7 @@ stdin/stdout 上的行分隔 JSON，每行一个对象。**stdout 只能走协�
 
 注册名是 `demo_lines__count`（`demo.lines` 里的点被消毒成了下划线）。
 
-`~/.qywork/plugins/lines/index.mjs`：
+`~/.oph-autoresearch/plugins/lines/index.mjs`：
 
 ```js
 const send = (o) => process.stdout.write(JSON.stringify(o) + '\n')

@@ -14,7 +14,7 @@
  * 没有错误码时仍要靠文案区分限速与欠费；传输层错误同样需要文案兜底。
  */
 
-import type { ErrorCode, ProviderKind } from '@qywork/core'
+import type { ErrorCode, ProviderKind } from '@oph-autoresearch/core'
 import { type CapacityRejection, classifyCapacityRejection } from './capacity.ts'
 import type { ProviderUsage } from './types.ts'
 

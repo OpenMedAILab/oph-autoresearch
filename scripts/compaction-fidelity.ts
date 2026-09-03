@@ -17,8 +17,13 @@
  *   bun run scripts/compaction-fidelity.ts
  */
 
-import { buildAdapter, estimateText } from '@qywork/ai'
-import { loadConfig, makeSummarizer, RuntimeCompaction, resolveModel } from '@qywork/runtime'
+import { buildAdapter, estimateText } from '@oph-autoresearch/ai'
+import {
+  loadConfig,
+  makeSummarizer,
+  RuntimeCompaction,
+  resolveModel,
+} from '@oph-autoresearch/runtime'
 import {
   appendMessage,
   ContentStore,
@@ -26,7 +31,7 @@ import {
   listMessages,
   Store,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 /** 埋进会话的可判定事实。`probe` 是压缩后要问的问题，`expect` 是答案里必须出现的关键词。 */
 const FACTS = [

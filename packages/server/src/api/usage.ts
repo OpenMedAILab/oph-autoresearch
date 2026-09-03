@@ -2,7 +2,7 @@
  * 用量账本的 HTTP 出口。
  *
  * **为什么它到现在才有。** 账本（`usage_ledger`）一直在被正常写入，`usageTotals` / `usageBy` 也一直
- * 在，但**只有 `qy usage` 这个 CLI 在读**。因此界面上唯一能看到的用量是「当前会话的 runs 加起来」
+ * 在，但**只有 `oph usage` 这个 CLI 在读**。因此界面上唯一能看到的用量是「当前会话的 runs 加起来」
  * ——会话一删就没了，也答不了「这个月花了多少」。这是 ARCHITECTURE §11 那张表里的第三种形状：两头
  * 都好，中间少一节。
  *
@@ -10,8 +10,8 @@
  * 比其中一个报错要难查得多。
  */
 
-import type { UsageResponse } from '@qywork/core'
-import { type GroupBy, usageBy, usageTotals } from '@qywork/store'
+import type { UsageResponse } from '@oph-autoresearch/core'
+import { type GroupBy, usageBy, usageTotals } from '@oph-autoresearch/store'
 import { type ApiHandler, json } from './types.ts'
 
 const GROUPS: GroupBy[] = ['model', 'day', 'workspace', 'kind']

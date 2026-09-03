@@ -1,5 +1,5 @@
 /**
- * `qy serve` 的完整链路端到端——**用假 provider，不花钱，进 `bun test`**。
+ * `oph serve` 的完整链路端到端——**用假 provider，不花钱，进 `bun test`**。
  *
  * **为什么要有这一层。** 只有 `bun test`（免费、无网络、只测单元）和 `scripts/smoke-serve.ts`（真
  * key、五分钟、跑真模型）两档的话，**中间是空的**，而那道缝真的漏过缺陷：`bun test` 看不见 serve
@@ -20,11 +20,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent, EventEnvelope } from '@qywork/core'
-import { toPosixPath } from '@qywork/core'
-import { configPath, loadConfig, type QyConfig } from '@qywork/runtime'
-import { ContentStore, contentPathFor, Store } from '@qywork/store'
-import { MAX_ENTRY_CHARS } from '@qywork/tools'
+import type { AgentEvent, EventEnvelope } from '@oph-autoresearch/core'
+import { toPosixPath } from '@oph-autoresearch/core'
+import { configPath, loadConfig, type OphConfig } from '@oph-autoresearch/runtime'
+import { ContentStore, contentPathFor, Store } from '@oph-autoresearch/store'
+import { MAX_ENTRY_CHARS } from '@oph-autoresearch/tools'
 import { serve } from './server.ts'
 
 // ───────────────────────── 假 provider ─────────────────────────
@@ -110,13 +110,13 @@ let content: ContentStore
 let prevHome: string | undefined
 
 beforeAll(async () => {
-  ws_dir = await mkdtemp(join(tmpdir(), 'qywork-e2e-'))
+  ws_dir = await mkdtemp(join(tmpdir(), 'oph-autoresearch-e2e-'))
   await writeFile(join(ws_dir, 'calc.js'), 'module.exports = { add: (a, b) => a + b }\n', 'utf8')
 
   const dbPath = join(ws_dir, 'e2e.sqlite3')
   store = new Store({ path: dbPath })
   content = new ContentStore(contentPathFor(dbPath))
-  const config: QyConfig = {
+  const config: OphConfig = {
     active: { provider: 'fake', model: 'deepseek-v4-flash' },
     providers: {
       fake: {
@@ -138,16 +138,16 @@ beforeAll(async () => {
   /*
    * **配置只有一个真源：`configPath()` 那个文件。**
    *
-   * 先写文件，再 `loadConfig()` 读回来交给 `serve` ——和 `qy serve` 一模一样。
+   * 先写文件，再 `loadConfig()` 读回来交给 `serve` ——和 `oph serve` 一模一样。
    * 直接把上面那个对象递进去也能跑，但那样测试手里就有两份（一份在内存、
    * 一份在盘上），改一处漏一处时的表现是「界面读到 A、请求发去 B」。
    *
-   * `QYWORK_HOME` 指到临时目录，不是另开一条路径——`configPath()` 全仓只有
+   * `OPH_AUTORESEARCH_HOME` 指到临时目录，不是另开一条路径——`configPath()` 全仓只有
    * 一处实现，这里换的是它的落点。跑在开发机那份真配置上的话，测试会按
    * 开发者本人配的接口发请求，配置那几条用例还会写他的文件。
    */
-  prevHome = process.env.QYWORK_HOME
-  process.env.QYWORK_HOME = await mkdtemp(join(tmpdir(), 'qywork-e2e-home-'))
+  prevHome = process.env.OPH_AUTORESEARCH_HOME
+  process.env.OPH_AUTORESEARCH_HOME = await mkdtemp(join(tmpdir(), 'oph-autoresearch-e2e-home-'))
   await writeFile(configPath(), JSON.stringify(config), 'utf8')
 
   handle = serve({
@@ -161,9 +161,9 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  // 同一个进程里跑着别的测试文件，QYWORK_HOME 不还回去会跟着漏过去。
-  if (prevHome === undefined) delete process.env.QYWORK_HOME
-  else process.env.QYWORK_HOME = prevHome
+  // 同一个进程里跑着别的测试文件，OPH_AUTORESEARCH_HOME 不还回去会跟着漏过去。
+  if (prevHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+  else process.env.OPH_AUTORESEARCH_HOME = prevHome
   handle?.stop()
   provider.stop(true)
   store?.close()
@@ -279,7 +279,7 @@ describe('HTTP 面', () => {
     expect(list.entries?.some((e) => e.key === 'build-commands')).toBe(true)
 
     // 校验先于落盘：超长直接 422，不写一半。上限与 `write_memory` **共用同一个常数**
-    // （`@qywork/tools` 导出），两处各写一个数迟早漂成两个。
+    // （`@oph-autoresearch/tools` 导出），两处各写一个数迟早漂成两个。
     const tooLong = await fetch(`${base()}/api/memory/build-commands`, {
       method: 'PUT',
       headers: { ...auth(), 'content-type': 'application/json' },
@@ -295,7 +295,7 @@ describe('HTTP 面', () => {
     expect(atLimit.status).toBe(200)
     await fetch(`${base()}/api/memory/at-limit`, { method: 'DELETE', headers: auth() })
 
-    // 路径穿越：安全化之后不该还能碰到 .qy/memory 之外。
+    // 路径穿越：安全化之后不该还能碰到 .oph/memory 之外。
     const traversal = await fetch(
       `${base()}/api/memory/${encodeURIComponent('../../etc/passwd')}`,
       { method: 'DELETE', headers: auth() },
@@ -352,13 +352,15 @@ describe('HTTP 面', () => {
 
     const up = await post(encodeURIComponent('截图 1.png'), png)
     expect(up.status).toBe(200)
-    const { attachment } = (await up.json()) as { attachment: import('@qywork/core').Attachment }
+    const { attachment } = (await up.json()) as {
+      attachment: import('@oph-autoresearch/core').Attachment
+    }
     // 分类按扩展名，与「发出去时内联哪些」同一份判据。
     expect(attachment.type).toBe('image')
     expect(attachment.mime).toBe('image/png')
     expect(attachment.size).toBe(png.length)
     // 落在会话自己的目录里，与会话库同一棵树——不是工作区。
-    const home = process.env.QYWORK_HOME as string
+    const home = process.env.OPH_AUTORESEARCH_HOME as string
     expect(attachment.path).toContain(`/attachments/${cid}/`)
     expect(attachment.path.startsWith(toPosixPath(home))).toBe(true)
     // 一律正斜杠：这个值要跨端传，反斜杠在别处会被当转义。
@@ -508,7 +510,7 @@ describe('WebSocket 协议与一轮完整 run', () => {
      * 沙箱状态必须**进握手**。
      *
      * 桌面端和手机端用户唯一能知道「这条命令跑在什么边界里」的地方就是界面——
-     * `qy config` 他们不会去跑。而「看着被拦住、实际没拦」是这套权限模型
+     * `oph config` 他们不会去跑。而「看着被拦住、实际没拦」是这套权限模型
      * 最危险的误解，所以这条不能是个加了没人验的字段。
      *
      * 断言的是**形状与自洽**，不是具体后端：CI 跑在什么平台上不该决定这条测试的成败。

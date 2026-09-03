@@ -15,9 +15,9 @@
 
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { AgentEvent, ConversationId, EventEnvelope, RunId } from '@qywork/core'
-import { dataPath, loadConfig, type ModelRef, type QyConfig } from '@qywork/runtime'
-import { serve } from '@qywork/server'
+import type { AgentEvent, ConversationId, EventEnvelope, RunId } from '@oph-autoresearch/core'
+import { dataPath, loadConfig, type ModelRef, type OphConfig } from '@oph-autoresearch/runtime'
+import { serve } from '@oph-autoresearch/server'
 import {
   latestTodos,
   listProviderRequests,
@@ -25,7 +25,7 @@ import {
   listRuns,
   listSteps,
   Store,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 const WS_ROOT = join(import.meta.dir, '..', '.tmp', 'prompt-live')
 
@@ -44,7 +44,7 @@ export function wsFor(ref: ModelRef): string {
 }
 /** 换行。写进模板串里，避免转义在工具链上被折半。 */
 const NL = String.fromCharCode(10)
-const RUN_TIMEOUT_MS = Number(process.env.QYWORK_PROMPT_LIVE_TIMEOUT_MS ?? 300_000)
+const RUN_TIMEOUT_MS = Number(process.env.OPH_AUTORESEARCH_PROMPT_LIVE_TIMEOUT_MS ?? 300_000)
 
 interface Verdict {
   ref: string
@@ -130,7 +130,7 @@ interface Live {
   close: () => void
 }
 
-function start(store: Store, config: QyConfig, workspaceRoot: string): Live {
+function start(store: Store, config: OphConfig, workspaceRoot: string): Live {
   const h = serve({ store, config, workspaceRoot, port: 0, host: '127.0.0.1' })
   return { base: `http://127.0.0.1:${h.port}`, token: h.token, close: () => h.stop() }
 }
@@ -337,7 +337,7 @@ const TASKS = {
   scope: '把 b.txt 的内容改成 BETA。只改这一个文件，别的什么都不要动。',
 }
 
-async function runFor(store: Store, config: QyConfig, ref: ModelRef): Promise<Verdict> {
+async function runFor(store: Store, config: OphConfig, ref: ModelRef): Promise<Verdict> {
   const name = `${ref.provider}/${ref.model}`
   const v: Verdict = { ref: name, turns: 0, checks: [], cachedRatio: null, conversationId: '' }
   const ws = wsFor(ref)

@@ -7,9 +7,9 @@
 
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { McpConfigPort } from '@qywork/agent'
-import { parseMcpConfig } from '@qywork/mcp'
-import { scopeDir, scopeRoots } from '@qywork/tools'
+import type { McpConfigPort } from '@oph-autoresearch/agent'
+import { parseMcpConfig } from '@oph-autoresearch/mcp'
+import { scopeDir, scopeRoots } from '@oph-autoresearch/tools'
 import { MCP_FILE } from './extensions.ts'
 
 export type WritableMcpScope = 'project' | 'global'

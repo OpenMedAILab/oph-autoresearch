@@ -6,8 +6,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { ToolContext } from '@qywork/agent'
-import { DEFAULT_DENSITY } from '@qywork/ai'
+import type { ToolContext } from '@oph-autoresearch/agent'
+import { DEFAULT_DENSITY } from '@oph-autoresearch/ai'
 import { installPluginTool } from './plugin-install.ts'
 
 type Found = Awaited<ReturnType<NonNullable<ToolContext['plugins']>['inspect']>>
@@ -79,7 +79,7 @@ describe('装插件', () => {
   })
 
   test('清单不合法当场拒，也不往下走', async () => {
-    const p = port({ ok: false, error: '目录里没有 qywork.plugin.json' })
+    const p = port({ ok: false, error: '目录里没有 oph-autoresearch.plugin.json' })
     const res = await installPluginTool.fn({ path: 'demo' }, ctx(p.port))
     expect(res.status).toBe('failure')
     expect(p.installs).toHaveLength(0)

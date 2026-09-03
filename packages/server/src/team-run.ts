@@ -9,9 +9,9 @@
  * 两条都落到这里。**没有第三条**——`team.run` 那条指令连同它的前端入口一起删了。
  */
 
-import type { AgentEvent, ConversationId, StopReason } from '@qywork/core'
-import { type ModelRef, type QyConfig, Session } from '@qywork/runtime'
-import type { Role } from '@qywork/team'
+import type { AgentEvent, ConversationId, StopReason } from '@oph-autoresearch/core'
+import { type ModelRef, type OphConfig, Session } from '@oph-autoresearch/runtime'
+import type { Role } from '@oph-autoresearch/team'
 import type { CommandDeps } from './deps.ts'
 
 /**
@@ -26,7 +26,7 @@ import type { CommandDeps } from './deps.ts'
  */
 export function memberModel(
   role: Pick<Role, 'id' | 'provider' | 'model'>,
-  config: QyConfig,
+  config: OphConfig,
   pick?: { explicit?: ModelRef; inherit?: ModelRef },
 ): ModelRef | { error: string } {
   // 用户这一次点名的模型盖过一切，包括角色自己钉的那一对：他要的就是这一次换个模型跑。
@@ -53,7 +53,7 @@ export function memberModel(
  * **同一个模型 id 挂在两个接口下时报错，不按枚举顺序挑一个**：挑错了是端点、key、
  * 价目表三样一起换掉，而且不报错。
  */
-export function resolveModel(name: string, config: QyConfig): ModelRef | { error: string } {
+export function resolveModel(name: string, config: OphConfig): ModelRef | { error: string } {
   const hits = Object.entries(config.providers).filter(([, p]) => p.models[name])
   if (hits.length === 1) return { provider: hits[0]![0], model: name }
   if (hits.length > 1) {
@@ -69,7 +69,7 @@ export function resolveModel(name: string, config: QyConfig): ModelRef | { error
   return { error: `配置里没有模型 ${name}。现在能用的是：${modelList(config)}` }
 }
 
-function modelList(config: QyConfig): string {
+function modelList(config: OphConfig): string {
   return Object.entries(config.providers)
     .flatMap(([name, p]) => Object.keys(p.models).map((m) => `${name}/${m}`))
     .join('、')
@@ -79,7 +79,7 @@ function modelList(config: QyConfig): string {
  * 内置后端：用本进程的 agent 跑一个编排成员。
  *
  * 在这之前它是一句「尚未接线」的显式失败——没装 codex / claude 的用户点「开始编排」
- * 什么都得不到。而 `qy` 自己就是一个完整的 agent，把它当成一个后端用不需要新增实现，
+ * 什么都得不到。而 `oph` 自己就是一个完整的 agent，把它当成一个后端用不需要新增实现，
  * 只需要一个独立会话。
  *
  * **每个成员一个独立会话，不共用。** 成员之间的上下文必须隔离：一个「审查者」角色看见「实现者」的完

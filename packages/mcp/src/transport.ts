@@ -153,7 +153,7 @@ export class StdioTransport implements McpTransport {
    *
    * **Windows 上必须杀整棵进程树。** 那边 `spawn` 带 `shell: true`（npx / uvx 是
    * .cmd，不走 shell 起不来），因此 `this.proc` 是 cmd.exe，server 本体是它的孙进程。
-   * 只 `proc.kill()` 的话 cmd 没了、node 还在——每跑一次 `qy mcp` / `qy doctor`、
+   * 只 `proc.kill()` 的话 cmd 没了、node 还在——每跑一次 `oph mcp` / `oph doctor`、
    * 每次扩展缓存释放都漏一批常驻进程。`taskkill /T` 是这台机器上唯一能连孙进程一起
    * 收掉的办法（Node 没有跨平台的进程组 API）。
    */

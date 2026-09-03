@@ -12,7 +12,7 @@
  * 两者跑的是同一份角色定义、同一条成员会话路径，区别只在有没有图。
  */
 
-import type { DelegatePort } from '@qywork/agent'
+import type { DelegatePort } from '@oph-autoresearch/agent'
 import {
   type AgentEvent,
   type ConversationId,
@@ -23,9 +23,14 @@ import {
   type WorkflowCallRecord,
   type WorkflowNode,
   type WorkflowTransition,
-} from '@qywork/core'
-import { collectSecrets, loadTeamConfig, type ModelRef } from '@qywork/runtime'
-import { getConversation, listRuns, listSteps, setStepChildConversation } from '@qywork/store'
+} from '@oph-autoresearch/core'
+import { collectSecrets, loadTeamConfig, type ModelRef } from '@oph-autoresearch/runtime'
+import {
+  getConversation,
+  listRuns,
+  listSteps,
+  setStepChildConversation,
+} from '@oph-autoresearch/store'
 import {
   CLI_PREFIX,
   detectClis,
@@ -34,7 +39,7 @@ import {
   type Role,
   runCli,
   TeamOrchestrator,
-} from '@qywork/team'
+} from '@oph-autoresearch/team'
 import type { CommandDeps } from './deps.ts'
 import { resolveModel, runBuiltinMember } from './team-run.ts'
 
@@ -239,7 +244,7 @@ export function makeDelegate(ctx: {
             workspaceRoot,
             signal: input.signal,
             ...(input.resume ? { resume: input.resume } : {}),
-            // 外部 CLI 要它自己的 key 才能执行，但 qywork 配置里那几把它一把用不上。
+            // 外部 CLI 要它自己的 key 才能执行，但 oph-autoresearch 配置里那几把它一把用不上。
             secrets: collectSecrets(deps.config),
             ...(onOutput ? { onChunk: onOutput } : {}),
           })

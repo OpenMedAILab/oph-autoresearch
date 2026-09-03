@@ -8,7 +8,7 @@
  * 不解析的话 `../../../` 就成了「装任意目录」——而装进去的代码下一次加载就会跑。
  */
 
-import { resolveInWorkspace } from '@qywork/tools'
+import { resolveInWorkspace } from '@oph-autoresearch/tools'
 import { copyPluginDir, readPluginDir } from './api/plugins.ts'
 
 export function makePluginPort(ctx: { workspaceRoot: string }) {

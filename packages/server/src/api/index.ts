@@ -11,8 +11,8 @@
  * 而不是让两个模块各自判一遍再看谁先返回。
  */
 
-import type { Store } from '@qywork/store'
-import { getWorkspace, mostRecentWorkspace } from '@qywork/store'
+import type { Store } from '@oph-autoresearch/store'
+import { getWorkspace, mostRecentWorkspace } from '@oph-autoresearch/store'
 import { handleAttachmentsApi } from './attachments.ts'
 import { handleConfigApi } from './config.ts'
 import { handleConversationsApi } from './conversations.ts'

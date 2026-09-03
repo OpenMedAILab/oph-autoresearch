@@ -1,4 +1,4 @@
-//! `qy serve` 的生命周期托管。
+//! `oph serve` 的生命周期托管。
 //!
 //! 桌面端不实现任何业务逻辑，它只做三件事：把 sidecar 拉起来、把令牌和端口交给
 //! WebView、在退出时确保子进程被收干净。
@@ -8,7 +8,7 @@
 //! 1. **必须等 sidecar 打印出令牌再建窗口。** 否则 WebView 先加载、拿不到令牌，
 //!    会先闪一个「未配对」再自己恢复——看起来像启动失败。
 //! 2. **退出时必须真的杀掉子进程。** Windows 上父进程结束不会带走子进程；
-//!    残留的 `qy serve` 会占着端口和 SQLite 的 WAL 锁，下次启动直接起不来。
+//!    残留的 `oph serve` 会占着端口和 SQLite 的 WAL 锁，下次启动直接起不来。
 
 use anyhow::{anyhow, Result};
 use parking_lot::Mutex;
@@ -71,7 +71,7 @@ struct SidecarState {
 pub struct SidecarHandle(Arc<Mutex<SidecarState>>);
 
 /**
- * 拉起一份 qy serve。首次启动允许内核选择端口与令牌；异常恢复固定复用原值，
+ * 拉起一份 oph serve。首次启动允许内核选择端口与令牌；异常恢复固定复用原值，
  * 这样已经加载的 WebView 和手机端都不需要第二套端点更新协议。
  */
 fn spawn_process(
@@ -101,34 +101,34 @@ fn spawn_process(
 
     let mut command = app
         .shell()
-        .sidecar("qy")
-        .map_err(|e| anyhow!("找不到 qy sidecar：{e}"))?
+        .sidecar("oph")
+        .map_err(|e| anyhow!("找不到 oph sidecar：{e}"))?
         .args(args);
     if let Some(value) = token {
         // CLI 的 serve 以这一变量作为显式令牌。恢复时必须复用，否则旧 WebView
         // 会拿原令牌连到同一端口，再被永久判成 unauthorized。
-        command = command.env("QYWORK_TOKEN", value);
+        command = command.env("OPH_AUTORESEARCH_TOKEN", value);
     }
     if let Some(exit) = previous_exit {
         command = command
-            .env("QYWORK_PREVIOUS_EXIT_KIND", exit.kind)
+            .env("OPH_AUTORESEARCH_PREVIOUS_EXIT_KIND", exit.kind)
             .env(
-                "QYWORK_PREVIOUS_EXIT_AT_MS",
+                "OPH_AUTORESEARCH_PREVIOUS_EXIT_AT_MS",
                 exit.observed_at_ms.to_string(),
             )
             .env(
-                "QYWORK_PREVIOUS_EXIT_CODE",
+                "OPH_AUTORESEARCH_PREVIOUS_EXIT_CODE",
                 exit.code.map(|v| v.to_string()).unwrap_or_default(),
             )
             .env(
-                "QYWORK_PREVIOUS_EXIT_SIGNAL",
+                "OPH_AUTORESEARCH_PREVIOUS_EXIT_SIGNAL",
                 exit.signal.map(|v| v.to_string()).unwrap_or_default(),
             )
-            .env("QYWORK_PREVIOUS_STDERR_TAIL", &exit.stderr_tail);
+            .env("OPH_AUTORESEARCH_PREVIOUS_STDERR_TAIL", &exit.stderr_tail);
     }
     command
         .spawn()
-        .map_err(|e| anyhow!("启动 qy serve 失败：{e}"))
+        .map_err(|e| anyhow!("启动 oph serve 失败：{e}"))
 }
 
 /** 把当前子进程交给生命周期 state；退出已经开始时，当场收掉新进程。 */
@@ -161,10 +161,10 @@ async fn await_handshake(rx: &mut Receiver<CommandEvent>) -> Result<SidecarInfo>
             CommandEvent::Stdout(line) => {
                 let text = String::from_utf8_lossy(&line);
                 for raw in text.lines() {
-                    if let Some(v) = raw.trim().strip_prefix("QYWORK_TOKEN=") {
+                    if let Some(v) = raw.trim().strip_prefix("OPH_AUTORESEARCH_TOKEN=") {
                         token = Some(v.to_string());
                     }
-                    if let Some(v) = raw.trim().strip_prefix("QYWORK_PORT=") {
+                    if let Some(v) = raw.trim().strip_prefix("OPH_AUTORESEARCH_PORT=") {
                         port = v.parse().ok();
                     }
                 }
@@ -180,24 +180,24 @@ async fn await_handshake(rx: &mut Receiver<CommandEvent>) -> Result<SidecarInfo>
                 eprint!("{}", String::from_utf8_lossy(&line));
             }
             CommandEvent::Error(error) => {
-                return Err(anyhow!("读取 qy serve 输出失败：{error}"));
+                return Err(anyhow!("读取 oph serve 输出失败：{error}"));
             }
             CommandEvent::Terminated(payload) => {
                 return Err(anyhow!(
-                    "qy serve 在报出令牌前退出，code={:?}",
+                    "oph serve 在报出令牌前退出，code={:?}",
                     payload.code
                 ));
             }
             _ => {}
         }
     }
-    Err(anyhow!("qy serve 输出结束但未报出令牌"))
+    Err(anyhow!("oph serve 输出结束但未报出令牌"))
 }
 
 async fn handshake_with_timeout(rx: &mut Receiver<CommandEvent>) -> Result<SidecarInfo> {
     match tokio::time::timeout(HANDSHAKE_TIMEOUT, await_handshake(rx)).await {
         Ok(result) => result,
-        Err(_) => Err(anyhow!("qy serve 启动超过 20 秒仍未报出令牌")),
+        Err(_) => Err(anyhow!("oph serve 启动超过 20 秒仍未报出令牌")),
     }
 }
 
@@ -220,7 +220,7 @@ fn supervise(app: AppHandle, info: SidecarInfo, mut rx: Receiver<CommandEvent>) 
                         append_stderr_tail(&mut stderr_tail, &text);
                     }
                     Some(CommandEvent::Error(error)) => {
-                        eprintln!("[qywork] 读取 qy serve 输出失败：{error}");
+                        eprintln!("[oph-autoresearch] 读取 oph serve 输出失败：{error}");
                         append_stderr_tail(
                             &mut stderr_tail,
                             &format!("[sidecar output error] {error}\n"),
@@ -261,7 +261,7 @@ fn supervise(app: AppHandle, info: SidecarInfo, mut rx: Receiver<CommandEvent>) 
                 }
             }
             eprintln!(
-                "[qywork] qy serve 异常终止（kind={} code={:?} signal={:?}），准备恢复",
+                "[oph-autoresearch] oph serve 异常终止（kind={} code={:?} signal={:?}），准备恢复",
                 previous_exit.kind, previous_exit.code, previous_exit.signal
             );
 
@@ -278,25 +278,25 @@ fn supervise(app: AppHandle, info: SidecarInfo, mut rx: Receiver<CommandEvent>) 
                         }
                         match handshake_with_timeout(&mut next_rx).await {
                             Ok(next) if next.port == info.port && next.token == info.token => {
-                                eprintln!("[qywork] qy serve 已在原端点恢复 :{}", info.port);
+                                eprintln!("[oph-autoresearch] oph serve 已在原端点恢复 :{}", info.port);
                                 rx = next_rx;
                                 stderr_tail.clear();
                                 break;
                             }
                             Ok(next) => {
                                 eprintln!(
-                                    "[qywork] qy serve 恢复端点不一致：期望 :{}，实际 :{}",
+                                    "[oph-autoresearch] oph serve 恢复端点不一致：期望 :{}，实际 :{}",
                                     info.port, next.port
                                 );
                                 kill_current(&handle);
                             }
                             Err(error) => {
-                                eprintln!("[qywork] qy serve 恢复失败：{error}");
+                                eprintln!("[oph-autoresearch] oph serve 恢复失败：{error}");
                                 kill_current(&handle);
                             }
                         }
                     }
-                    Err(error) => eprintln!("[qywork] qy serve 重新拉起失败：{error}"),
+                    Err(error) => eprintln!("[oph-autoresearch] oph serve 重新拉起失败：{error}"),
                 }
 
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
@@ -314,17 +314,17 @@ pub async fn spawn(app: &AppHandle, workspace: &str) -> Result<SidecarInfo> {
 
     let handle = app.state::<SidecarHandle>();
     if !hold_child(&handle, child) {
-        return Err(anyhow!("应用已经开始退出，取消启动 qy serve"));
+        return Err(anyhow!("应用已经开始退出，取消启动 oph serve"));
     }
 
     /*
      * 握手要有上限。
      *
      * **不能写成裸的 `while rx.recv().await`**：那样只有拿到两个 KV、进程
-     * Terminated、或流关闭才退出。qy 起来了却卡在打印令牌之前（server 初始化阻塞、
+     * Terminated、或流关闭才退出。oph 起来了却卡在打印令牌之前（server 初始化阻塞、
      * 端口探测挂住）时，这个循环**永远不返回**——而主窗口是在它之后才建的
-     * （`lib.rs` 的 `build_main_window`）。表现是 qywork.exe 和 qy.exe 都在后台
-     * 都在运行、桌面上没有窗口，任务管理器里只剩一条常驻的 qy.exe。
+     * （`lib.rs` 的 `build_main_window`）。表现是 oph-autoresearch.exe 和 oph.exe 都在后台
+     * 都在运行、桌面上没有窗口，任务管理器里只剩一条常驻的 oph.exe。
      *
      * 20 秒：冷启动要读配置、开 SQLite、可能还要预热扩展，给得比感觉上宽一些；
      * 判错的代价（把一次很慢的启动掐掉）比判漏（无声挂死）小得多。
@@ -358,20 +358,20 @@ fn shutdown_handle(handle: &SidecarHandle) {
         // kill 失败只能记日志——此时进程可能已经自己退了，
         // 不该因此阻断应用退出。
         if let Err(e) = c.kill() {
-            eprintln!("[qywork] 停止 qy serve 失败：{e}");
+            eprintln!("[oph-autoresearch] 停止 oph serve 失败：{e}");
         }
     }
 }
 
 /// 从环境变量读取开发期外挂的 sidecar（`bun run serve` 手动起的那个）。
 ///
-/// 开发时通常已经有一个 `qy serve` 在跑；再让 Tauri 拉一个会撞端口、
+/// 开发时通常已经有一个 `oph serve` 在跑；再让 Tauri 拉一个会撞端口、
 /// 撞 SQLite 锁。设了这两个变量就直接复用。
 pub fn from_env() -> Option<SidecarInfo> {
-    let token = std::env::var("QYWORK_TOKEN").ok()?;
-    let port: u16 = std::env::var("QYWORK_PORT").ok()?.parse().ok()?;
+    let token = std::env::var("OPH_AUTORESEARCH_TOKEN").ok()?;
+    let port: u16 = std::env::var("OPH_AUTORESEARCH_PORT").ok()?.parse().ok()?;
 
-    // **必须探活。** 这两个变量是开发时手动 export 的，很容易在那个 qy 早就退出之后
+    // **必须探活。** 这两个变量是开发时手动 export 的，很容易在那个 oph 早就退出之后
     // 还留在 shell 环境里；打包版从这样的 shell 启动，就会拿着一个死端口直接开窗口，
     // 界面连不上任何后端。而唯一的提示是 `eprintln!`——release 没有控制台，看不见。
     //
@@ -383,7 +383,7 @@ pub fn from_env() -> Option<SidecarInfo> {
     )
     .is_err()
     {
-        eprintln!("[qywork] QYWORK_PORT={port} 上没有在监听的服务，忽略这两个环境变量");
+        eprintln!("[oph-autoresearch] OPH_AUTORESEARCH_PORT={port} 上没有在监听的服务，忽略这两个环境变量");
         return None;
     }
 
@@ -400,7 +400,7 @@ pub fn from_env() -> Option<SidecarInfo> {
 /// 走异步命令会晚一拍，导致先渲染出「未配对」。
 pub fn init_script(info: &SidecarInfo) -> String {
     format!(
-        "globalThis.__QYWORK__ = {{ token: {}, base: {} }};",
+        "globalThis.__OPH_AUTORESEARCH__ = {{ token: {}, base: {} }};",
         serde_json::to_string(&info.token).unwrap_or_else(|_| "\"\"".into()),
         serde_json::to_string(&info.base).unwrap_or_else(|_| "\"\"".into()),
     )
@@ -413,10 +413,10 @@ pub fn init_script(info: &SidecarInfo) -> String {
 ///
 /// 存成一行纯文本而不是 JSON：它只有一个值，加一层结构只会让手动修正变麻烦。
 fn last_workspace_file() -> Option<PathBuf> {
-    let dir = std::env::var("QYWORK_HOME")
+    let dir = std::env::var("OPH_AUTORESEARCH_HOME")
         .map(PathBuf::from)
         .ok()
-        .or_else(|| dirs_home().map(|h| h.join(".qywork")))?;
+        .or_else(|| dirs_home().map(|h| h.join(".oph-autoresearch")))?;
     Some(dir.join("last-workspace"))
 }
 
@@ -445,7 +445,7 @@ pub fn write_last_workspace(path: &str) {
     }
     // 写失败只记日志：记不住上次的工作区是体验问题，不该让切换本身失败。
     if let Err(e) = std::fs::write(&file, path) {
-        eprintln!("[qywork] 记录工作区失败：{e}");
+        eprintln!("[oph-autoresearch] 记录工作区失败：{e}");
     }
 }
 

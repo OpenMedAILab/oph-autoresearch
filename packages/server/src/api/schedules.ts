@@ -5,7 +5,7 @@
  * 更不该改到另一个工作区的任务。
  */
 
-import { createConversation } from '@qywork/store'
+import { createConversation } from '@oph-autoresearch/store'
 import {
   diagnoseSchedule,
   isDue,
@@ -13,7 +13,7 @@ import {
   nextRunAt,
   type Schedule,
   updateSchedules,
-} from '@qywork/tools'
+} from '@oph-autoresearch/tools'
 import { type ApiHandler, json } from './types.ts'
 
 export const handleSchedulesApi: ApiHandler = async (url, req, d) => {

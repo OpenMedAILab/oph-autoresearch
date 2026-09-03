@@ -1,12 +1,12 @@
-//! qywork 桌面外壳。
+//! oph-autoresearch 桌面外壳。
 //!
-//! **这一层不持有任何业务状态。** 会话、账本、权限、缓存全在 `qy serve` 里；
+//! **这一层不持有任何业务状态。** 会话、账本、权限、缓存全在 `oph serve` 里；
 //! Tauri 只负责原生窗口以及 sidecar 的生死。
 //!
 //! 坑：不要为了省一次 localhost 往返在这一层放数据库或缓存。外壳一存状态就是
 //! 第二本账，两本账迟早漂移，而且漂移了很难发现。
 //!
-//! WebView 也不通过 Tauri IPC 拿业务数据，它直连 `qy serve` 的 WebSocket，
+//! WebView 也不通过 Tauri IPC 拿业务数据，它直连 `oph serve` 的 WebSocket，
 //! 和手机端走完全相同的协议。这样「桌面能做手机做不了」的能力漂移在结构上就不存在。
 //!
 //! **例外只有一个：终端（`terminal.rs`）。** 它走 IPC 不是图方便——PTY 是本机进程
@@ -70,7 +70,7 @@ async fn save_session_export(
     let (tx, rx) = tauri::async_runtime::channel(1);
     app.dialog()
         .file()
-        .add_filter("QyWork 会话诊断", &["json"])
+        .add_filter("眼科科研会话诊断", &["json"])
         .set_file_name(file_name)
         .save_file(move |file| {
             let _ = tx.blocking_send(file);
@@ -123,7 +123,7 @@ fn window_toggle_maximize(window: tauri::Window) -> Result<bool, String> {
 #[tauri::command]
 fn window_close(window: tauri::Window) -> Result<(), String> {
     // close() 走正常退出路径，RunEvent::ExitRequested 会触发 sidecar 清理。
-    // 直接 destroy() 会绕过它，把 qy 留成孤儿进程。
+    // 直接 destroy() 会绕过它，把 oph 留成孤儿进程。
     window.close().map_err(|e| e.to_string())
 }
 
@@ -195,7 +195,7 @@ fn extend_frame_for_shadow(window: &tauri::WebviewWindow) {
     use windows::Win32::UI::Controls::MARGINS;
 
     let Ok(hwnd) = window.hwnd() else {
-        eprintln!("[qywork] 拿不到窗口句柄，投影未启用");
+        eprintln!("[oph-autoresearch] 拿不到窗口句柄，投影未启用");
         return;
     };
     let margins = MARGINS {
@@ -205,7 +205,7 @@ fn extend_frame_for_shadow(window: &tauri::WebviewWindow) {
         cyBottomHeight: 0,
     };
     if let Err(e) = unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) } {
-        eprintln!("[qywork] 窗口投影未启用：{e}");
+        eprintln!("[oph-autoresearch] 窗口投影未启用：{e}");
     }
 }
 
@@ -229,7 +229,7 @@ fn show_fatal(message: &str) {
 #[cfg(not(windows))]
 fn show_fatal(message: &str) {
     // 非 Windows 上有控制台，stderr 就够了。
-    eprintln!("[qywork] {message}");
+    eprintln!("[oph-autoresearch] {message}");
 }
 
 /// 在系统文件管理器里定位一个目录。
@@ -277,7 +277,7 @@ pub fn run() {
      * （`apps/web` 里连 `@tauri-apps` 的依赖都没有，只经 `__TAURI_INTERNALS__`
      * 调本 crate 自己注册的那几个命令），唯一用得上它们的主体是被注入的脚本。
      * 其中 `shell:allow-spawn` 的 `--host` 校验放行 `0.0.0.0`、`--cwd` 校验是 `.+`，
-     * 一次 XSS 就能再起一个把任意目录暴露到局域网的 qy。
+     * 一次 XSS 就能再起一个把任意目录暴露到局域网的 oph。
      *
      * 删掉授权不影响这里：ACL 只拦 IPC 层（插件的 `commands.rs`），
      * `ShellExt::sidecar()` 与 `app.dialog()` 都是 Rust 直调，不过那一层。
@@ -309,10 +309,10 @@ pub fn run() {
             let workspace = resolve_workspace();
 
             tauri::async_runtime::block_on(async move {
-                // 开发时通常已经手动起了一个 qy serve；再拉一个会撞端口和 SQLite 锁。
+                // 开发时通常已经手动起了一个 oph serve；再拉一个会撞端口和 SQLite 锁。
                 let info = match sidecar::from_env() {
                     Some(existing) => {
-                        eprintln!("[qywork] 复用外部 sidecar :{}", existing.port);
+                        eprintln!("[oph-autoresearch] 复用外部 sidecar :{}", existing.port);
                         existing
                     }
                     // 空串 = 没有显式指定，让服务端自己决定挂哪个项目。
@@ -330,7 +330,7 @@ pub fn run() {
                 //
                 // 窗口只在这里创建，tauri.conf.json 的 `app.windows` 必须留空——
                 // 两处都声明会得到 "a webview with label `main` already exists" 的 panic，
-                // 而 panic 会绕过退出清理，把 qy sidecar 留成孤儿进程。
+                // 而 panic 会绕过退出清理，把 oph sidecar 留成孤儿进程。
                 let script = sidecar::init_script(&info);
 
                 build_main_window(&handle, &script)?;
@@ -349,7 +349,7 @@ pub fn run() {
              * `windows_subsystem = "windows"`（没有控制台），因此 sidecar 缺失、
              * 损坏、或在报出令牌前退出时，进程无声消失——没有窗口、没有对话框、
              * 没有任何可见输出。用户唯一的感知是「双击没反应」，而这是
-             * 最常见的一类启动故障（`bin/qy-*.exe` 没构建、被杀毒删了）。
+             * 最常见的一类启动故障（`bin/oph-*.exe` 没构建、被杀毒删了）。
              *
              * 弹一个系统对话框再退。它不依赖 WebView，正好覆盖「窗口还没建出来」
              * 这段时间。
@@ -357,14 +357,14 @@ pub fn run() {
             let msg = format!(
                 "oph-autoresearch 启动失败：{e}\n\n\
                  常见原因是 sidecar 可执行文件缺失或被安全软件拦截\
-                 （apps/desktop/src-tauri/bin/qy-*.exe）。"
+                 （apps/desktop/src-tauri/bin/oph-*.exe）。"
             );
-            eprintln!("[qywork] {msg}");
+            eprintln!("[oph-autoresearch] {msg}");
             show_fatal(&msg);
             std::process::exit(1);
         })
         .run(|app, event| {
-            // Windows 上父进程退出不会带走子进程：残留的 qy serve 会占着端口和
+            // Windows 上父进程退出不会带走子进程：残留的 oph serve 会占着端口和
             // SQLite 的 WAL 锁，下次启动直接起不来。所以退出路径必须显式收干净。
             if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
                 // 终端里的 shell 也是子进程，同一条理由要显式杀掉：留下来会持有
@@ -378,10 +378,10 @@ pub fn run() {
 /// 决定打开哪个工作区。
 ///
 /// 优先级：命令行参数 > 环境变量 > 当前目录 > 用户主目录。
-/// 前两级是为了让 `qywork /path/to/repo` 和从终端直接启动都符合直觉。
+/// 前两级是为了让 `oph-autoresearch /path/to/repo` 和从终端直接启动都符合直觉。
 ///
 /// **最后一级不能省。** 从开始菜单快捷方式启动时，
-/// `current_dir()` 是安装目录（perMachine 安装下就是 `C:\Program Files\qywork`）——
+/// `current_dir()` 是安装目录（perMachine 安装下就是 `C:\Program Files\oph-autoresearch`）——
 /// 那里既不是用户的代码，又是只读的。只跑 `cargo check` 不打包时这条路径走不到，
 /// 而它的现象是「装完一打开，工作区里全是程序自身的文件，写任何文件都 EPERM」。
 /// 启动时**显式**指定过的工作区。没有就回 `None`，交给服务端决定。
@@ -398,7 +398,7 @@ fn resolve_workspace() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    if let Ok(v) = std::env::var("QYWORK_WORKSPACE") {
+    if let Ok(v) = std::env::var("OPH_AUTORESEARCH_WORKSPACE") {
         let p = PathBuf::from(v);
         if p.is_dir() {
             return Some(p);

@@ -8,11 +8,11 @@
  * 走到这条上传的只剩两种：剪贴板里只有位图（截图没有源文件），以及浏览器出于安全
  * 不给绝对路径。这两种「唯一的一份就在内存里」，落盘是第一次存储不是第二次。
  *
- * **落在 `~/.qywork/attachments/<会话id>/`。** 与会话库（`~/.qywork/qywork.sqlite3`）同一棵树。**这
+ * **落在 `~/.oph-autoresearch/attachments/<会话id>/`。** 与会话库（`~/.oph-autoresearch/oph-autoresearch.sqlite3`）同一棵树。**这
  * 是「附件属于会话」这件事的全部实现**：删会话时按目录删（`api/conversations.ts`），不需要「扫目录
  * 找没人引用的孤儿」那套回收。
  *
- * 放在工作区里（`.qy/attachments/`）不行：会话在全局库、附件在项目里，删掉项目目录
+ * 放在工作区里（`.oph/attachments/`）不行：会话在全局库、附件在项目里，删掉项目目录
  * 或换工作区之后会话还在而附件全断，历史只剩一行「附件已不存在」。
  *
  * **大小上限挡在写盘之前。** 超限直接 413 且**一个字节都不写**。写一半再删的话，中途崩溃就会留下垃
@@ -21,8 +21,8 @@
 
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
-import { type Attachment, attachmentTypeOf, toPosixPath } from '@qywork/core'
-import { configDir } from '@qywork/runtime'
+import { type Attachment, attachmentTypeOf, toPosixPath } from '@oph-autoresearch/core'
+import { configDir } from '@oph-autoresearch/runtime'
 import type { ApiHandler } from './types.ts'
 import { json } from './types.ts'
 

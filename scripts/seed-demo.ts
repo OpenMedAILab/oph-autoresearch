@@ -17,7 +17,7 @@ import {
   markRunRunning,
   Store,
   upsertWorkspace,
-} from '@qywork/store'
+} from '@oph-autoresearch/store'
 
 const [dbPath, workspaceRoot] = Bun.argv.slice(2)
 if (!dbPath || !workspaceRoot) {
@@ -26,13 +26,13 @@ if (!dbPath || !workspaceRoot) {
 }
 
 /**
- * 会话记的是**接口 + 模型**一对，不是单一个模型名。接口名取 `qy init` 的预置键，
+ * 会话记的是**接口 + 模型**一对，不是单一个模型名。接口名取 `oph init` 的预置键，
  * 种出来的数据形状才和真实运行一致（模型选择的第一层就是接口）。
  */
 const REF = { provider: 'deepseek', model: 'deepseek-v4-flash' } as const
 
 const store = new Store({ path: dbPath })
-const ws = upsertWorkspace(store, workspaceRoot, 'qywork')
+const ws = upsertWorkspace(store, workspaceRoot, 'oph-autoresearch')
 
 // 历史会话先建：列表按 updated_at 倒序，后建的排前面，
 // 有内容的那条要排第一才会被默认选中。
@@ -81,12 +81,12 @@ const ACTIONS = {
   read_file: {
     kind: 'read' as const,
     objectLabel: '文件',
-    target: 'services/core-api/qybox_core/routes/tools.py',
+    target: 'services/core-api/oph_core/routes/tools.py',
   },
   edit_file: {
     kind: 'edit' as const,
     objectLabel: '文件',
-    target: 'services/core-api/qybox_core/routes/tools.py',
+    target: 'services/core-api/oph_core/routes/tools.py',
   },
   run_command: {
     kind: 'run' as const,
@@ -127,7 +127,7 @@ step({
   status: 'success',
   payload: {
     kind: 'tool_result',
-    args: { path: 'services/core-api/qybox_core/routes/tools.py' },
+    args: { path: 'services/core-api/oph_core/routes/tools.py' },
     action: ACTIONS.read_file,
     outcome: { status: 'success', executed: true, message: '读取 tools.py（212 行）' },
   },
@@ -142,15 +142,15 @@ step({
   status: 'success',
   payload: {
     kind: 'tool_result',
-    args: { path: 'services/core-api/qybox_core/routes/tools.py' },
+    args: { path: 'services/core-api/oph_core/routes/tools.py' },
     action: ACTIONS.edit_file,
     outcome: {
       status: 'success',
       executed: true,
-      message: '编辑 services/core-api/qybox_core/routes/tools.py（1 处）',
+      message: '编辑 services/core-api/oph_core/routes/tools.py（1 处）',
       fileChanges: [
         {
-          path: 'services/core-api/qybox_core/routes/tools.py',
+          path: 'services/core-api/oph_core/routes/tools.py',
           changeType: 'modified',
           additions: 6,
           deletions: 3,

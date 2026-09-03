@@ -70,5 +70,5 @@ export async function serveStatic(dir: string, pathname: string): Promise<Respon
 }
 
 export function hostLabel(): string {
-  return process.env.COMPUTERNAME ?? process.env.HOSTNAME ?? 'qywork'
+  return process.env.COMPUTERNAME ?? process.env.HOSTNAME ?? 'oph-autoresearch'
 }

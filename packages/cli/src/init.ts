@@ -1,5 +1,5 @@
 /**
- * `qy init` —— 把「全新用户第一次运行」这条路径变成可走的。
+ * `oph init` —— 把「全新用户第一次运行」这条路径变成可走的。
  *
  * 没有这条命令时，缺配置的首次运行只会拿到 provider 返回的 `auth_failed`，
  * 该消息不指向「配置文件尚未创建」这个真实原因。
@@ -10,8 +10,8 @@
  */
 
 import { existsSync } from 'node:fs'
-import type { QyConfig, StoredProvider } from '@qywork/runtime'
-import { configPath, loadConfig, saveConfig } from '@qywork/runtime'
+import type { OphConfig, StoredProvider } from '@oph-autoresearch/runtime'
+import { configPath, loadConfig, saveConfig } from '@oph-autoresearch/runtime'
 
 interface Preset {
   key: string
@@ -76,8 +76,8 @@ export async function runInit(args: string[]): Promise<number> {
   if (existsSync(configPath()) && !force) {
     process.stderr.write(
       `配置文件已存在：${configPath()}\n` +
-        `  qy config       查看当前配置\n` +
-        `  qy init --force 覆盖重建\n`,
+        `  oph config       查看当前配置\n` +
+        `  oph init --force 覆盖重建\n`,
     )
     return 1
   }
@@ -85,12 +85,12 @@ export async function runInit(args: string[]): Promise<number> {
   // 非交互环境（CI、管道、Docker build）里没人能回答。不阻塞、不猜，
   // 把一份能直接改的模板打到 stdout，让脚本可以重定向进配置文件。
   if (!process.stdin.isTTY) {
-    process.stderr.write(`[qy] 非交互环境，输出配置模板（写入 ${configPath()} 后填入 key）：\n`)
+    process.stderr.write(`[oph] 非交互环境，输出配置模板（写入 ${configPath()} 后填入 key）：\n`)
     process.stdout.write(`${JSON.stringify(templateConfig(), null, 2)}\n`)
     return 0
   }
 
-  process.stderr.write(`\n${BOLD}qywork 初始化${RESET}\n配置会写到 ${configPath()}\n\n`)
+  process.stderr.write(`\n${BOLD}oph-autoresearch 初始化${RESET}\n配置会写到 ${configPath()}\n\n`)
   for (const [i, p] of PRESETS.entries()) process.stderr.write(`  ${i + 1}. ${p.label}\n`)
   process.stderr.write(`\n选哪个？[1-${PRESETS.length}，默认 1] `)
 
@@ -137,7 +137,7 @@ export async function runInit(args: string[]): Promise<number> {
   }
 
   const existing = existsSync(configPath()) ? await loadConfig() : null
-  const cfg: QyConfig = {
+  const cfg: OphConfig = {
     active: { provider: preset.key, model: modelId },
     // --force 重建时保留用户已有的其它接口：他们要换的是当前用哪个，
     // 不是把之前配好的几家全删掉。
@@ -152,12 +152,12 @@ export async function runInit(args: string[]): Promise<number> {
   if (!provider.apiKey && preset.key !== 'local') {
     process.stderr.write(`${DIM}还差 key：往配置文件里加 "apiKey"，或在设置页里填。${RESET}\n`)
   } else {
-    process.stderr.write(`${DIM}试一下：qy exec "介绍一下这个目录里的代码"${RESET}\n`)
+    process.stderr.write(`${DIM}试一下：oph exec "介绍一下这个目录里的代码"${RESET}\n`)
   }
   return 0
 }
 
-function templateConfig(): QyConfig {
+function templateConfig(): OphConfig {
   const preset = PRESETS[0]!
   return {
     active: { provider: preset.key, model: preset.model },

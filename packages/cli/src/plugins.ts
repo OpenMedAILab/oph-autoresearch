@@ -1,5 +1,5 @@
 /**
- * `qy plugins` —— 看一眼装了哪些插件、被关住了没有。
+ * `oph plugins` —— 看一眼装了哪些插件、被关住了没有。
  *
  * **为什么必须有这条命令。** 它是 `sandboxed` 与 `netGuarded` 的**唯一用户可达出口**。没有它，这两
  * 个值在 `packages/plugins` 之外一个消费者都没有，唯一的痕迹是 `PluginHost.start()` 里的一行
@@ -15,7 +15,7 @@
  */
 
 import { relative, resolve } from 'node:path'
-import { globalPluginsDir, loadExtensions, pluginToolPrefix } from '@qywork/runtime'
+import { globalPluginsDir, loadExtensions, pluginToolPrefix } from '@oph-autoresearch/runtime'
 
 const DIM = '\x1b[2m'
 const RESET = '\x1b[0m'
@@ -40,7 +40,7 @@ export async function runPlugins(args: string[]): Promise<number> {
     if (reg.plugins.length === 0 && reg.failures.length === 0) {
       process.stderr.write(
         `没有装任何插件。插件放在 ${globalPluginsDir()} 的 <名字>/ 下，\n` +
-          `目录里要有 ${BOLD}qywork.plugin.json${RESET}${DIM}（不是 plugin.json）${RESET}和清单里 main 指向的入口。\n` +
+          `目录里要有 ${BOLD}oph-autoresearch.plugin.json${RESET}${DIM}（不是 plugin.json）${RESET}和清单里 main 指向的入口。\n` +
           `${DIM}详见 docs/plugins.md${RESET}\n`,
       )
       return 0
@@ -111,7 +111,7 @@ export async function runPlugins(args: string[]): Promise<number> {
       process.stderr.write(`\n${DIM}加 --tools 看每个插件提供哪些工具，以及启动日志${RESET}\n`)
     }
 
-    // 有插件装不上时退非零：CI 里 `qy plugins` 就能当一条检查用，与 `qy mcp` 一致。
+    // 有插件装不上时退非零：CI 里 `oph plugins` 就能当一条检查用，与 `oph mcp` 一致。
     return reg.failures.length > 0 ? 1 : 0
   } finally {
     // 探测完就把子进程收掉。留着的话这条命令会挂住不返回。
