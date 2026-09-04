@@ -100,21 +100,28 @@ export { SKILLS_SUBDIR, type SkillMeta, scanAllSkills, scanSkills } from './skil
 // SSH：服务端配置/文件 API 与 Agent 工具共用同一份实现和路径边界。
 export {
   connectSshCommand,
+  connectSshTarget,
   inspectSshDirectory,
   listSshFiles,
   loadSshProfiles,
+  loadSshRecentConnections,
+  normalizeSshTarget,
   parseSshCommand,
   readSshBinary,
   readSshOfficeText,
   readSshText,
+  recordSshConnection,
   resolveSshPath,
+  type SshAuthMode,
   type SshCommandTarget,
   type SshConnectionAuth,
   type SshEntry,
   type SshProfile,
+  type SshRecentConnection,
   saveSshProfiles,
   sshCommandProfile,
   sshConfigPath,
+  sshTargetProfile,
   testSshProfile,
 } from './ssh.ts'
 // 外部工具按需加载：runtime/session.ts 量一次决定全量常驻还是进池子；

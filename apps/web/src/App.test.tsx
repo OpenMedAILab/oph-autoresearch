@@ -3,7 +3,7 @@
  * 与 `copyCode`（代码块右上角的复制按钮）。两者的触发元素全部由 markdown 渲染产出，
  * 根上这一处是它们唯一的落点。
  *
- * DOM 在这里装、用完卸掉，理由同 `components/RunStatus.test.tsx`。
+ * DOM 在这里装、用完卸掉，避免模块级 store 与后续用例互相污染。
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'

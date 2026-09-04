@@ -1,15 +1,48 @@
 import type { EditorView } from '@codemirror/view'
-import { createEffect, createResource, Match, onCleanup, Show, Switch } from 'solid-js'
-import { createReadonlyEditor } from '../lib/editor.ts'
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  Match,
+  onCleanup,
+  Show,
+  Switch,
+} from 'solid-js'
+import { filterXSS, getDefaultWhiteList } from 'xss'
+import {
+  createCodeEditor,
+  type EditorPosition,
+  languageName,
+  showEditorSearch,
+} from '../lib/editor.ts'
+import { renderMarkdown } from '../lib/markdown.ts'
 import { loaded } from '../lib/resource.ts'
-import { absPath, client, explainApiError, setOpenFile } from '../lib/store/index.ts'
-import { IconX } from './Icons.tsx'
+import {
+  absPath,
+  client,
+  explainApiError,
+  invalidateWorkspaceFiles,
+  setCenterView,
+  setOpenFile,
+} from '../lib/store/index.ts'
+import { IconCheck, IconCopy, IconSave, IconSearch, IconX } from './Icons.tsx'
 
 interface PreviewResult {
   path: string
-  kind: 'text' | 'image' | 'pdf' | 'audio' | 'video' | 'tabular' | 'archive' | 'binary'
+  kind:
+    | 'text'
+    | 'markdown'
+    | 'office'
+    | 'image'
+    | 'pdf'
+    | 'audio'
+    | 'video'
+    | 'tabular'
+    | 'archive'
+    | 'binary'
   mime: string
   size: number
+  mtime: number
   content?: string
   language?: string
   dataUri?: string
@@ -30,6 +63,19 @@ interface PreviewResult {
  * 只想聊天的用户不该为它付首屏成本。
  */
 export default function FileView(props: { path: string; refresh?: number }) {
+  const [markdownMode, setMarkdownMode] = createSignal<'preview' | 'source'>('preview')
+  const [copyState, setCopyState] = createSignal<'idle' | 'done'>('idle')
+  const [draft, setDraft] = createSignal('')
+  const [baseline, setBaseline] = createSignal('')
+  const [dirty, setDirty] = createSignal(false)
+  const [saving, setSaving] = createSignal(false)
+  const [saveState, setSaveState] = createSignal<'idle' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = createSignal('')
+  let activeEditor: EditorView | null = null
+  let copyReceipt: ReturnType<typeof setTimeout> | undefined
+  let saveReceipt: ReturnType<typeof setTimeout> | undefined
+  let snapshotKey = ''
+  let expectedMtime = 0
   // 路径与文件页的统一失效序号直接走资源判据。失效序号不在 `run.started` 清空，
   // 因此发起新一轮不会把“摘要从非空变空”误判成一次磁盘改动。
   const [result] = createResource(
@@ -37,21 +83,186 @@ export default function FileView(props: { path: string; refresh?: number }) {
     () => client.api<PreviewResult>(`/api/files/preview?path=${encodeURIComponent(props.path)}`),
   )
 
+  createEffect(() => {
+    props.path
+    setMarkdownMode('preview')
+    setCopyState('idle')
+    setDraft('')
+    setBaseline('')
+    setDirty(false)
+  })
+
+  createEffect(() => {
+    const value = current()
+    if (!value || value.content === undefined) return
+    const key = `${value.path}:${value.mtime}`
+    if (key === snapshotKey) return
+    snapshotKey = key
+    expectedMtime = value.mtime
+    setDraft(value.content)
+    setBaseline(value.content)
+    setDirty(false)
+    setSaveState('idle')
+    setSaveError('')
+  })
+
+  onCleanup(() => {
+    if (copyReceipt) clearTimeout(copyReceipt)
+    if (saveReceipt) clearTimeout(saveReceipt)
+  })
+
+  const current = () => loaded(result)
+  const sourceVisible = () => {
+    const value = current()
+    return (
+      value?.kind === 'text' ||
+      value?.kind === 'tabular' ||
+      (value?.kind === 'markdown' && markdownMode() === 'source')
+    )
+  }
+  const fileName = () => props.path.split('/').pop() ?? props.path
+  const directory = () => {
+    const full = absPath(props.path)
+    const cut = Math.max(full.lastIndexOf('/'), full.lastIndexOf('\\'))
+    return cut > 0 ? full.slice(0, cut) : full
+  }
+
+  const copySource = async () => {
+    const content = draft()
+    await navigator.clipboard?.writeText(content)
+    setCopyState('done')
+    if (copyReceipt) clearTimeout(copyReceipt)
+    copyReceipt = setTimeout(() => setCopyState('idle'), 1200)
+  }
+
+  const editable = () => sourceVisible() && !current()?.truncated
+
+  const saveSource = async () => {
+    if (!editable() || saving() || !dirty()) return
+    setSaving(true)
+    setSaveState('idle')
+    setSaveError('')
+    try {
+      const content = activeEditor?.state.doc.toString() ?? draft()
+      const { node } = await client.api<{ node: { mtime: number } }>('/api/files/write', {
+        method: 'POST',
+        body: JSON.stringify({ path: props.path, content, expectedMtime }),
+      })
+      expectedMtime = node.mtime
+      setDraft(content)
+      setBaseline(content)
+      setDirty(false)
+      setSaveState('saved')
+      invalidateWorkspaceFiles()
+      if (saveReceipt) clearTimeout(saveReceipt)
+      saveReceipt = setTimeout(() => setSaveState('idle'), 1500)
+    } catch (error) {
+      setSaveState('error')
+      setSaveError(explainApiError(error, '保存失败'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const close = () => {
+    setOpenFile(null)
+    setCenterView('chat')
+  }
+
   return (
     <div class="preview">
       <header class="preview-head">
-        {/* **完整的本机路径**，不是工作区相对路径：根目录下的文件相对路径就只剩一个
-            文件名，看不出它在哪个项目里。挤不下时从左边截——尾部的文件名比盘符要紧。 */}
-        <code class="truncate-left" data-tip={absPath(props.path)}>
-          {/* `dir="ltr"` 是这一对里不能省的一半：外层 `rtl` 把省略号挪到左边，
-              内层 `ltr` 保证路径本身还是正着读的。只写外层，`C:\` 会跑到右边去。 */}
-          <span dir="ltr">{absPath(props.path)}</span>
-        </code>
+        <div class="preview-tab" title={absPath(props.path)}>
+          <span class="file-language-mark" data-language={languageName(props.path)}>
+            {fileMark(props.path)}
+          </span>
+          <span class="truncate">{fileName()}</span>
+          <button class="preview-tab-close" type="button" aria-label="关闭文件" onClick={close}>
+            <IconX size={12} />
+          </button>
+        </div>
         <span class="spacer" />
-        <button class="icon-btn" type="button" aria-label="关闭" onClick={() => setOpenFile(null)}>
-          <IconX size={14} />
-        </button>
+        <div class="preview-actions">
+          <Show when={sourceVisible()}>
+            <button
+              class="icon-btn"
+              classList={{ active: dirty() }}
+              type="button"
+              aria-label={saving() ? '正在保存文件' : dirty() ? '保存文件' : '文件已保存'}
+              data-tip={saving() ? '正在保存…' : dirty() ? '保存（Ctrl+S）' : '文件已保存'}
+              disabled={!editable() || saving() || !dirty()}
+              onClick={() => void saveSource()}
+            >
+              <Show when={saveState() === 'saved'} fallback={<IconSave size={14} />}>
+                <IconCheck size={14} />
+              </Show>
+            </button>
+            <button
+              class="icon-btn"
+              type="button"
+              aria-label="在文件中查找"
+              data-tip="查找（Ctrl+F）"
+              onClick={() => showEditorSearch(activeEditor)}
+            >
+              <IconSearch size={14} />
+            </button>
+            <button
+              class="icon-btn"
+              type="button"
+              aria-label="复制文件内容"
+              data-tip={copyState() === 'done' ? '已复制' : '复制文件内容'}
+              onClick={() => void copySource()}
+            >
+              <Show when={copyState() === 'done'} fallback={<IconCopy size={14} />}>
+                <IconCheck size={14} />
+              </Show>
+            </button>
+          </Show>
+          <Show when={loaded(result)?.kind === 'markdown'}>
+            <fieldset class="preview-mode-switch">
+              <legend>Markdown 查看方式</legend>
+              <button
+                type="button"
+                classList={{ active: markdownMode() === 'preview' }}
+                onClick={() => setMarkdownMode('preview')}
+              >
+                预览
+              </button>
+              <button
+                type="button"
+                classList={{ active: markdownMode() === 'source' }}
+                onClick={() => setMarkdownMode('source')}
+              >
+                源码
+              </button>
+            </fieldset>
+          </Show>
+        </div>
       </header>
+
+      <div class="preview-breadcrumb" title={absPath(props.path)}>
+        <span class="truncate-left" dir="rtl">
+          <span dir="ltr">{directory()}</span>
+        </span>
+        <span class="preview-breadcrumb-separator">›</span>
+        <strong>{fileName()}</strong>
+        <Show when={sourceVisible()}>
+          <span
+            class="preview-edit-state"
+            classList={{ dirty: dirty(), error: saveState() === 'error' }}
+          >
+            {saveState() === 'error'
+              ? saveError()
+              : saving()
+                ? '正在保存'
+                : dirty()
+                  ? '已修改'
+                  : editable()
+                    ? '可编辑'
+                    : '只读'}
+          </span>
+        </Show>
+      </div>
 
       <div class="preview-body">
         {/* 取不回来要给一句话。`loaded()` 而不是 `result()`：后者出错时是 `throw`，
@@ -68,7 +279,46 @@ export default function FileView(props: { path: string; refresh?: number }) {
           {(r) => (
             <Switch fallback={<div class="preview-note">{r().note ?? '无法预览'}</div>}>
               <Match when={r().kind === 'text' || r().kind === 'tabular'}>
-                <CodeView content={r().content ?? ''} path={r().path} />
+                <CodeView
+                  content={draft()}
+                  path={r().path}
+                  editable={editable()}
+                  onChange={(content) => {
+                    setDraft(content)
+                    setDirty(content !== baseline())
+                    setSaveState('idle')
+                  }}
+                  onSave={() => void saveSource()}
+                  onReady={(next) => {
+                    activeEditor = next
+                  }}
+                />
+              </Match>
+              <Match when={r().kind === 'markdown'}>
+                <Show
+                  when={markdownMode() === 'preview'}
+                  fallback={
+                    <CodeView
+                      content={draft()}
+                      path={r().path}
+                      editable={editable()}
+                      onChange={(content) => {
+                        setDraft(content)
+                        setDirty(content !== baseline())
+                        setSaveState('idle')
+                      }}
+                      onSave={() => void saveSource()}
+                      onReady={(next) => {
+                        activeEditor = next
+                      }}
+                    />
+                  }
+                >
+                  <article class="file-markdown markdown" innerHTML={renderMarkdown(draft())} />
+                </Show>
+              </Match>
+              <Match when={r().kind === 'office'}>
+                <article class="office-preview" innerHTML={sanitizeOfficeHtml(r().content ?? '')} />
               </Match>
               <Match when={r().kind === 'image'}>
                 <img class="preview-media" src={r().dataUri} alt={r().path} />
@@ -95,10 +345,49 @@ export default function FileView(props: { path: string; refresh?: number }) {
   )
 }
 
-export function CodeView(props: { content: string; path: string }) {
+function fileMark(path: string): string {
+  const name = path.split('/').pop()?.toLowerCase() ?? ''
+  const ext = name.split('.').pop() ?? ''
+  if (ext === 'ts' || ext === 'tsx') return 'TS'
+  if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') return 'JS'
+  if (ext === 'json') return '{}'
+  if (ext === 'md' || ext === 'mdx') return 'M↓'
+  if (ext === 'py') return 'PY'
+  if (ext === 'rs') return 'RS'
+  if (ext === 'html' || ext === 'htm') return '<>'
+  if (ext === 'css' || ext === 'scss') return '#'
+  return ext.slice(0, 2).toUpperCase() || '·'
+}
+
+const OFFICE_WHITELIST = {
+  ...getDefaultWhiteList(),
+  article: ['class'],
+  section: ['class'],
+  div: ['class'],
+  span: ['class'],
+  table: ['class'],
+  td: ['colspan', 'rowspan'],
+  th: ['colspan', 'rowspan'],
+}
+
+function sanitizeOfficeHtml(html: string): string {
+  return filterXSS(html, { whiteList: OFFICE_WHITELIST })
+}
+
+export function CodeView(props: {
+  content: string
+  path: string
+  editable?: boolean
+  onChange?: (content: string) => void
+  onSave?: () => void
+  onReady?: (view: EditorView | null) => void
+}) {
   let host!: HTMLDivElement
   let view: EditorView | null = null
   let mountedPath: string | null = null
+  let mountedEditable: boolean | null = null
+  let syncing = false
+  const [position, setPosition] = createSignal<EditorPosition>({ line: 1, column: 1 })
   /** 只有最后一次装配算数：语言包是动态 import，两次改动挨得近时后发的可能先到。 */
   let generation = 0
 
@@ -112,10 +401,12 @@ export function CodeView(props: { content: string; path: string }) {
     const path = props.path
     const mine = ++generation
 
-    if (view && mountedPath === path) {
+    if (view && mountedPath === path && mountedEditable === Boolean(props.editable)) {
       if (view.state.doc.toString() === content) return
       const { scrollLeft, scrollTop } = view.scrollDOM
+      syncing = true
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } })
+      syncing = false
       // 全文替换会重算文档高度；恢复像素位置，内容变短时浏览器自然夹到新的底部。
       view.scrollDOM.scrollLeft = scrollLeft
       view.scrollDOM.scrollTop = scrollTop
@@ -123,7 +414,14 @@ export function CodeView(props: { content: string; path: string }) {
     }
 
     void (async () => {
-      const next = await createReadonlyEditor(host, content, path)
+      const next = await createCodeEditor(host, content, path, {
+        editable: props.editable,
+        onPosition: setPosition,
+        onChange: (value) => {
+          if (!syncing) props.onChange?.(value)
+        },
+        onSave: props.onSave,
+      })
       if (mine !== generation) {
         next.destroy()
         return
@@ -131,10 +429,32 @@ export function CodeView(props: { content: string; path: string }) {
       view?.destroy()
       view = next
       mountedPath = path
+      mountedEditable = Boolean(props.editable)
+      props.onReady?.(next)
     })()
   })
 
-  onCleanup(() => view?.destroy())
+  onCleanup(() => {
+    props.onReady?.(null)
+    view?.destroy()
+  })
 
-  return <div class="code-view" ref={host} />
+  const lineCount = () => Math.max(1, props.content.split(/\r\n?|\n/).length)
+  const eol = () => (props.content.includes('\r\n') ? 'CRLF' : 'LF')
+
+  return (
+    <div class="code-editor-shell">
+      <div class="code-view" ref={host} />
+      <footer class="code-statusbar">
+        <span>
+          行 {position().line}，列 {position().column}
+        </span>
+        <span>{lineCount()} 行</span>
+        <span class="spacer" />
+        <span>UTF-8</span>
+        <span>{eol()}</span>
+        <span>{languageName(props.path)}</span>
+      </footer>
+    </div>
+  )
 }

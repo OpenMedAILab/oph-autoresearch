@@ -15,6 +15,7 @@
     "@oph-autoresearch/runtime": "workspace:*",
     "@oph-autoresearch/store": "workspace:*",
     "@oph-autoresearch/team": "workspace:*",
-    "@oph-autoresearch/tools": "workspace:*"
+    "@oph-autoresearch/tools": "workspace:*",
+    "jszip": "^3.10.1"
   }
 }

@@ -231,7 +231,7 @@ const MODULES: Module[] = [
     id: 'vcs',
     label: '版本控制',
     notes: [
-      { label: 'FileChange', text: () => '改动实时统计在输入框上方，侧面板里逐份审阅。' },
+      { label: 'FileChange', text: () => '改动事件仅供 Agent 留痕，不再占用主界面。' },
       { label: 'git', text: () => '提交与分支由模型执行 git 命令完成，没有单独的工具。' },
     ],
   },

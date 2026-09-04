@@ -107,7 +107,7 @@ export interface WorkflowNodeState {
   agent: string
   /** 显示用的名字：角色名或「厂商 + CLI 名」。 */
   label: string
-  phase: 'spawned' | 'working' | 'done' | 'failed' | 'skipped'
+  phase: 'queued' | 'spawned' | 'working' | 'done' | 'failed' | 'skipped'
   /** done/failed 时那一段产出的开头，卡上只显示这一截。 */
   summary?: string
   /** 点开看它那条会话。外部 CLI 没有子会话，这个字段缺席。 */
@@ -361,32 +361,14 @@ export function isRunning(): boolean {
 }
 
 /**
- * 整轮状态条这一轮挂不挂：有没做完的待办，或这一轮改过文件。
- *
- * 判据放在这里而不是组件里：`RunStatus` 按它决定挂不挂，`Transcript` 按它决定
- * 底部留多少白，两处是同一个判据。
- */
-export function hasRunStatus(): boolean {
-  return (
-    isRunning() &&
-    view().runStartedAt !== null &&
-    (state.todos.some((t) => t.status !== 'completed') || state.fileChanges.length > 0)
-  )
-}
-
-/**
- * 输入框上方除了输入框自己还挂着块：整轮状态条 / 目标条 / 排着的跟进消息。
+ * 输入框上方除了输入框自己还挂着块：目标条 / 排着的跟进消息。
  *
  * 会话流底部那段留白按它给。下面紧挨着一个块时贴住它——那一段是输入框上方
  * 这一列的缝，与块之间的缝同宽；下面直接是输入框时要留出正文的呼吸，
  * 两者差着一个量级，用同一个数会一头挤一头空。
  */
 export function composerStackAbove(): boolean {
-  return (
-    hasRunStatus() ||
-    state.followUps.length > 0 ||
-    (state.goal !== null && state.goal.status !== 'completed')
-  )
+  return state.followUps.length > 0 || (state.goal !== null && state.goal.status !== 'completed')
 }
 
 /**

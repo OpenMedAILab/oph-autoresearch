@@ -58,7 +58,7 @@ import {
   IconX,
 } from './Icons.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
-import { RunStatus } from './RunStatus.tsx'
+import Statusline from './Statusline.tsx'
 import { VoiceButton } from './VoiceButton.tsx'
 
 /**
@@ -890,8 +890,6 @@ export function Composer() {
         </div>
       </Show>
 
-      <RunStatus />
-
       {/* 输入补全向上开：输入区贴着窗口底部。命令、技能与调用目标共用一套尺寸和键盘行为。 */}
       <Show when={pickerOpen()}>
         <div class="composer-pop" role="listbox" aria-label="命令与引用">
@@ -1164,6 +1162,13 @@ export function Composer() {
           </div>
         </div>
       </form>
+
+      {/*
+       * 常驻状态栏：输入框之下、窗口底边之上。运行合计（金额 / token / 轮次）
+       * 与「现在跑没跑」就在这里，替代了原先右侧面板里的「运行」页。
+       * 放在 form 外：它不参与提交，也不该挡在输入框和发送按钮之间。
+       */}
+      <Statusline />
     </div>
   )
 }

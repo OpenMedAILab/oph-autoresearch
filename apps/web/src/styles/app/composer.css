@@ -43,79 +43,57 @@
   }
 }
 
-/* 整轮状态条：居中，且**悬浮在输入框上沿之上，不占流**。
+/* 常驻状态栏：输入框下方、窗口底边之上的那一条。
  *
- * 居中是因为它不属于左右任何一侧的控件，是这一轮的状态——左对齐时看起来像
- * 输入框长出来的一个附件。居中交给外层，chip 自己仍然按内容宽度收缩。
+ * **为什么占流而不是悬浮。** 它回答「这条会话一共花了多少、现在跑没跑」，
+ * 是常驻读数，不是这一轮的临时状态——悬浮会盖住正文最底下那一截，
+ * 而那是它唯一的位置。占流后输入框底部多出一条整宽带子，
+ * 会话流的裁切边跟着上移，与 `padding-top: 0` 那条规则不冲突
+ * （这里多出来的是**框下方**的带子，不是框上方）。
  *
- * 不占流是实测逼出来的：占流时 `.composer-wrap` 在输入框上方多出一条 35px 的
- * **整宽**带子（27 的行 + 8 的间距），而会话流的裁切边就落在那条带子的顶上
- * ——量出来 `.transcript` 底边 744、输入框卡片上沿 779。因此正文在离框 35px 的
- * 半空中被齐刷刷切断。这与本文件开头 `.composer-wrap` 那条「padding-top 必须是 0」
- * 拦的是同一个坑。
- *
- * 悬浮之后裁切边回到卡片上沿（实测 clipGap 0），chip 挡住的只剩正文最底下那一小截。
- * **整条不吃指针**，否则输入框上方那 35px 会挡住正文的选中和点击。
+ * **一行小字，不做卡片**：它不该和输入框抢分量，用户在打字时余光扫得到即可。
  */
-.run-status {
-  position: absolute;
-  /* `bottom: 100%` 把整条的下沿贴到 `.composer-wrap` 的上沿，间距再由
-     margin 让开。不要改回 `top: 0` + `translateY(-100% - 缝)`：那种写法里
-     `--composer-stack-gap` 一旦读不到，整条 transform 作废、chip 落回 top 0，
-     形状是它盖在跟进卡片的上半截上，而不是缝变宽变窄。 */
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  margin-bottom: var(--composer-stack-gap);
+.statusline {
   display: flex;
-  justify-content: center;
-  pointer-events: none;
-}
-.changes-chip {
-  /* 指针在 `.run-status` 那一层被关掉了，这里单独开回来：关掉的是整宽那条带子
-     （它悬在正文上面），开回来的是 chip 自己——里面两段读数都是按钮。 */
-  pointer-events: auto;
-  display: inline-flex;
   align-items: center;
   gap: var(--s-2);
-  /* 定高，不由内容撑：会话流底部按这个数留位置，让它上下两道缝一样宽。 */
-  height: var(--run-status-h);
-  padding: 0 var(--s-3);
-  /* 与工具栏上的 chip 同阶。不做药丸形：tokens.css 的圆角阶梯写死了
-     「带文字的标签一律不用 `--r-full`」。 */
-  border-radius: var(--r-sm);
-  /* 最淡的一档中性叠加。它是相对底色的百分比，明暗两套都只抬一档，
-     不像 `--bg-inset` 那样在暗色下比正文纸还亮。 */
-  background: var(--bg-hover);
-  /* 次级文字色：它是余光里的读数，不是要被读出来的一句话。
-     正文色会让这一枚小 chip 比它上面那条读数条还重。 */
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  font-variant-numeric: tabular-nums;
-}
-/* 分隔点压暗：它是标点不是内容，跟两侧一样重会把一条读成三块。 */
-.changes-chip .sep {
+  margin-top: var(--s-2);
+  min-height: 18px;
+  padding: 0 var(--s-2);
   color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
 }
-/* 两段读数都是按钮（点开对应面板），但不画成按钮：画边框或底色会让整条读成
-   「一个控件旁边挂着几个数字」。 */
-.run-jump {
+.statusline-scope {
+  flex: none;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.statusline-metric {
+  flex: none;
+  white-space: nowrap;
+}
+/* 金额再高一档：它是这一条里唯一「花了多少」的数，是用户扫这一眼的目的。 */
+.statusline-cost {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+/* 没有运行过：占位，不是 0。 */
+.statusline-empty {
+  flex: none;
+}
+/* 运行状态永远在右端：它和合计的刷新频率不同，混在中间会跟着重排。 */
+.statusline-state {
+  margin-left: auto;
+  flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  color: inherit;
-  font: inherit;
-  font-variant-numeric: tabular-nums;
+  gap: 5px;
+  white-space: nowrap;
 }
-.run-jump:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.changes-chip .add {
-  color: var(--success);
-}
-.changes-chip .del {
-  color: var(--danger);
+.statusline-state[data-status="running"] {
+  color: var(--accent);
 }
 
 /* Goal 与等待队列是输入框后方的内缩扩展层；正文壳在前景盖住它的底边。
@@ -963,7 +941,7 @@
 /* ── 面板放大时的底部停靠 ──
  *
  * 放在全部输入区基础规则之后：这一段只覆盖放大态。如果写在文件开头，后面的
- * `.composer` / `.run-status` 会形成“低特异性规则写在高特异性之后”的假顺序。 */
+ * `.composer` 会形成“低特异性规则写在高特异性之后”的假顺序。 */
 
 /* 普通会话里没有第二种输入形态；底部触发条只属于宽屏面板放大态。 */
 .composer-reveal {
@@ -1014,14 +992,16 @@
   }
 
   /*
-   * 四块都属于同一份输入表面：运行位置、整轮状态、补全面板和输入卡。
+   * 三块都属于同一份输入表面：运行位置、补全面板和输入卡。
    * 收起时保留布局高度但不接指针，面板下方的文字仍能选中；展开只做 10px 位移，
    * 不缩放文字，避免 CodeMirror 旁边出现一瞬间的模糊字体。
+   * 状态栏（`.statusline`）跟着同一份表面走：输入框收起时它也收起，
+   * 否则面板放大后正文底下还悬着一排读数。
    */
   .app.panel-max .composer-wrap > .run-context,
-  .app.panel-max .composer-wrap > .run-status,
   .app.panel-max .composer-wrap > .composer-pop,
-  .app.panel-max .composer-wrap > .composer {
+  .app.panel-max .composer-wrap > .composer,
+  .app.panel-max .composer-wrap > .statusline {
     visibility: hidden;
     opacity: 0;
     transform: translate3d(0, 6px, 0);
@@ -1032,9 +1012,9 @@
    * 普通输入框的可见状态过渡成一次闪烁，后续悬浮开合仍保留完整动效。
    */
   .app.panel-max .composer-wrap.panel-dock-ready > .run-context,
-  .app.panel-max .composer-wrap.panel-dock-ready > .run-status,
   .app.panel-max .composer-wrap.panel-dock-ready > .composer-pop,
-  .app.panel-max .composer-wrap.panel-dock-ready > .composer {
+  .app.panel-max .composer-wrap.panel-dock-ready > .composer,
+  .app.panel-max .composer-wrap.panel-dock-ready > .statusline {
     will-change: opacity, transform;
     transition:
       opacity 100ms var(--ease),
@@ -1042,9 +1022,9 @@
       visibility 0s linear 140ms;
   }
   .app.panel-max .composer-wrap.panel-dock-open > .run-context,
-  .app.panel-max .composer-wrap.panel-dock-open > .run-status,
   .app.panel-max .composer-wrap.panel-dock-open > .composer-pop,
-  .app.panel-max .composer-wrap.panel-dock-open > .composer {
+  .app.panel-max .composer-wrap.panel-dock-open > .composer,
+  .app.panel-max .composer-wrap.panel-dock-open > .statusline {
     visibility: visible;
     opacity: 1;
     transform: translate3d(0, 0, 0);
@@ -1055,14 +1035,8 @@
   }
   .app.panel-max .composer-wrap.panel-dock-open > .run-context,
   .app.panel-max .composer-wrap.panel-dock-open > .composer-pop,
-  .app.panel-max .composer-wrap.panel-dock-open > .composer {
-    pointer-events: auto;
-  }
-  /* 状态条本身仍不截整行指针，只有里面那枚 chip 可点；沿用既有命中边界。 */
-  .app.panel-max .composer-wrap.panel-dock-open > .run-status {
-    pointer-events: none;
-  }
-  .app.panel-max .composer-wrap.panel-dock-open .changes-chip {
+  .app.panel-max .composer-wrap.panel-dock-open > .composer,
+  .app.panel-max .composer-wrap.panel-dock-open > .statusline {
     pointer-events: auto;
   }
   /* 悬在文件正文上时比普通上下布局多一档阴影，边界看得清但不加新的描边。 */
@@ -1073,9 +1047,9 @@
 
 @media (min-width: 821px) and (prefers-reduced-motion: reduce) {
   .app.panel-max .composer-wrap > .run-context,
-  .app.panel-max .composer-wrap > .run-status,
   .app.panel-max .composer-wrap > .composer-pop,
   .app.panel-max .composer-wrap > .composer,
+  .app.panel-max .composer-wrap > .statusline,
   .app.panel-max .composer-reveal,
   .app.panel-max .composer-reveal > span {
     transition: none;

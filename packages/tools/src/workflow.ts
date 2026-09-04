@@ -14,6 +14,7 @@ export const workflowTool: ToolSpec = {
     '把上一批回执交回当前会话审查。到 checkpoint 只代表本次调度返回，不代表整个 workflow 完成：' +
     '核验后必须再次调用本工具，用同一 workflowId 对该 checkpoint approve 或 revise。' +
     'revise 会向原子会话续发，approve 才启动下一批。' +
+    '首次调用可用 maxConcurrent 声明本图期望并发，实际并发仍受项目规则硬上限约束。' +
     '节点不指定 agent 就临时起一个子 agent（当前模型、全套工具），' +
     '指定则派给配置好的角色或 cli:<id> 的外部 CLI。' +
     '只派一件事用 subagent。用户明确要求先设计流程时，先用普通回复展示完整图并等待确认，' +
@@ -40,10 +41,18 @@ export const workflowTool: ToolSpec = {
             label: { type: 'string', description: 'checkpoint 显示名称' },
             needs: { type: 'array', items: { type: 'string' }, description: '依赖节点 ID' },
             passInput: { type: 'boolean', description: '是否把上游输出传入任务，默认 true' },
+            provider: {
+              type: 'string',
+              description: '该节点使用的接口；填写时必须同时填写 model',
+            },
             model: { type: 'string', description: '该 agent 节点的模型覆盖' },
           },
           required: ['id'],
         },
+      },
+      maxConcurrent: {
+        type: 'integer',
+        description: '首次调用期望的最大并发数，默认 4；项目管理员硬上限仍然生效',
       },
       workflowId: { type: 'string', description: '续接既有 workflow 时使用首次返回的 ID' },
       checkpointId: { type: 'string', description: '当前待审查 checkpoint ID' },

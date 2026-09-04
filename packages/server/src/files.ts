@@ -7,12 +7,15 @@
  * 永远追不上现实，而族是有限的。
  */
 
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, sep } from 'node:path'
 import { IGNORED_DIRS } from '@oph-autoresearch/tools'
+import JSZip from 'jszip'
 
 export type PreviewKind =
   | 'text'
+  | 'markdown'
+  | 'office'
   | 'image'
   | 'pdf'
   | 'audio'
@@ -36,6 +39,8 @@ export interface PreviewResult {
   kind: PreviewKind
   mime: string
   size: number
+  /** 供编辑保存时做并发冲突检查。 */
+  mtime: number
   /** 文本族才有。 */
   content?: string
   /** 语法高亮语言标识。 */
@@ -51,6 +56,8 @@ export interface PreviewResult {
 const MAX_TEXT_BYTES = 512 * 1024
 /** 内联二进制上限（data URI 会膨胀约 1.37 倍）。 */
 const MAX_INLINE_BYTES = 4 * 1024 * 1024
+/** Office OOXML 在本机解包渲染；限制原始压缩包，避免巨型文档耗尽内存。 */
+const MAX_OFFICE_BYTES = 32 * 1024 * 1024
 
 const EXT_LANGUAGE: Record<string, string> = {
   '.ts': 'typescript',
@@ -109,6 +116,8 @@ const EXT_LANGUAGE: Record<string, string> = {
 }
 
 const EXT_KIND: Record<string, PreviewKind> = {
+  '.md': 'markdown',
+  '.mdx': 'markdown',
   '.png': 'image',
   '.jpg': 'image',
   '.jpeg': 'image',
@@ -138,8 +147,12 @@ const EXT_KIND: Record<string, PreviewKind> = {
   '.xz': 'archive',
   '.whl': 'archive',
   '.jar': 'archive',
-  '.xlsx': 'tabular',
-  '.xls': 'tabular',
+  '.docx': 'office',
+  '.pptx': 'office',
+  '.xlsx': 'office',
+  '.doc': 'office',
+  '.ppt': 'office',
+  '.xls': 'office',
   '.ods': 'tabular',
 }
 
@@ -153,6 +166,9 @@ const EXT_MIME: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.avif': 'image/avif',
   '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
@@ -227,6 +243,123 @@ export class EntryExistsError extends Error {
     super(`${relPath} 已存在`)
     this.name = 'EntryExistsError'
   }
+}
+
+/** 文件在编辑期间被别的进程改过。覆盖它会丢掉别人的修改。 */
+export class FileChangedError extends Error {
+  constructor(readonly relPath: string) {
+    super(`${relPath} 已在磁盘上发生变化，请重新打开后再编辑`)
+    this.name = 'FileChangedError'
+  }
+}
+
+/** 代码编辑器允许保存的上限。和预览上限一致，避免只加载到半份却覆盖整份文件。 */
+const MAX_EDIT_BYTES = MAX_TEXT_BYTES
+
+/**
+ * 保存文本文件。
+ *
+ * `expectedMtime` 来自打开文件时的快照。模型、终端或同步程序在此期间改过文件时，
+ * 拒绝覆盖并要求重新加载；科研脚本不应该因为一个晚到的 Ctrl+S 丢掉实验修改。
+ */
+export async function writeTextEntry(
+  workspaceRoot: string,
+  relPath: string,
+  content: string,
+  expectedMtime?: number,
+): Promise<FileNode> {
+  const abs = join(workspaceRoot, relPath)
+  const before = await stat(abs)
+  if (!before.isFile()) throw new Error(`${relPath} 不是文件`)
+  if (Buffer.byteLength(content, 'utf8') > MAX_EDIT_BYTES) {
+    throw new RangeError(`文件超过 ${formatBytes(MAX_EDIT_BYTES)}，不能在内置编辑器中保存`)
+  }
+  if (expectedMtime !== undefined && Math.abs(before.mtimeMs - expectedMtime) > 0.5) {
+    throw new FileChangedError(relPath)
+  }
+
+  await writeFile(abs, content, 'utf8')
+  const after = await stat(abs)
+  return {
+    name: basename(abs),
+    path: toPosix(relPath),
+    kind: 'file',
+    size: after.size,
+    mtime: after.mtimeMs,
+  }
+}
+
+/**
+ * 复制文件或目录。默认复制到同一层，并生成不会覆盖现有条目的名字。
+ * 指定目标目录时也沿用这一口径，连续复制得到 `name copy 2.ext`。
+ */
+export async function copyEntry(
+  workspaceRoot: string,
+  relPath: string,
+  destinationDir = toPosix(dirname(relPath)),
+): Promise<FileNode> {
+  const source = join(workspaceRoot, relPath)
+  const info = await stat(source)
+  const targetDir = join(workspaceRoot, destinationDir === '.' ? '' : destinationDir)
+  if (!(await stat(targetDir)).isDirectory()) throw new Error(`${destinationDir} 不是文件夹`)
+
+  const target = await availableCopyPath(targetDir, basename(source), info.isDirectory())
+  await cp(source, target, { recursive: info.isDirectory(), errorOnExist: true, force: false })
+  const copied = await stat(target)
+  return {
+    name: basename(target),
+    path: toPosix(relative(workspaceRoot, target)),
+    kind: copied.isDirectory() ? 'dir' : 'file',
+    size: copied.size,
+    mtime: copied.mtimeMs,
+  }
+}
+
+/** 把条目移动到一个已经存在的工作区目录中，保留原文件名且从不覆盖。 */
+export async function moveEntry(
+  workspaceRoot: string,
+  relPath: string,
+  destinationDir: string,
+): Promise<FileNode> {
+  const source = join(workspaceRoot, relPath)
+  const sourceInfo = await stat(source)
+  const targetDir = join(workspaceRoot, destinationDir === '.' ? '' : destinationDir)
+  if (!(await stat(targetDir)).isDirectory()) throw new Error(`${destinationDir} 不是文件夹`)
+
+  if (sourceInfo.isDirectory()) {
+    const childPath = relative(source, targetDir)
+    if (childPath === '' || (!childPath.startsWith(`..${sep}`) && childPath !== '..')) {
+      throw new Error('不能把文件夹移动到它自己里面')
+    }
+  }
+
+  const target = join(targetDir, basename(source))
+  if (await stat(target).catch(() => null))
+    throw new EntryExistsError(toPosix(relative(workspaceRoot, target)))
+  await rename(source, target)
+  const moved = await stat(target)
+  return {
+    name: basename(target),
+    path: toPosix(relative(workspaceRoot, target)),
+    kind: moved.isDirectory() ? 'dir' : 'file',
+    size: moved.size,
+    mtime: moved.mtimeMs,
+  }
+}
+
+async function availableCopyPath(
+  dir: string,
+  original: string,
+  directory: boolean,
+): Promise<string> {
+  const ext = directory ? '' : extname(original)
+  const stem = directory ? original : original.slice(0, Math.max(0, original.length - ext.length))
+  for (let index = 1; index < 10_000; index++) {
+    const suffix = index === 1 ? ' copy' : ` copy ${index}`
+    const candidate = join(dir, `${stem}${suffix}${ext}`)
+    if (!(await stat(candidate).catch(() => null))) return candidate
+  }
+  throw new Error(`${original} 的副本名称已经用完`)
 }
 
 /**
@@ -374,11 +507,12 @@ export async function preview(workspaceRoot: string, relPath: string): Promise<P
     kind,
     mime,
     size: info.size,
+    mtime: info.mtimeMs,
     truncated: false,
     ...(language ? { language } : {}),
   }
 
-  if (kind === 'text' || kind === 'tabular') {
+  if (kind === 'text' || kind === 'markdown' || kind === 'tabular') {
     // 表格族里 csv/tsv 是文本，xlsx 不是——按实际能否解码决定走哪条路。
     const buf = await readFile(abs)
     const slice = buf.subarray(0, MAX_TEXT_BYTES)
@@ -387,6 +521,34 @@ export async function preview(workspaceRoot: string, relPath: string): Promise<P
       return { ...base, kind: 'binary', truncated: false, note: '二进制内容，无法以文本预览' }
     }
     return { ...base, content: text, truncated: buf.length > MAX_TEXT_BYTES }
+  }
+
+  if (kind === 'office') {
+    const ext = extname(relPath).toLowerCase()
+    if (!['.docx', '.pptx', '.xlsx'].includes(ext)) {
+      return {
+        ...base,
+        truncated: false,
+        note: '旧版 Office 二进制格式暂不支持内联预览，请另存为 docx、pptx 或 xlsx',
+      }
+    }
+    if (info.size > MAX_OFFICE_BYTES) {
+      return {
+        ...base,
+        truncated: true,
+        note: `文件 ${formatBytes(info.size)}，超出 Office 本地预览上限`,
+      }
+    }
+    const buf = await readFile(abs)
+    try {
+      return { ...base, content: await renderOffice(buf, ext) }
+    } catch (error) {
+      return {
+        ...base,
+        kind: 'binary',
+        note: `Office 文档解析失败：${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
   }
 
   if (kind === 'image' || kind === 'pdf' || kind === 'audio' || kind === 'video') {
@@ -402,6 +564,121 @@ export async function preview(workspaceRoot: string, relPath: string): Promise<P
   }
 
   return { ...base, note: kind === 'archive' ? '归档文件' : '二进制文件' }
+}
+
+async function renderOffice(bytes: Buffer, ext: string): Promise<string> {
+  const zip = await JSZip.loadAsync(bytes)
+  if (ext === '.docx') return renderDocx(zip)
+  if (ext === '.pptx') return renderPptx(zip)
+  return renderXlsx(zip)
+}
+
+async function renderDocx(zip: JSZip): Promise<string> {
+  const xml = await zip.file('word/document.xml')?.async('string')
+  if (!xml) throw new Error('缺少 word/document.xml')
+  const body = xml.match(/<w:body[\s\S]*?<\/w:body>/)?.[0] ?? xml
+  const blocks = body.match(/<w:(?:p|tbl)\b[\s\S]*?<\/w:(?:p|tbl)>/g) ?? []
+  const html = blocks
+    .map((block) => {
+      if (block.startsWith('<w:tbl')) {
+        const rows = block.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) ?? []
+        return `<table><tbody>${rows
+          .map((row) => {
+            const cells = row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) ?? []
+            return `<tr>${cells.map((cell) => `<td>${officeText(cell) || '&nbsp;'}</td>`).join('')}</tr>`
+          })
+          .join('')}</tbody></table>`
+      }
+      const text = officeText(block)
+      return text ? `<p>${text}</p>` : '<p>&nbsp;</p>'
+    })
+    .join('')
+  return `<article class="office-document">${html || '<p>文档没有可显示的正文</p>'}</article>`
+}
+
+async function renderPptx(zip: JSZip): Promise<string> {
+  const slides = Object.keys(zip.files)
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+    .sort(naturalPathSort)
+    .slice(0, 200)
+  const rendered = await Promise.all(
+    slides.map(async (name, index) => {
+      const xml = await zip.file(name)?.async('string')
+      const paragraphs = (xml?.match(/<a:p\b[\s\S]*?<\/a:p>/g) ?? [])
+        .map(officeText)
+        .filter(Boolean)
+      const title = paragraphs[0] ?? `幻灯片 ${index + 1}`
+      const rest = paragraphs.slice(1)
+      return `<section class="office-slide"><span class="office-slide-number">${index + 1}</span><h2>${title}</h2>${rest.map((line) => `<p>${line}</p>`).join('')}</section>`
+    }),
+  )
+  return `<article class="office-slides">${rendered.join('') || '<p>演示文稿没有可显示的幻灯片</p>'}</article>`
+}
+
+async function renderXlsx(zip: JSZip): Promise<string> {
+  const sharedXml = await zip.file('xl/sharedStrings.xml')?.async('string')
+  const shared = (sharedXml?.match(/<si\b[\s\S]*?<\/si>/g) ?? []).map(officeText)
+  const sheets = Object.keys(zip.files)
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort(naturalPathSort)
+    .slice(0, 20)
+  const rendered = await Promise.all(
+    sheets.map(async (name, sheetIndex) => {
+      const xml = await zip.file(name)?.async('string')
+      const rows = (xml?.match(/<row\b[\s\S]*?<\/row>/g) ?? []).slice(0, 500)
+      const table = rows
+        .map((row) => {
+          const cells = (row.match(/<c\b[\s\S]*?<\/c>/g) ?? []).slice(0, 80)
+          return `<tr>${cells
+            .map((cell) => {
+              const type = cell.match(/\bt="([^"]+)"/)?.[1]
+              const raw = cell.match(/<v[^>]*>([\s\S]*?)<\/v>/)?.[1] ?? ''
+              const inline = cell.match(/<is\b[\s\S]*?<\/is>/)?.[0]
+              const value =
+                type === 's'
+                  ? (shared[Number(raw)] ?? '')
+                  : type === 'inlineStr'
+                    ? officeText(inline ?? '')
+                    : escapeHtml(decodeXml(raw))
+              return `<td>${value || '&nbsp;'}</td>`
+            })
+            .join('')}</tr>`
+        })
+        .join('')
+      return `<section class="office-sheet"><h2>工作表 ${sheetIndex + 1}</h2><div class="office-sheet-scroll"><table><tbody>${table}</tbody></table></div></section>`
+    }),
+  )
+  return `<article class="office-workbook">${rendered.join('') || '<p>工作簿没有可显示的数据</p>'}</article>`
+}
+
+function officeText(xml: string): string {
+  return (xml.match(/<(?:w:t|a:t|t)(?:\s[^>]*)?>([\s\S]*?)<\/(?:w:t|a:t|t)>/g) ?? [])
+    .map((node) => node.replace(/^<[^>]+>|<\/[^>]+>$/g, ''))
+    .map(decodeXml)
+    .map(escapeHtml)
+    .join('')
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function naturalPathSort(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true })
 }
 
 /** 控制字符密度判定。比嗅探魔数通用——覆盖所有未登记的格式。 */

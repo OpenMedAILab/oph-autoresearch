@@ -202,6 +202,43 @@
   background: var(--danger);
 }
 
+.file-move-dialog {
+  width: min(430px, 100%);
+}
+.file-move-field {
+  display: grid;
+  gap: 6px;
+  margin-top: var(--s-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+.file-move-field input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  font-family: var(--font-code);
+  font-size: var(--fs-sm);
+}
+.file-move-field input:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.file-move-help,
+.file-move-error {
+  margin: 7px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.file-move-error {
+  color: var(--danger);
+}
+
 /* ── 新建 work ──
    比确认框宽一档：它有两个字段和一块可能很长的路径。 */
 .new-project {

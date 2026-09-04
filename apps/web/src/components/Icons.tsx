@@ -376,6 +376,29 @@ export const IconX = (p: IconProps) => (
   </Svg>
 )
 
+/** 文件阅读器工具：搜索与复制。 */
+export const IconSearch = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="10.6" cy="10.6" r="6.2" />
+    <path d="m15.3 15.3 4.3 4.3" />
+  </Svg>
+)
+
+export const IconCopy = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="8" y="8" width="11" height="11" rx="2" />
+    <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+  </Svg>
+)
+
+/** 保存文件。轮廓保持和编辑器工具栏里的搜索、复制同一笔画。 */
+export const IconSave = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 4h12l2 2v14H5z" />
+    <path d="M8 4v6h8V4M8 20v-6h8v6" />
+  </Svg>
+)
+
 export const IconShield = (p: IconProps) => (
   <Svg {...p}>
     <path d="M12 3.6 5.6 6v6c0 4 2.6 7.2 6.4 8.4 3.8-1.2 6.4-4.4 6.4-8.4V6z" />

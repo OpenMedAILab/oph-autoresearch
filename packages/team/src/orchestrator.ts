@@ -25,12 +25,15 @@ export interface OrchestratorDeps {
     role: Role
     prompt: string
     signal: AbortSignal
+    provider?: string
     model?: string
     existingConversationId?: ConversationId
     onConversation?: (conversationId: ConversationId) => void
   }): Promise<{ ok: boolean; output: string; error?: string; conversationId?: ConversationId }>
   emit(event: AgentEvent): void
   runId: RunId
+  /** 单次工作流的有效并发值；调用方已将期望值与项目硬上限取小。 */
+  maxConcurrent?: number
 }
 
 export interface OrchestratorReview {
@@ -133,8 +136,9 @@ export class TeamOrchestrator {
       }
     }
 
-    const maxConcurrent = this.config.rules?.maxConcurrent ?? 3
+    const maxConcurrent = this.deps.maxConcurrent ?? this.config.rules?.maxConcurrent ?? 3
     const running = new Map<string, Promise<void>>()
+    const announcedQueued = new Set<string>()
 
     while (true) {
       if (this.deps.signal.aborted && running.size === 0) {
@@ -164,8 +168,16 @@ export class TeamOrchestrator {
           (node.needs ?? []).every((id) => this.dependencyResolved(id, results, approvals)),
       )
 
+      let skippedThisPass = false
       for (const node of ready) {
-        if (running.size >= maxConcurrent) break
+        if (running.size >= maxConcurrent) {
+          if (!announcedQueued.has(node.id)) {
+            announcedQueued.add(node.id)
+            this.emitQueued(node)
+          }
+          continue
+        }
+        announcedQueued.delete(node.id)
         const upstreamFailed = (node.needs ?? []).some((id) => {
           const result = results.get(id)
           return result ? result.status !== 'done' : false
@@ -182,6 +194,7 @@ export class TeamOrchestrator {
           }
           results.set(node.id, skipped)
           receipts.push(skipped)
+          skippedThisPass = true
           continue
         }
 
@@ -206,6 +219,7 @@ export class TeamOrchestrator {
         await Promise.race(running.values())
         continue
       }
+      if (skippedThisPass) continue
 
       const unresolvedAgents = plan.filter(
         (node): node is WorkflowAgentNode => isAgent(node) && !results.has(node.id),
@@ -245,6 +259,17 @@ export class TeamOrchestrator {
     approvals: Map<string, string>,
   ): boolean {
     return results.has(id) || approvals.has(id)
+  }
+
+  private emitQueued(node: WorkflowAgentNode): void {
+    this.deps.emit({
+      type: 'team.member',
+      runId: this.deps.runId,
+      memberId: node.id,
+      roleName: this.labelOf(node.agent),
+      backend: node.agent.startsWith(CLI_PREFIX) ? 'custom' : 'builtin',
+      phase: 'queued',
+    })
   }
 
   private async execute(
@@ -348,6 +373,7 @@ export class TeamOrchestrator {
             role: role!,
             prompt,
             signal: this.deps.signal,
+            ...(node.provider ? { provider: node.provider } : {}),
             ...(node.model ? { model: node.model } : {}),
             ...(prior?.conversationId
               ? { existingConversationId: prior.conversationId as ConversationId }

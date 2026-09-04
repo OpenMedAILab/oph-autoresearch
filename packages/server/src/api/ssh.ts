@@ -2,13 +2,16 @@
 
 import { extname } from 'node:path'
 import {
-  connectSshCommand,
+  connectSshTarget,
   inspectSshDirectory,
   listSshFiles,
   loadSshProfiles,
+  loadSshRecentConnections,
   readSshBinary,
   readSshOfficeText,
   readSshText,
+  recordSshConnection,
+  type SshAuthMode,
   type SshConnectionAuth,
   type SshProfile,
   saveSshProfiles,
@@ -21,6 +24,7 @@ import { type ApiHandler, json } from './types.ts'
 interface LiveSshSession {
   profile: SshProfile
   home: string
+  authMode: SshAuthMode
   touchedAt: number
 }
 
@@ -121,14 +125,16 @@ export const handleSshApi: ApiHandler = async (url, req) => {
 
   if (path === '/api/ssh/connect' && req.method === 'POST') {
     const body = (await req.json().catch(() => null)) as {
-      command?: string
+      host?: string
+      username?: string
+      port?: number | string
       acceptNewHost?: boolean
       authMode?: 'system-key' | 'private-key' | 'password'
       password?: string
       privateKey?: string
       privateKeyPassphrase?: string
     } | null
-    if (!body?.command?.trim()) return json({ error: '请输入 SSH 命令' }, 400)
+    if (!body?.host?.trim()) return json({ error: '请输入 SSH 主机地址' }, 400)
     if (body.authMode && !['system-key', 'private-key', 'password'].includes(body.authMode)) {
       return json({ error: 'SSH 认证方式无效' }, 400)
     }
@@ -159,13 +165,23 @@ export const handleSshApi: ApiHandler = async (url, req) => {
       }
     }
     try {
-      const connected = await connectSshCommand(
-        body.command,
+      const connected = await connectSshTarget(
+        {
+          host: body.host,
+          ...(body.username?.trim() ? { username: body.username } : {}),
+          port: body.port ?? 22,
+        },
         body.acceptNewHost === false ? 'strict' : 'accept-new',
         auth,
       )
+      const authMode = body.authMode ?? 'system-key'
+      await recordSshConnection(connected.profile, {
+        authMode,
+        hostKeyPolicy: connected.profile.hostKeyPolicy,
+        home: connected.home,
+      })
       const sessionId = crypto.randomUUID()
-      liveSessions.set(sessionId, { ...connected, touchedAt: Date.now() })
+      liveSessions.set(sessionId, { ...connected, authMode, touchedAt: Date.now() })
       return json({
         sessionId,
         home: connected.home,
@@ -216,6 +232,12 @@ export const handleSshApi: ApiHandler = async (url, req) => {
     if (!body?.path?.trim()) return json({ error: '请选择远程文件夹' }, 400)
     try {
       const root = await inspectSshDirectory(session.profile, body.path)
+      await recordSshConnection(session.profile, {
+        authMode: session.authMode,
+        hostKeyPolicy: session.profile.hostKeyPolicy,
+        home: session.home,
+        lastPath: root,
+      })
       const profiles = await loadSshProfiles()
       const existing = profiles.find(
         (candidate) =>
@@ -241,7 +263,11 @@ export const handleSshApi: ApiHandler = async (url, req) => {
   }
 
   if (path === '/api/ssh/profiles' && req.method === 'GET') {
-    return json({ path: sshConfigPath(), profiles: await loadSshProfiles() })
+    const [profiles, recentConnections] = await Promise.all([
+      loadSshProfiles(),
+      loadSshRecentConnections(),
+    ])
+    return json({ path: sshConfigPath(), profiles, recentConnections })
   }
 
   if (path === '/api/ssh/profiles' && req.method === 'PUT') {

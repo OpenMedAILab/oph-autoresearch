@@ -9,13 +9,17 @@
 
 import { resolveInWorkspace } from '@oph-autoresearch/tools'
 import {
+  copyEntry,
   createEntry,
   deleteEntry,
   EntryExistsError,
+  FileChangedError,
   findByName,
   listTree,
+  moveEntry,
   preview,
   renameEntry,
+  writeTextEntry,
 } from '../files.ts'
 import { type ApiHandler, json } from './types.ts'
 
@@ -105,6 +109,83 @@ export const handleWorkspaceFsApi: ApiHandler = async (url, req, d) => {
     }
     await deleteEntry(d.workspaceRoot, rel)
     return json({ ok: true })
+  }
+
+  /** 保存内置编辑器里的文本；mtime 不一致时拒绝覆盖外部修改。 */
+  if (p === '/api/files/write' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as {
+      path?: string
+      content?: string
+      expectedMtime?: number
+    } | null
+    const rel = body?.path?.trim()
+    if (!rel || typeof body?.content !== 'string') {
+      return json({ error: 'invalid', message: '文件路径和文本内容都得给' }, 422)
+    }
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+      return json({
+        node: await writeTextEntry(d.workspaceRoot, rel, body.content, body.expectedMtime),
+      })
+    } catch (err) {
+      if (err instanceof FileChangedError) {
+        return json({ error: 'changed', message: err.message }, 409)
+      }
+      if (err instanceof RangeError) return json({ error: 'too_large', message: err.message }, 413)
+      throw err
+    }
+  }
+
+  /** 复制到同层或指定目录；服务端生成不冲突的副本名，绝不覆盖。 */
+  if (p === '/api/files/copy' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as {
+      path?: string
+      destination?: string
+    } | null
+    const rel = body?.path?.trim()
+    const destination = body?.destination?.trim()
+    if (!rel) return json({ error: 'invalid', message: '要复制的路径得给' }, 422)
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+      if (destination !== undefined) {
+        await resolveInWorkspace(d.workspaceRoot, destination || '.', { mustExist: true })
+      }
+      return json({ node: await copyEntry(d.workspaceRoot, rel, destination || undefined) })
+    } catch (err) {
+      if (err instanceof EntryExistsError) {
+        return json({ error: 'exists', message: err.message }, 409)
+      }
+      return json(
+        { error: 'invalid', message: err instanceof Error ? err.message : String(err) },
+        422,
+      )
+    }
+  }
+
+  /** 移动只收目标文件夹；源名称保持不变，目标存在时不覆盖。 */
+  if (p === '/api/files/move' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as {
+      path?: string
+      destination?: string
+    } | null
+    const rel = body?.path?.trim()
+    const destination = body?.destination?.trim()
+    if (!rel || destination === undefined) {
+      return json({ error: 'invalid', message: '源路径和目标文件夹都得给' }, 422)
+    }
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+      await resolveInWorkspace(d.workspaceRoot, destination || '.', { mustExist: true })
+      return json({ node: await moveEntry(d.workspaceRoot, rel, destination || '.') })
+    } catch (err) {
+      if (err instanceof EntryExistsError) {
+        return json({ error: 'exists', message: err.message }, 409)
+      }
+      return json(
+        { error: 'invalid', message: err instanceof Error ? err.message : String(err) },
+        422,
+      )
+    }
   }
 
   if (p === '/api/files/preview') {

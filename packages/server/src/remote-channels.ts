@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { globalScopeRoot } from '@oph-autoresearch/tools'
 
-export type RemoteChannelKind = 'dingtalk' | 'feishu' | 'wecom' | 'qq'
+export type RemoteChannelKind = 'feishu' | 'wecom' | 'qq'
 export type RemoteControlLevel = 'chat' | 'review' | 'control'
 
 export interface RemoteChannelConfig {
@@ -20,28 +20,22 @@ export interface RemoteChannelConfig {
 
 export const REMOTE_CHANNEL_CATALOG = [
   {
-    kind: 'dingtalk',
-    name: '钉钉机器人',
-    transport: 'Stream 长连接',
-    credentialHint: 'Client ID + Client Secret',
-  },
-  {
     kind: 'feishu',
     name: '飞书机器人',
     transport: 'WebSocket 长连接',
-    credentialHint: 'App ID + App Secret',
+    credentialHint: 'App ID',
   },
   {
     kind: 'wecom',
     name: '微信（企业微信）',
     transport: 'AI Bot WebSocket',
-    credentialHint: 'Bot ID + Secret',
+    credentialHint: 'Bot ID',
   },
   {
     kind: 'qq',
     name: 'QQ 机器人',
     transport: 'QQ 开放平台 WebSocket',
-    credentialHint: 'App ID + Client Secret',
+    credentialHint: 'App ID',
   },
 ] as const
 

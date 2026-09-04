@@ -50,13 +50,6 @@
 .transcript-inner.with-stack {
   padding-bottom: var(--composer-stack-gap);
 }
-/* 整轮状态条不占流，它**悬浮在这段留白里**，所以留白要按「缝 + 它 + 缝」给，
-   上下两道缝才一样宽。给成上面那一档的话它压在正文上（实测 -27px）。
-   这条排在 .with-stack 之后：两个类同时挂着时以这一档为准。 */
-.transcript-inner.with-run-status {
-  padding-bottom: calc(var(--run-status-h) + var(--composer-stack-gap) * 2);
-}
-
 /* 历史分页的唯一入口。放在流顶端，补页后仍留在最上面；不悬浮、不遮正文。 */
 .history-boundary {
   display: flex;
@@ -806,11 +799,51 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.run-block {
+  width: 100%;
+  min-width: 0;
+}
 /* 末尾那条不带自己的下外边距：底部留白由 `.transcript-inner` 统一给，
    而那段留白是按「缝 + 整轮状态条 + 缝」算的。这 2px 叠上去，状态条上面
    那道缝就比下面宽 2px。 */
-.transcript-inner > .run-strip:last-child {
+.transcript-inner > .run-block:last-child .run-strip {
   margin-bottom: 0;
+}
+
+/* Todo Chain 是运行读数的一部分：摘要留在耗时/Token 同一行，详情原地向下展开。
+   左缩进与星河条 + 间距一致，展开后清单从读数文字的起点开始，不另造一张大卡。 */
+.run-todos-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  margin: -4px 0;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.run-todos-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.run-todos-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.run-todos-panel {
+  max-width: 520px;
+  margin: 6px 0 4px 63px;
+  padding: var(--s-2) var(--s-3);
+  border-left: 2px solid var(--border-default);
+  background: var(--bg-hover);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
 }
 
 /*

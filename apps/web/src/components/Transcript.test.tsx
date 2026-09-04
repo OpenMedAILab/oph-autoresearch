@@ -351,6 +351,81 @@ describe('定稿的正文不跟着会话流的增长重建', () => {
     dispose()
   })
 
+  test('Todo Chain 在本轮读数条中显示摘要，并可原地展开和收起', async () => {
+    const store = await import('../lib/store/index.ts')
+    store.setState({
+      activeConversation: CV,
+      busyConversations: [],
+      // 故意放一份不同的当前清单：历史读数必须取自己结束前的最后一次提交。
+      todos: [{ id: 'current', content: '别的轮次', status: 'pending' }],
+      views: {
+        [CV]: {
+          history: { loading: null, nextCursor: null, error: null },
+          runStartedAt: null,
+          error: null,
+          todos: [],
+          transcript: [
+            { id: 'u-todos', kind: 'user', text: '开始' },
+            {
+              id: 'todo-step',
+              kind: 'tool',
+              text: '',
+              toolName: 'write_todos',
+              action: { kind: 'edit', objectLabel: '待办' },
+              args: {
+                todos: [
+                  { id: 't1', content: '整理数据', status: 'completed' },
+                  { id: 't2', content: '训练模型', status: 'in_progress' },
+                  { id: 't3', content: '复核结果', status: 'pending' },
+                ],
+              },
+              status: 'success',
+            },
+            {
+              id: 'run-run_todos',
+              kind: 'run',
+              text: '',
+              run: {
+                runId: 'run_todos',
+                stopReason: 'completed',
+                usage: null,
+                startedAt: 1_000,
+                endedAt: 2_000,
+                errorMessage: null,
+              },
+            },
+          ],
+        },
+      },
+    } as never)
+
+    const { render } = await import('solid-js/web')
+    const { Transcript } = await import('./Transcript.tsx')
+    const host = document.createElement('div')
+    const dispose = render(() => <Transcript />, host as unknown as HTMLElement)
+
+    const toggle = host.querySelector<HTMLButtonElement>('.run-todos-toggle')
+    expect(toggle).not.toBeNull()
+    expect(toggle?.textContent).toContain('Todo Chain 1/3')
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(host.querySelector('.run-todos-panel')).toBeNull()
+
+    toggle?.click()
+    await Promise.resolve()
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(host.querySelector('.run-todos-panel')?.textContent).toContain('整理数据')
+    expect(host.querySelector('.run-todos-panel')?.textContent).toContain('训练模型')
+    expect(host.querySelector('.run-todos-panel')?.textContent).toContain('复核结果')
+    expect(host.querySelector('.run-todos-panel')?.textContent).not.toContain('别的轮次')
+
+    toggle?.click()
+    await Promise.resolve()
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(host.querySelector('.run-todos-panel')).toBeNull()
+
+    dispose()
+  })
+
   test('历史加载、失败重试和更早页入口都有可见反馈', async () => {
     const store = await import('../lib/store/index.ts')
     store.setState({

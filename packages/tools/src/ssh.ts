@@ -40,6 +40,26 @@ export interface SshCommandTarget {
   port: number
 }
 
+export type SshTargetInput = {
+  host: string
+  username?: string
+  port?: number | string
+}
+
+export type SshAuthMode = 'system-key' | 'private-key' | 'password'
+
+/**
+ * 最近成功连接过的主机。这里只保存重新连接所需的非敏感元数据；密码、私钥和口令
+ * 永远不会进入磁盘。`lastPath` 是用户最近确认为数据工作区的目录。
+ */
+export interface SshRecentConnection extends SshCommandTarget {
+  authMode: SshAuthMode
+  hostKeyPolicy: SshProfile['hostKeyPolicy']
+  home: string
+  lastPath?: string
+  lastConnectedAt: number
+}
+
 export type SshConnectionAuth =
   | { mode: 'password'; password: string }
   | { mode: 'private-key'; privateKey: string; passphrase?: string }
@@ -50,7 +70,13 @@ const USER = /^[a-z0-9._-]+$/i
 const MAX_TEXT_BYTES = 2 * 1024 * 1024
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i
+const MAX_RECENT_CONNECTIONS = 12
 const sessionCredentials = new Map<string, SshConnectionAuth>()
+
+interface SshConfigDocument {
+  profiles: SshProfile[]
+  recentConnections: SshRecentConnection[]
+}
 
 type SshExecResult = {
   stdout: string
@@ -129,6 +155,44 @@ export function parseSshCommand(command: string): SshCommandTarget {
   return { host, ...(username ? { username } : {}), port }
 }
 
+/**
+ * 校验来自表单/API 的独立连接字段。UI 不再拼接或提交整条 SSH 命令；后端只把
+ * 这三个经过白名单校验的值放进 OpenSSH 参数数组。
+ */
+export function normalizeSshTarget(input: SshTargetInput): SshCommandTarget {
+  const host = String(input.host ?? '').trim()
+  const username = String(input.username ?? '').trim()
+  const port = Number(input.port ?? 22)
+  if (!host) throw new Error('请输入 SSH 主机地址')
+  if (!validHost(host)) {
+    if (
+      /^\d+(?:\.\d+){3}$/.test(host) &&
+      host.split('.').some((part) => Number(part) < 0 || Number(part) > 255)
+    ) {
+      throw new Error('IPv4 地址无效：每一段都必须在 0 到 255 之间')
+    }
+    throw new Error('SSH 主机地址无效')
+  }
+  if (username && !USER.test(username)) throw new Error('SSH 用户名无效')
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SSH 端口无效')
+  return { host, ...(username ? { username } : {}), port }
+}
+
+export function sshTargetProfile(
+  target: SshTargetInput,
+  hostKeyPolicy: SshProfile['hostKeyPolicy'] = 'accept-new',
+): SshProfile {
+  const normalized = normalizeSshTarget(target)
+  return {
+    id: 'remote-session',
+    name: normalized.host,
+    ...normalized,
+    root: '/',
+    readOnly: true,
+    hostKeyPolicy,
+  }
+}
+
 export function sshCommandProfile(
   command: string,
   hostKeyPolicy: SshProfile['hostKeyPolicy'] = 'accept-new',
@@ -148,12 +212,36 @@ export function sshConfigPath(): string {
   return join(globalScopeRoot(), 'ssh.json')
 }
 
-export async function loadSshProfiles(): Promise<SshProfile[]> {
+async function loadSshConfigDocument(): Promise<SshConfigDocument> {
   const parsed = await readFile(sshConfigPath(), 'utf8')
-    .then((raw) => JSON.parse(raw) as { profiles?: unknown })
-    .catch(() => ({ profiles: [] }))
-  if (!Array.isArray(parsed.profiles)) return []
-  return parsed.profiles.map(normalizeProfile).filter((p): p is SshProfile => p !== null)
+    .then((raw) => JSON.parse(raw) as { profiles?: unknown; recentConnections?: unknown })
+    .catch(() => ({ profiles: [], recentConnections: [] }))
+  return {
+    profiles: Array.isArray(parsed.profiles)
+      ? parsed.profiles.map(normalizeProfile).filter((p): p is SshProfile => p !== null)
+      : [],
+    recentConnections: Array.isArray(parsed.recentConnections)
+      ? parsed.recentConnections
+          .map(normalizeRecentConnection)
+          .filter((p): p is SshRecentConnection => p !== null)
+          .sort((a, b) => b.lastConnectedAt - a.lastConnectedAt)
+          .slice(0, MAX_RECENT_CONNECTIONS)
+      : [],
+  }
+}
+
+async function saveSshConfigDocument(document: SshConfigDocument): Promise<void> {
+  const file = sshConfigPath()
+  await mkdir(dirname(file), { recursive: true })
+  await writeFile(file, `${JSON.stringify(document, null, 2)}\n`, 'utf8')
+}
+
+export async function loadSshProfiles(): Promise<SshProfile[]> {
+  return (await loadSshConfigDocument()).profiles
+}
+
+export async function loadSshRecentConnections(): Promise<SshRecentConnection[]> {
+  return (await loadSshConfigDocument()).recentConnections
 }
 
 export async function saveSshProfiles(input: unknown): Promise<SshProfile[]> {
@@ -168,10 +256,58 @@ export async function saveSshProfiles(input: unknown): Promise<SshProfile[]> {
     if (ids.has(p.id)) throw new Error(`SSH 标识重复：${p.id}`)
     ids.add(p.id)
   }
-  const file = sshConfigPath()
-  await mkdir(dirname(file), { recursive: true })
-  await writeFile(file, `${JSON.stringify({ profiles }, null, 2)}\n`, 'utf8')
+  const current = await loadSshConfigDocument()
+  await saveSshConfigDocument({ ...current, profiles })
   return profiles
+}
+
+/** 记录一次成功连接；同一用户、主机和端口只保留最新一条。 */
+export async function recordSshConnection(
+  target: SshCommandTarget,
+  options: {
+    authMode: SshAuthMode
+    hostKeyPolicy: SshProfile['hostKeyPolicy']
+    home: string
+    lastPath?: string
+    connectedAt?: number
+  },
+): Promise<SshRecentConnection[]> {
+  const home = normalizeRoot(options.home)
+  const lastPath = options.lastPath ? normalizeRoot(options.lastPath) : undefined
+  if (!validHost(target.host) || (target.username && !USER.test(target.username))) {
+    throw new Error('SSH 用户名或主机无效')
+  }
+  if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535 || !home) {
+    throw new Error('SSH 最近连接记录无效')
+  }
+  const recent: SshRecentConnection = {
+    host: target.host,
+    ...(target.username ? { username: target.username } : {}),
+    port: target.port,
+    authMode: options.authMode,
+    hostKeyPolicy: options.hostKeyPolicy,
+    home,
+    ...(lastPath ? { lastPath } : {}),
+    lastConnectedAt: options.connectedAt ?? Date.now(),
+  }
+  const current = await loadSshConfigDocument()
+  const sameTarget = (candidate: SshRecentConnection) =>
+    candidate.host.toLowerCase() === recent.host.toLowerCase() &&
+    candidate.username === recent.username &&
+    candidate.port === recent.port
+  const previous = current.recentConnections.find(sameTarget)
+  const merged = {
+    ...recent,
+    ...(recent.lastPath ? {} : previous?.lastPath ? { lastPath: previous.lastPath } : {}),
+  }
+  const recentConnections = [
+    merged,
+    ...current.recentConnections.filter((item) => !sameTarget(item)),
+  ]
+    .sort((a, b) => b.lastConnectedAt - a.lastConnectedAt)
+    .slice(0, MAX_RECENT_CONNECTIONS)
+  await saveSshConfigDocument({ ...current, recentConnections })
+  return recentConnections
 }
 
 function normalizeProfile(raw: unknown): SshProfile | null {
@@ -184,7 +320,7 @@ function normalizeProfile(raw: unknown): SshProfile | null {
   const port = Number(p.port ?? 22)
   const root = normalizeRoot(typeof p.root === 'string' ? p.root : '/')
   const hostKeyPolicy = p.hostKeyPolicy === 'accept-new' ? 'accept-new' : 'strict'
-  if (!PROFILE_ID.test(id) || !HOST.test(host) || (username && !USER.test(username))) return null
+  if (!PROFILE_ID.test(id) || !validHost(host) || (username && !USER.test(username))) return null
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !root) return null
   return {
     id,
@@ -196,6 +332,53 @@ function normalizeProfile(raw: unknown): SshProfile | null {
     readOnly: p.readOnly !== false,
     hostKeyPolicy,
   }
+}
+
+function normalizeRecentConnection(raw: unknown): SshRecentConnection | null {
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  const host = typeof value.host === 'string' ? value.host.trim() : ''
+  const username = typeof value.username === 'string' ? value.username.trim() : ''
+  const port = Number(value.port ?? 22)
+  const home = normalizeRoot(typeof value.home === 'string' ? value.home : '/')
+  const lastPath =
+    typeof value.lastPath === 'string' && value.lastPath.trim()
+      ? normalizeRoot(value.lastPath)
+      : undefined
+  const authMode = value.authMode
+  const lastConnectedAt = Number(value.lastConnectedAt)
+  if (
+    !validHost(host) ||
+    (username && !USER.test(username)) ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
+    !home ||
+    (value.lastPath && !lastPath) ||
+    !['system-key', 'private-key', 'password'].includes(String(authMode)) ||
+    !Number.isFinite(lastConnectedAt) ||
+    lastConnectedAt <= 0
+  ) {
+    return null
+  }
+  return {
+    host,
+    ...(username ? { username } : {}),
+    port,
+    authMode: authMode as SshAuthMode,
+    hostKeyPolicy: value.hostKeyPolicy === 'strict' ? 'strict' : 'accept-new',
+    home,
+    ...(lastPath ? { lastPath } : {}),
+    lastConnectedAt,
+  }
+}
+
+function validHost(host: string): boolean {
+  if (!HOST.test(host)) return false
+  return !(
+    /^\d+(?:\.\d+){3}$/.test(host) &&
+    host.split('.').some((part) => Number(part) < 0 || Number(part) > 255)
+  )
 }
 
 function normalizeRoot(value: string): string | null {
@@ -365,7 +548,16 @@ export async function connectSshCommand(
   hostKeyPolicy: SshProfile['hostKeyPolicy'] = 'accept-new',
   auth?: SshConnectionAuth,
 ): Promise<{ profile: SshProfile; home: string; message: string }> {
-  const profile = sshCommandProfile(command, hostKeyPolicy)
+  return connectSshTarget(parseSshCommand(command), hostKeyPolicy, auth)
+}
+
+/** 由独立用户名、主机和端口建立连接；OpenSSH 命令参数只在后端组装。 */
+export async function connectSshTarget(
+  targetInput: SshTargetInput,
+  hostKeyPolicy: SshProfile['hostKeyPolicy'] = 'accept-new',
+  auth?: SshConnectionAuth,
+): Promise<{ profile: SshProfile; home: string; message: string }> {
+  const profile = sshTargetProfile(targetInput, hostKeyPolicy)
   const result = await sshExec(profile, `printf '__OPH_SSH_OK__\\n'; printf '%s' "$HOME"`, {
     timeoutMs: 20_000,
     ...(auth ? { auth } : {}),
@@ -482,8 +674,18 @@ function sshError(result: SshExecResult): string {
   }
   if (/Connection refused/i.test(result.stderr))
     return 'SSH 连接被拒绝：请检查端口和服务器 SSH 服务。'
+  if (
+    /Could not resolve hostname|Name or service not known|Temporary failure in name resolution/i.test(
+      result.stderr,
+    )
+  )
+    return '无法解析 SSH 主机：请检查主机名或 IP 地址；IPv4 的每一段必须在 0 到 255 之间。'
   if (/No route to host|Network is unreachable/i.test(result.stderr))
     return '无法到达 SSH 主机：请检查地址、网络和防火墙。'
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(result.stderr))
+    return 'SSH 主机密钥校验失败：服务器密钥可能已变化，请先在系统 known_hosts 中核实并更新。'
+  if (/Connection reset|Connection closed/i.test(result.stderr))
+    return 'SSH 连接被服务器中断：请检查 SSH 服务、登录策略和安全组规则。'
   const tail = result.stderr
     .trim()
     .split('\n')

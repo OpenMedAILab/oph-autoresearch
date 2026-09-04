@@ -5,6 +5,7 @@ import { CodeView } from './FileView.tsx'
 import {
   IconCheck,
   IconChevron,
+  IconClock,
   IconFile,
   IconFolder,
   IconRefresh,
@@ -29,6 +30,28 @@ interface LiveSession {
   target: { host: string; username?: string; port: number }
 }
 
+interface SshRecentConnectionRow {
+  host: string
+  username?: string
+  port: number
+  authMode: 'system-key' | 'private-key' | 'password'
+  hostKeyPolicy: 'strict' | 'accept-new'
+  home: string
+  lastPath?: string
+  lastConnectedAt: number
+}
+
+interface SshProfilesPayload {
+  profiles: SshProfileRow[]
+  recentConnections: SshRecentConnectionRow[]
+}
+
+interface SshTargetDraft {
+  host: string
+  username?: string
+  port: number | string
+}
+
 interface RemotePreviewResult {
   path: string
   kind: 'text' | 'markdown' | 'office' | 'image' | 'pdf' | 'audio' | 'video' | 'binary'
@@ -43,9 +66,11 @@ interface RemotePreviewResult {
 
 export default function RemoteSshBrowser() {
   const [profiles, { refetch: refetchProfiles }] = createResource(() =>
-    client.api<{ profiles: SshProfileRow[] }>('/api/ssh/profiles'),
+    client.api<SshProfilesPayload>('/api/ssh/profiles'),
   )
-  const [command, setCommand] = createSignal('ssh ')
+  const [username, setUsername] = createSignal('')
+  const [host, setHost] = createSignal('')
+  const [port, setPort] = createSignal('22')
   const [authMode, setAuthMode] = createSignal<'system-key' | 'private-key' | 'password'>(
     'system-key',
   )
@@ -57,20 +82,26 @@ export default function RemoteSshBrowser() {
   const [acceptNewHost, setAcceptNewHost] = createSignal(true)
   const [session, setSession] = createSignal<LiveSession | null>(null)
   const [path, setPath] = createSignal('')
+  const [pathDraft, setPathDraft] = createSignal('')
   const [selected, setSelected] = createSignal<RemoteEntry | null>(null)
   const [connecting, setConnecting] = createSignal(false)
   const [opening, setOpening] = createSignal(false)
   const [notice, setNotice] = createSignal<{ text: string; bad?: boolean } | null>(null)
   const [openedWorkspace, setOpenedWorkspace] = createSignal<SshProfileRow | null>(null)
 
-  const connect = async (sshCommand = command(), startPath?: string) => {
+  const connect = async (
+    target: SshTargetDraft = { username: username(), host: host(), port: port() },
+    startPath?: string,
+  ) => {
     setConnecting(true)
     setNotice({ text: '正在建立 SSH 连接…' })
     try {
       const result = await client.api<LiveSession>('/api/ssh/connect', {
         method: 'POST',
         body: JSON.stringify({
-          command: sshCommand,
+          username: target.username?.trim() || undefined,
+          host: target.host.trim(),
+          port: Number(target.port),
           acceptNewHost: acceptNewHost(),
           authMode: authMode(),
           ...(authMode() === 'password'
@@ -89,12 +120,17 @@ export default function RemoteSshBrowser() {
       setPrivateKeyFile('')
       setPrivateKeyError('')
       setAuthMode('system-key')
-      setCommand(sshCommand)
+      setUsername(result.target.username ?? '')
+      setHost(result.target.host)
+      setPort(String(result.target.port))
       setSession(result)
-      setPath(startPath || result.home)
+      const initialPath = startPath || result.home
+      setPath(initialPath)
+      setPathDraft(initialPath)
       setSelected(null)
       setOpenedWorkspace(null)
       setNotice({ text: result.message })
+      await refetchProfiles()
     } catch (error) {
       const text = explainApiError(error, 'SSH 连接失败')
       setNotice({ text, bad: true })
@@ -106,6 +142,7 @@ export default function RemoteSshBrowser() {
   const disconnect = () => {
     setSession(null)
     setPath('')
+    setPathDraft('')
     setSelected(null)
     setOpenedWorkspace(null)
     setNotice(null)
@@ -154,6 +191,7 @@ export default function RemoteSshBrowser() {
   const go = (entry: RemoteEntry) => {
     if (entry.kind === 'dir') {
       setPath(entry.path)
+      setPathDraft(entry.path)
       setSelected(null)
     } else setSelected(entry)
   }
@@ -164,7 +202,38 @@ export default function RemoteSshBrowser() {
         .replace(/\/$/, '')
         .replace(/\/[^/]+$/, '') || '/'
     setPath(parent)
+    setPathDraft(parent)
     setSelected(null)
+  }
+
+  const navigateToDraft = () => {
+    const next = pathDraft().trim()
+    if (!next) {
+      setNotice({ text: '请输入远程数据目录，例如 /data/oph', bad: true })
+      return
+    }
+    setPath(next)
+    setSelected(null)
+    setNotice(null)
+  }
+
+  const useRecent = (recent: SshRecentConnectionRow) => {
+    setUsername(recent.username ?? '')
+    setHost(recent.host)
+    setPort(String(recent.port))
+    setAcceptNewHost(recent.hostKeyPolicy === 'accept-new')
+    setAuthMode(recent.authMode)
+    const startPath = recent.lastPath || recent.home
+    if (recent.authMode === 'system-key') {
+      void connect(recent, startPath)
+      return
+    }
+    setNotice({
+      text:
+        recent.authMode === 'password'
+          ? '已载入连接记录。为保护凭证，请重新输入密码后连接。'
+          : '已载入连接记录。为保护凭证，请重新选择或粘贴私钥后连接。',
+    })
   }
 
   return (
@@ -172,8 +241,8 @@ export default function RemoteSshBrowser() {
       <header class="workspace-view-head remote-workbench-head">
         <div>
           <span class="eyebrow">REMOTE SSH</span>
-          <h2>远程资源管理器</h2>
-          <p>使用系统 SSH 命令连接；只读浏览和内存预览，不提供文件传输。</p>
+          <h2>远程数据工作区</h2>
+          <p>连接服务器，选择数据目录，再将该目录开放给科研 Agent。</p>
         </div>
         <Show when={session()}>
           <button class="btn-ghost" type="button" onClick={disconnect}>
@@ -187,8 +256,13 @@ export default function RemoteSshBrowser() {
         fallback={
           <ConnectionStart
             profiles={profiles()?.profiles ?? []}
-            command={command()}
-            setCommand={setCommand}
+            recentConnections={profiles()?.recentConnections ?? []}
+            username={username()}
+            setUsername={setUsername}
+            host={host()}
+            setHost={setHost}
+            port={port()}
+            setPort={setPort}
             authMode={authMode()}
             setAuthMode={setAuthMode}
             password={password()}
@@ -205,6 +279,7 @@ export default function RemoteSshBrowser() {
             setAcceptNewHost={setAcceptNewHost}
             connecting={connecting()}
             connect={connect}
+            useRecent={useRecent}
             openSettings={() => openSettings('ssh')}
             notice={notice()}
           />
@@ -230,6 +305,42 @@ export default function RemoteSshBrowser() {
               </Show>
             </div>
 
+            <form
+              class="remote-directory-bar"
+              onSubmit={(event) => {
+                event.preventDefault()
+                navigateToDraft()
+              }}
+            >
+              <span class="remote-step">2</span>
+              <label for="remote-data-directory">选择数据目录</label>
+              <div class="remote-directory-input">
+                <IconFolder size={14} />
+                <input
+                  id="remote-data-directory"
+                  aria-describedby="remote-directory-help"
+                  spellcheck={false}
+                  value={pathDraft()}
+                  placeholder="/data/oph"
+                  onInput={(event) => setPathDraft(event.currentTarget.value)}
+                />
+              </div>
+              <button class="btn-ghost sm" type="submit" disabled={!pathDraft().trim()}>
+                转到
+              </button>
+              <button
+                class="btn-primary sm"
+                type="button"
+                disabled={opening() || listing.loading || Boolean(listing.error)}
+                onClick={() => void openFolder()}
+              >
+                <IconFolder size={13} /> {opening() ? '正在设置…' : '设为 Agent 工作区'}
+              </button>
+              <span id="remote-directory-help">
+                可直接输入路径，也可在下方逐级进入文件夹；当前目录为 {path()}。
+              </span>
+            </form>
+
             <div class="remote-explorer">
               <aside class="remote-explorer-sidebar">
                 <div class="remote-explorer-title">
@@ -248,6 +359,7 @@ export default function RemoteSshBrowser() {
                     type="button"
                     onClick={() => {
                       setPath('/')
+                      setPathDraft('/')
                       setSelected(null)
                     }}
                   >
@@ -261,6 +373,13 @@ export default function RemoteSshBrowser() {
                           type="button"
                           onClick={() => {
                             setPath(
+                              `/${path()
+                                .split('/')
+                                .filter(Boolean)
+                                .slice(0, index() + 1)
+                                .join('/')}`,
+                            )
+                            setPathDraft(
                               `/${path()
                                 .split('/')
                                 .filter(Boolean)
@@ -315,16 +434,6 @@ export default function RemoteSshBrowser() {
                     </Show>
                   </div>
                 </Show>
-                <div class="remote-open-folder">
-                  <button
-                    class="btn-primary"
-                    type="button"
-                    disabled={opening() || listing.loading}
-                    onClick={() => void openFolder()}
-                  >
-                    <IconFolder size={13} /> {opening() ? '正在打开…' : '打开此文件夹作为工作区'}
-                  </button>
-                </div>
               </aside>
 
               <main class="remote-preview">
@@ -333,8 +442,14 @@ export default function RemoteSshBrowser() {
                   fallback={
                     <div class="remote-preview-empty">
                       <IconFile size={28} />
-                      <strong>选择文件进行只读预览</strong>
-                      <span>支持 PDF、Markdown、Office、代码与常见图片</span>
+                      <strong>
+                        {openedWorkspace() ? '选择文件进行只读预览' : '先选择数据目录'}
+                      </strong>
+                      <span>
+                        {openedWorkspace()
+                          ? '支持 PDF、Markdown、Office、代码与常见图片'
+                          : '在左侧进入目录后，点击上方“设为 Agent 工作区”'}
+                      </span>
                     </div>
                   }
                 >
@@ -357,7 +472,11 @@ export default function RemoteSshBrowser() {
             </div>
             <Show when={notice()}>
               {(message) => (
-                <p class="remote-notice" classList={{ bad: message().bad }}>
+                <p
+                  class="remote-notice remote-session-notice"
+                  classList={{ bad: message().bad }}
+                  role={message().bad ? 'alert' : 'status'}
+                >
                   {message().text}
                 </p>
               )}
@@ -371,8 +490,13 @@ export default function RemoteSshBrowser() {
 
 function ConnectionStart(props: {
   profiles: SshProfileRow[]
-  command: string
-  setCommand(value: string): void
+  recentConnections: SshRecentConnectionRow[]
+  username: string
+  setUsername(value: string): void
+  host: string
+  setHost(value: string): void
+  port: string
+  setPort(value: string): void
   authMode: 'system-key' | 'private-key' | 'password'
   setAuthMode(value: 'system-key' | 'private-key' | 'password'): void
   password: string
@@ -388,43 +512,85 @@ function ConnectionStart(props: {
   acceptNewHost: boolean
   setAcceptNewHost(value: boolean): void
   connecting: boolean
-  connect(command?: string, startPath?: string): Promise<void>
+  connect(target?: SshTargetDraft, startPath?: string): Promise<void>
+  useRecent(recent: SshRecentConnectionRow): void
   openSettings(): void
   notice: { text: string; bad?: boolean } | null
 }) {
-  const savedCommand = (profile: SshProfileRow) =>
-    `ssh ${profile.username ? `${profile.username}@` : ''}${profile.host}${profile.port === 22 ? '' : ` -p ${profile.port}`}`
   return (
     <div class="remote-connect-start">
       <div class="remote-command-card">
         <div class="remote-command-title">
-          <IconTerminal size={17} />
+          <span class="remote-step">1</span>
           <div>
             <strong>连接到主机</strong>
-            <span>高级选项请写入系统 ~/.ssh/config</span>
+            <span>填写连接信息，后端将安全组装 OpenSSH 参数</span>
           </div>
         </div>
         <form
+          class="remote-target-form"
           onSubmit={(event) => {
             event.preventDefault()
             void props.connect()
           }}
         >
-          <div class="remote-command-input">
-            <span>&gt;</span>
-            <input
-              aria-label="SSH 命令"
-              spellcheck={false}
-              value={props.command}
-              placeholder="ssh researcher@gpu-lab -p 22"
-              onInput={(event) => props.setCommand(event.currentTarget.value)}
-            />
+          <div class="remote-target-grid">
+            <label class="remote-target-field" for="remote-ssh-username">
+              <span>用户名</span>
+              <input
+                id="remote-ssh-username"
+                aria-describedby={props.notice?.bad ? 'remote-connect-error' : undefined}
+                autocomplete="username"
+                spellcheck={false}
+                value={props.username}
+                placeholder="root"
+                onInput={(event) => props.setUsername(event.currentTarget.value)}
+              />
+            </label>
+            <label class="remote-target-field remote-target-host" for="remote-ssh-host">
+              <span>主机地址</span>
+              <input
+                id="remote-ssh-host"
+                aria-describedby={props.notice?.bad ? 'remote-connect-error' : undefined}
+                autocomplete="url"
+                spellcheck={false}
+                value={props.host}
+                placeholder="49.233.190.200"
+                onInput={(event) => props.setHost(event.currentTarget.value)}
+              />
+            </label>
+            <label class="remote-target-field remote-target-port" for="remote-ssh-port">
+              <span>端口</span>
+              <input
+                id="remote-ssh-port"
+                aria-describedby={props.notice?.bad ? 'remote-connect-error' : undefined}
+                type="number"
+                inputmode="numeric"
+                min="1"
+                max="65535"
+                value={props.port}
+                onInput={(event) => props.setPort(event.currentTarget.value)}
+              />
+            </label>
+          </div>
+          <div class="remote-target-actions">
+            <div class="remote-command-preview" aria-live="polite">
+              <span>将执行</span>
+              <code>
+                {commandFor({
+                  ...(props.username.trim() ? { username: props.username.trim() } : {}),
+                  host: props.host.trim() || '主机地址',
+                  port: validPort(props.port) ? Number(props.port) : 22,
+                })}
+              </code>
+            </div>
             <button
-              class="btn-primary"
+              class="btn-primary remote-connect-button"
               type="submit"
               disabled={
                 props.connecting ||
-                !props.command.trim() ||
+                !props.host.trim() ||
+                !validPort(props.port) ||
                 (props.authMode === 'password' && !props.password) ||
                 (props.authMode === 'private-key' && !props.privateKey)
               }
@@ -525,40 +691,98 @@ function ConnectionStart(props: {
         </label>
         <Show when={props.notice}>
           {(message) => (
-            <p class="remote-notice" classList={{ bad: message().bad }}>
+            <p
+              id={message().bad ? 'remote-connect-error' : undefined}
+              class="remote-notice"
+              classList={{ bad: message().bad }}
+              role={message().bad ? 'alert' : 'status'}
+            >
               {message().text}
             </p>
           )}
         </Show>
       </div>
 
-      <Show when={props.profiles.length > 0}>
+      <div class="remote-connection-library">
         <section class="remote-recent">
           <div class="remote-section-head">
-            <strong>最近的远程工作区</strong>
+            <span>
+              <IconClock size={13} />
+              <strong>最近连接</strong>
+            </span>
             <button class="btn-ghost sm" type="button" onClick={props.openSettings}>
               <IconSettings size={12} /> 管理
             </button>
           </div>
-          <For each={props.profiles}>
-            {(profile) => (
-              <button
-                class="remote-recent-row"
-                type="button"
-                onClick={() => void props.connect(savedCommand(profile), profile.root)}
-              >
-                <IconTerminal size={14} />
-                <span>
-                  <strong>{profile.name}</strong>
-                  <code>{savedCommand(profile)}</code>
-                </span>
-                <em>{profile.root}</em>
-                <IconChevron size={11} dir="right" />
-              </button>
-            )}
-          </For>
+          <Show
+            when={props.recentConnections.length > 0}
+            fallback={
+              <p class="remote-history-empty">成功连接后会自动保存在这里，不保存密码和私钥。</p>
+            }
+          >
+            <For each={props.recentConnections}>
+              {(recent) => (
+                <button
+                  class="remote-recent-row"
+                  type="button"
+                  onClick={() => props.useRecent(recent)}
+                >
+                  <IconTerminal size={14} />
+                  <span>
+                    <strong>
+                      {recent.username ? `${recent.username}@` : ''}
+                      {recent.host}
+                    </strong>
+                    <code>{commandFor(recent)}</code>
+                  </span>
+                  <em>{recent.lastPath || recent.home}</em>
+                  <span class="remote-history-action">
+                    {authModeLabel(recent.authMode)}
+                    <IconChevron size={11} dir="right" />
+                  </span>
+                </button>
+              )}
+            </For>
+          </Show>
         </section>
-      </Show>
+
+        <Show when={props.profiles.length > 0}>
+          <section class="remote-recent remote-saved-workspaces">
+            <div class="remote-section-head">
+              <span>
+                <IconFolder size={13} />
+                <strong>已保存数据目录</strong>
+              </span>
+            </div>
+            <For each={props.profiles}>
+              {(profile) => (
+                <button
+                  class="remote-recent-row"
+                  type="button"
+                  onClick={() => {
+                    const recent = props.recentConnections.find(
+                      (item) =>
+                        item.host.toLowerCase() === profile.host.toLowerCase() &&
+                        item.username === profile.username &&
+                        item.port === profile.port,
+                    )
+                    if (recent) props.useRecent({ ...recent, lastPath: profile.root })
+                    else void props.connect(profile, profile.root)
+                  }}
+                >
+                  <IconFolder size={14} />
+                  <span>
+                    <strong>{profile.name}</strong>
+                    <code>{commandFor(profile)}</code>
+                  </span>
+                  <em>{profile.root}</em>
+                  <IconChevron size={11} dir="right" />
+                </button>
+              )}
+            </For>
+          </section>
+        </Show>
+      </div>
     </div>
   )
 }
@@ -648,4 +872,19 @@ function bytes(size: number): string {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function commandFor(target: { host: string; username?: string; port: number }): string {
+  return `ssh ${target.username ? `${target.username}@` : ''}${target.host} -p ${target.port}`
+}
+
+function validPort(value: string): boolean {
+  const port = Number(value)
+  return Number.isInteger(port) && port >= 1 && port <= 65535
+}
+
+function authModeLabel(mode: SshRecentConnectionRow['authMode']): string {
+  if (mode === 'password') return '需密码'
+  if (mode === 'private-key') return '需私钥'
+  return '快速连接'
 }

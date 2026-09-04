@@ -161,55 +161,47 @@ const freshView = (id: string) => {
 }
 
 describe('右侧面板：一个按钮管开合，并记住上次看的视图', () => {
-  test('收起状态下点开，回到默认的文件视图', () => {
-    setSidePanel(null)
+  test('收起状态下点开，回到上次的文件目录', () => {
+    openPanel('files')
+    closePanel()
     togglePanel()
     expect(sidePanel()).toBe('files')
   })
 
   test('展开状态下点，收起', () => {
-    openPanel('changes')
+    openPanel('workflow')
     togglePanel()
     expect(sidePanel()).toBe(null)
   })
 
-  test('收起再展开，回到上次待的地方而不是一律跳回文件', () => {
-    openPanel('changes')
+  test('收起再展开，回到研究流程', () => {
+    openPanel('workflow')
     togglePanel()
     togglePanel()
-    expect(sidePanel()).toBe('changes')
-  })
-
-  test('换过几次视图后，记住的是最后那个', () => {
-    openPanel('files')
-    openPanel('changes')
-    openPanel('todos')
-    togglePanel()
-    togglePanel()
-    expect(sidePanel()).toBe('todos')
+    expect(sidePanel()).toBe('workflow')
   })
 
   test('反复开合不漂移 —— 偶数次回到展开，奇数次收起，视图始终是那一个', () => {
-    openPanel('todos')
+    openPanel('workflow')
     for (let i = 0; i < 6; i++) togglePanel()
-    expect(sidePanel()).toBe('todos')
+    expect(sidePanel()).toBe('workflow')
     togglePanel()
     expect(sidePanel()).toBe(null)
     togglePanel()
-    expect(sidePanel()).toBe('todos')
+    expect(sidePanel()).toBe('workflow')
   })
 
   test('面板头上的 × 也记住当前视图 —— 它和顶栏开关走同一条收起路径', () => {
-    openPanel('changes')
+    openPanel('workflow')
     closePanel()
     togglePanel()
-    expect(sidePanel()).toBe('changes')
+    expect(sidePanel()).toBe('workflow')
   })
 })
 
 describe('面板放大：跟着面板走，不留下一个自己开着的态', () => {
   test('收起面板一并复位 —— 下次展开不该直接落进放大态', () => {
-    openPanel('files')
+    openPanel('workflow')
     togglePanelMax()
     expect(panelMaximized()).toBe(true)
     togglePanel()
@@ -218,10 +210,9 @@ describe('面板放大：跟着面板走，不留下一个自己开着的态', (
     expect(panelMaximized()).toBe(false)
   })
 
-  test('换视图不影响放大 —— 放大的是这块面板，不是某一个视图', () => {
-    openPanel('files')
+  test('流程面板放大后关闭会复位', () => {
+    openPanel('workflow')
     togglePanelMax()
-    setSidePanel('changes')
     expect(panelMaximized()).toBe(true)
     closePanel()
     expect(panelMaximized()).toBe(false)
@@ -313,7 +304,7 @@ describe('可多开的页：+ 开出来，× 关掉', () => {
     expect(activePanelTab()).toBe(first!.id)
   })
 
-  test('关掉最后一页 —— 回文件视图而不是把面板收起来', () => {
+  test('关掉最后一页 —— 回文件目录而不是把面板收起来', () => {
     reset()
     openPanelTab('browser')
     closePanelTab(panelTabs()[0]!.id)
@@ -376,7 +367,7 @@ describe('可多开的页：+ 开出来，× 关掉', () => {
     expect(activePanelTab()).toBe(id)
   })
 
-  test('记着的那一页在收起期间没了 —— 展开回文件视图，不是一块点不掉的空白', () => {
+  test('记着的那一页在收起期间没了 —— 展开回文件目录，不是一块点不掉的空白', () => {
     reset()
     openPanelTab('terminal')
     togglePanel()

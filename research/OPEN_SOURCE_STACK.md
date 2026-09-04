@@ -17,7 +17,7 @@
 - `agent-runtime`：服务、管理、部署策略、基础设施分层，可逐步扩展到本机进程、Docker 与集群。
 - `agent-protocol`：以 MCP、A2A、A2X 作为工具和 Agent 间协议边界。
 - `deepsearch`：查询规划、信息搜集、理解、反思、报告生成的多 Agent 研究循环。
-- `jiuwenswarm`：Channel Adapter、Channel Manager、入站/出站 Pipeline 与 Session Router，适合作为钉钉、飞书、企业微信和 QQ 遥控通道的边界。
+- `jiuwenswarm`：Channel Adapter、Channel Manager、入站/出站 Pipeline 与 Session Router，适合作为飞书、企业微信和 QQ 遥控通道的边界。
 
 ## 本项目采用的编排边界
 

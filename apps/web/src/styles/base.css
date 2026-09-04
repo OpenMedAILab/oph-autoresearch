@@ -107,8 +107,8 @@ input[type="search"]::-webkit-search-cancel-button:hover {
  * 会当场变成圆角方块。
  */
 :focus-visible {
-  outline: 1px solid var(--text-secondary);
-  outline-offset: -1px;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 :focus:not(:focus-visible) {
   outline: none;
@@ -171,4 +171,28 @@ kbd {
 
 ::selection {
   background: var(--accent-soft);
+}
+
+/* 导航密集的桌面工作台也需要一条跳过左栏的键盘路径。默认藏在窗口外，获得焦点
+   后进入视口；不靠 hover，因此屏幕阅读器与键盘用户都能稳定使用。 */
+.skip-link {
+  position: fixed;
+  top: 6px;
+  left: 50%;
+  z-index: 1000;
+  padding: 7px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-md);
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translate(-50%, -150%);
+  transition: transform var(--t-fast) var(--ease);
+}
+.skip-link:focus-visible {
+  outline-offset: 2px;
+  transform: translate(-50%, 0);
 }

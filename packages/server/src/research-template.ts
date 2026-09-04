@@ -15,10 +15,10 @@ export interface ResearchTemplateResult {
 }
 
 const DEFAULT_TEAM = {
-  templateVersion: 2,
+  templateVersion: 3,
   name: 'oph-autoresearch 眼科科研团队',
   rules: {
-    maxConcurrent: 3,
+    maxConcurrent: 4,
     shared:
       '原始眼科影像与直接标识符不得离开获授权的 SSH 服务器。默认只读；训练、写入远程目录或改变数据前必须经过明确检查点。所有结论必须能追溯到研究产物与运行回执。',
   },
@@ -165,6 +165,47 @@ const DEFAULT_TEAM = {
       ],
       maxSteps: 24,
     },
+    {
+      id: 'clinical-challenger',
+      name: '临床反证员',
+      description: '从临床路径、适用人群和失败病例角度主动推翻候选假设与研究结论',
+      systemPrompt:
+        '你是对抗性审查者，不替候选方案润色。优先寻找不适用人群、替代解释、标签定义冲突、临床无意义终点和会导致结论失效的反例；输出可验证的反证清单。',
+      modules: ['临床反例', '适用边界', '替代解释', '失败判据'],
+      skills: ['oph-question-design', 'oph-results-review'],
+      allowedTools: [
+        'read_skill',
+        'read_file',
+        'list_dir',
+        'glob',
+        'grep',
+        'web_search',
+        'web_fetch',
+      ],
+      maxSteps: 20,
+    },
+    {
+      id: 'methodology-critic',
+      name: '方法学批评员',
+      description: '独立检查设计、统计、数据泄漏、评价指标和多重比较问题',
+      systemPrompt:
+        '你只依据显式产物与机器可核验证据审查。主动构造数据泄漏、偏倚、指标选择、样本量、阈值与多重比较方面的失败路径；不要把另一个模型的同意当作验证。',
+      modules: ['研究设计批评', '统计审查', '泄漏挑战', '稳健性压力测试'],
+      skills: ['oph-study-protocol', 'oph-results-review'],
+      allowedTools: ['read_skill', 'read_file', 'list_dir', 'glob', 'grep', 'run_command'],
+      maxSteps: 24,
+    },
+    {
+      id: 'reproducibility-auditor',
+      name: '可复现审计员',
+      description: '核实命令是否真实运行，并校验代码、环境、配置、数据快照和结果之间的证据链',
+      systemPrompt:
+        '你是独立审计者。不得用 mock、跳过或模型自述代替真实验证；逐项核对运行日志、退出码、代码提交、环境锁定、配置哈希、数据快照和输出文件。证据不足就标记未验证。',
+      modules: ['运行真实性', '环境与配置哈希', '产物追踪', '端到端复现'],
+      skills: ['ssh-experiment-runner', 'oph-results-review'],
+      allowedTools: ['read_skill', 'read_file', 'list_dir', 'glob', 'grep', 'run_command'],
+      maxSteps: 24,
+    },
   ],
 } as const
 
@@ -184,6 +225,7 @@ description: 眼科影像 AI 研究的端到端编排技能；用于从研究问
 - 本地只保存脱敏聚合、研究方案、代码、配置、日志摘要和可公开图表。
 - 默认只读。远端训练、写文件、提交作业或改变数据必须在方案冻结检查点获得用户明确批准。
 - 角色职责与模型配置分离。优先让执行者与审查者使用不同模型或至少独立上下文；可用时选择 \`cli:claude\`、\`cli:codex\` 等外部原生 CLI。
+- 开始编排前读取 \`.oph/patterns.json\`。固定的是六阶段治理骨架，阶段内部的角色数量、模型和依赖图由 Pattern 动态决定。
 
 ## 阶段与产物契约
 
@@ -202,9 +244,19 @@ description: 眼科影像 AI 研究的端到端编排技能；用于从研究问
 6. **研究输出** → 研究报告、模型卡与可复现归档
    - 调用 \`oph-research-reporting\`；只写入已通过独立复核的主张，最终发布前停在研究者审阅检查点。
 
+## Pattern 选择与执行
+
+- **候选—反证—综合**：问题建模和方案冻结。至少两个独立候选，一个 clinical-challenger 或 methodology-critic，再由协调员综合；反对意见不得从综合稿中删除。
+- **分布式审计**：数据审计。按中心、模态、标签、缺失和泄漏风险拆成互不重叠的只读轨道，再由 data-auditor 汇总。
+- **实验 DAG**：远程实验。每个 Worker 负责独立配置/脚本或运行目录，禁止并发编辑同一文件；并发值按 GPU 和项目硬上限设置。
+- **自验证**：独立复核。independent-reviewer 与 reproducibility-auditor 使用新上下文复算，methodology-critic 主动制造反例。
+- **文档审查**：研究输出。写作、引用、统计和复现声明分开核验，最终再综合。
+
+每张 workflow 图都必须以 checkpoint 验收其 agent 节点。节点可显式填写 provider + model；生成者与审查者优先使用不同模型家族。工具结果、失败路线和反例分别写入 \`research/artifact_ledger.yaml\` 与 \`research/pitfall_registry.yaml\`，不得只留在聊天记录里。
+
 ## 推荐编排
 
-使用 workflow 明确依赖：研究问题与证据检索员 → 数据审计员 → 方案与统计设计员 → checkpoint → 实验工程师 → 独立复核员 → 证据写作与报告员 → checkpoint。研究协调员负责跨阶段契约与返工路由；没有依赖的检查可并行，但审查节点不得与被审对象共享隐式上下文。
+按阶段分别建立 workflow，而不是一张固定角色长链：候选/探索并行 → Critic/Challenger 对抗检查 → Synthesizer 综合 → 工具验证 → checkpoint。主会话批准后再进入下一阶段；revise 必须携带累计反例回到原子会话。没有依赖的检查可并行，但审查节点不得与被审对象共享隐式上下文。
 
 ## 失败即停止
 
@@ -390,7 +442,7 @@ const OPEN_SOURCE_STACK = `# 开源架构参考与六阶段映射
 - \`agent-runtime\`：服务、管理、部署策略、基础设施分层，可逐步扩展到本机进程、Docker 与集群。
 - \`agent-protocol\`：以 MCP、A2A、A2X 作为工具和 Agent 间协议边界。
 - \`deepsearch\`：查询规划、信息搜集、理解、反思、报告生成的多 Agent 研究循环。
-- \`jiuwenswarm\`：Channel Adapter、Channel Manager、入站/出站 Pipeline 与 Session Router，适合作为钉钉、飞书、企业微信和 QQ 遥控通道的边界。
+- \`jiuwenswarm\`：Channel Adapter、Channel Manager、入站/出站 Pipeline 与 Session Router，适合作为飞书、企业微信和 QQ 遥控通道的边界。
 
 ## 本项目采用的编排边界
 
@@ -409,12 +461,91 @@ const RESEARCH_README = `# 研究产物
 - \`experiment_spec.yaml\`：可执行实验规格
 - \`run_receipt.json\`：运行与环境回执
 - \`claim_evidence_map.yaml\`：独立复核后的主张—证据映射
+- \`artifact_ledger.yaml\`：结论、数据快照、代码、运行与验证证据总账
+- \`pitfall_registry.yaml\`：失败路线、反例、偏倚与后续回避规则
 
 方案冻结和结果复核后都必须停在人工检查点。
 `
 
+const PATTERN_CONFIG = `${JSON.stringify(
+  {
+    schemaVersion: 1,
+    patterns: [
+      {
+        id: 'candidate-challenge-synthesis',
+        name: '候选—反证—综合',
+        stages: ['问题建模', '方案冻结'],
+        topology: [
+          'parallel_candidates',
+          'independent_challenge',
+          'synthesis',
+          'tool_verification',
+          'checkpoint',
+        ],
+        defaultConcurrency: 3,
+      },
+      {
+        id: 'distributed-audit',
+        name: '分布式数据审计',
+        stages: ['数据审计'],
+        topology: ['partitioned_readonly_audits', 'leakage_challenge', 'synthesis', 'checkpoint'],
+        defaultConcurrency: 4,
+      },
+      {
+        id: 'experiment-dag',
+        name: '远程实验 DAG',
+        stages: ['远程实验'],
+        topology: ['isolated_experiment_tracks', 'stress_tests', 'receipt_audit', 'checkpoint'],
+        defaultConcurrency: 2,
+      },
+      {
+        id: 'self-verification',
+        name: '独立自验证',
+        stages: ['独立复核'],
+        topology: [
+          'fresh_context_review',
+          'recalculation',
+          'falsification',
+          'evidence_map',
+          'checkpoint',
+        ],
+        defaultConcurrency: 3,
+      },
+      {
+        id: 'document-review',
+        name: '证据约束文档审查',
+        stages: ['研究输出'],
+        topology: [
+          'draft',
+          'citation_check',
+          'statistics_check',
+          'reproducibility_check',
+          'synthesis',
+          'checkpoint',
+        ],
+        defaultConcurrency: 3,
+      },
+    ],
+  },
+  null,
+  2,
+)}\n`
+
+const ARTIFACT_LEDGER = `schema_version: 1
+artifacts: []
+# 每条记录至少包含：artifact_id, stage, path, source, data_snapshot,
+# code_revision, config_hash, run_id, verification, created_at。
+`
+
+const PITFALL_REGISTRY = `schema_version: 1
+pitfalls: []
+# 失败路线和反例不删除。每条记录至少包含：pitfall_id, stage, trigger,
+# evidence, impact, mitigation, status, related_artifacts。
+`
+
 const TEMPLATE_FILES: Readonly<Record<string, string>> = {
   '.oph/team.json': TEAM_CONFIG,
+  '.oph/patterns.json': PATTERN_CONFIG,
   '.agents/skills/oph-research-pipeline/SKILL.md': PIPELINE_SKILL,
   '.agents/skills/oph-question-design/SKILL.md': QUESTION_DESIGN_SKILL,
   '.agents/skills/oph-study-protocol/SKILL.md': STUDY_PROTOCOL_SKILL,
@@ -424,6 +555,8 @@ const TEMPLATE_FILES: Readonly<Record<string, string>> = {
   '.agents/skills/oph-results-review/SKILL.md': REVIEW_SKILL,
   'research/README.md': RESEARCH_README,
   'research/OPEN_SOURCE_STACK.md': OPEN_SOURCE_STACK,
+  'research/artifact_ledger.yaml': ARTIFACT_LEDGER,
+  'research/pitfall_registry.yaml': PITFALL_REGISTRY,
 }
 
 function migrateTeamConfig(path: string): boolean {
@@ -437,8 +570,8 @@ function migrateTeamConfig(path: string): boolean {
   }
 
   let changed = false
-  if (typeof parsed.templateVersion !== 'number' || parsed.templateVersion < 2) {
-    parsed.templateVersion = 2
+  if (typeof parsed.templateVersion !== 'number' || parsed.templateVersion < 3) {
+    parsed.templateVersion = 3
     changed = true
   }
   if (!Array.isArray(parsed.roles)) return false

@@ -482,6 +482,160 @@
   gap: 2px;
 }
 
+/* 会话直接缩进挂在当前项目下，不再增加重复的“研究对话”分组标题。 */
+.project-conversation-section {
+  margin: 2px 6px 8px 21px;
+  min-width: 0;
+}
+.project-conversations {
+  margin: 0;
+}
+
+.workspace-file-tree {
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+.workspace-file-tree-head {
+  display: flex;
+  align-items: center;
+  min-height: 27px;
+  padding: 2px 4px 2px 8px;
+  border-bottom: 1px solid transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.workspace-file-tree-head.drop-target {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised));
+  color: var(--accent);
+}
+.workspace-file-tree-head .icon-btn {
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+}
+.workspace-file-tree-body {
+  min-height: 0;
+}
+.workspace-tree-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 1px 3px;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    opacity var(--t-fast) var(--ease);
+}
+.workspace-tree-item:hover {
+  background: var(--bg-hover);
+}
+.workspace-tree-item.active {
+  background: var(--bg-active);
+}
+.workspace-tree-item.dragging {
+  opacity: 0.46;
+}
+.workspace-tree-item.drop-target {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg-raised));
+}
+.workspace-tree-item.drop-target .workspace-tree-row {
+  color: var(--accent);
+}
+.workspace-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  min-height: 23px;
+  padding-top: 2px;
+  padding-right: 6px;
+  padding-bottom: 2px;
+  border-radius: var(--r-xs);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: grab;
+}
+.workspace-tree-row:active {
+  cursor: grabbing;
+}
+.workspace-tree-row:hover {
+  color: var(--text-primary);
+}
+.workspace-tree-item.active .workspace-tree-row {
+  color: var(--text-primary);
+}
+.workspace-tree-row > svg,
+.workspace-tree-row > .file-type-icon {
+  flex: none;
+}
+.workspace-tree-indent {
+  width: 10px;
+  flex: none;
+}
+.workspace-tree-loading {
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+.workspace-tree-menu-button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  margin-right: 2px;
+  border-radius: var(--r-xs);
+  color: var(--text-tertiary);
+  opacity: 0.48;
+}
+.workspace-tree-item:hover .workspace-tree-menu-button,
+.workspace-tree-menu-button:focus-visible,
+.workspace-tree-item.active .workspace-tree-menu-button {
+  opacity: 1;
+}
+.workspace-tree-menu-button:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+.workspace-file-notice {
+  margin: 4px 4px 0 8px;
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--success) 32%, var(--border-subtle));
+  border-radius: var(--r-xs);
+  color: var(--success);
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.workspace-file-notice.error {
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--border-subtle));
+  color: var(--danger);
+}
+.workspace-tree-menu-label {
+  max-width: 240px;
+  padding: 5px 8px 6px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-tree-note {
+  padding: 7px 8px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
 /* ── 项目 ──
    一行文件夹 + 它的会话。当前项目的那一行右侧挂「新建对话」——
    会话属于哪个项目，这个位置本身就说明了，不用再写一句。 */
@@ -581,7 +735,7 @@
    只切这一条）：`deepseek-deepseek-v4-flash-vision-exp` 那行的图标从 15px
    被压到 9.78px，另外两行压到 13.27 / 13.81——三行各压成不同大小，
    同一列里图标忽大忽小。
-   与 `.tree-item svg` / `.run-row > svg` / `.change-row svg` 同一条规则。 */
+   与 `.tree-item svg` / `.change-row svg` 同一条规则。 */
 .project-open > svg {
   flex: none;
 }

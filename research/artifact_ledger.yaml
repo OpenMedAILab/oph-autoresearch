@@ -1,0 +1,4 @@
+schema_version: 1
+artifacts: []
+# 每条记录至少包含：artifact_id, stage, path, source, data_snapshot,
+# code_revision, config_hash, run_id, verification, created_at。

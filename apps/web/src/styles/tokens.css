@@ -21,26 +21,26 @@
 
   /* ── 中性色阶：亮色 ── */
   --bg-app: #ffffff;
-  --bg-sunken: #f7f7f8;
+  --bg-sunken: #f5f7f9;
   --bg-raised: #ffffff;
   --bg-hover: rgba(0, 0, 0, 0.04);
   /* 「点中的那一行」也用它——会话列表和文件树共用同一档灰，见 `.nav-item.active`。 */
   --bg-active: rgba(0, 0, 0, 0.07);
-  --bg-inset: #f2f2f3;
+  --bg-inset: #eef2f4;
 
   --border-subtle: rgba(0, 0, 0, 0.06);
   --border-default: rgba(0, 0, 0, 0.1);
   --border-strong: rgba(0, 0, 0, 0.18);
 
-  --text-primary: #16161a;
-  --text-secondary: #6b6b73;
-  --text-tertiary: #9a9aa2;
+  --text-primary: #14212b;
+  --text-secondary: #4f5d68;
+  --text-tertiary: #66717b;
   --text-inverted: #ffffff;
 
   /* 眼科科研识别色：低饱和深青用于主操作与当前状态。状态色仍各司其职。 */
-  --accent: #126e73;
-  --accent-hover: #0b5559;
-  --accent-soft: rgba(18, 110, 115, 0.09);
+  --accent: #0b6b73;
+  --accent-hover: #07545a;
+  --accent-soft: rgba(11, 107, 115, 0.1);
 
   --success: #1a7f47;
   --success-soft: rgba(26, 127, 71, 0.1);
@@ -56,6 +56,24 @@
      四版的落点：#ea580c 太扎眼 → #c2410c 压暗成褐 → #d1784f 又太浅 →
      #cb6a3c。橙相始终不动，只在饱和与明度之间找那一档「看得见但不抢」。 */
   --warning: #cb6a3c;
+
+  /* ── 代码阅读器 ──
+   * 采用 VS Code Light 接近的语义色阶，但仍作为产品 token 统一维护。 */
+  --code-bg: #ffffff;
+  --code-gutter: #fafafa;
+  --code-active-line: rgba(18, 110, 115, 0.045);
+  --code-selection: rgba(38, 127, 153, 0.2);
+  --code-bracket-match: rgba(18, 110, 115, 0.12);
+  --code-search-match: rgba(255, 204, 0, 0.32);
+  --code-keyword: #af00db;
+  --code-type: #267f99;
+  --code-function: #795e26;
+  --code-variable: #001080;
+  --code-string: #a31515;
+  --code-number: #098658;
+  --code-comment: #008000;
+  --code-punctuation: #454545;
+  --code-regexp: #811f3f;
 
   /* diff 专用：正负两色必须同时对亮暗底可读 */
   --diff-add-bg: rgba(26, 127, 71, 0.1);
@@ -107,13 +125,6 @@
    */
   --composer-stack-gap: var(--s-1);
 
-  /*
-   * 整轮状态条的高度。**定值，不由内容撑**：它悬浮，会话流要按
-   * 「缝 + 它 + 缝」在底部留出位置，那段留白需要一个能算的数。
-   * 改这里要同时看 `.changes-chip` 与 `.transcript-inner.with-run-status`。
-   */
-  --run-status-h: 28px;
-
   /* ── 字体 ──
    * 中文优先苹方/思源，英文数字走系统 UI 字体。
    * 等宽栈里 Cascadia/SF Mono 打头，它们的字重和 UI 字体更协调。 */
@@ -123,6 +134,11 @@
   --font-mono:
     "Cascadia Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
     monospace;
+  /* 代码区单独补齐简体中文等宽回退。英文仍优先 Cascadia，中文优先等宽 CJK 字体；
+     机器没装这些字体时再落到微软雅黑，至少不出现缺字或宋体跳变。 */
+  --font-code:
+    "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", "Noto Sans Mono CJK SC",
+    "Source Han Mono SC", "Microsoft YaHei UI", Consolas, monospace;
 
   --fs-xs: 11px;
   --fs-sm: 12px;
@@ -142,7 +158,7 @@
   --t-base: 180ms;
 
   /* ── 布局 ── */
-  --sidebar-w: 232px;
+  --sidebar-w: 248px;
   --panel-w: 380px;
   /* 会话区的最窄。**这是网格里唯一挡住面板占满会话区的约束**——
      `.app.with-panel` 把它写成会话那一格的下限，因此不管 `--panel-w` 是多少，
@@ -184,7 +200,7 @@
 
     --text-primary: #f2f2f4;
     --text-secondary: #a0a0a8;
-    --text-tertiary: #6e6e78;
+    --text-tertiary: #8c8c96;
     --text-inverted: #16161a;
 
     --accent: #79ded6;
@@ -196,6 +212,22 @@
     --danger: #ff7b63;
     --danger-soft: rgba(255, 123, 99, 0.14);
     --warning: #e2874a;
+
+    --code-bg: #111113;
+    --code-gutter: #151517;
+    --code-active-line: rgba(255, 255, 255, 0.035);
+    --code-selection: rgba(38, 79, 120, 0.68);
+    --code-bracket-match: rgba(121, 222, 214, 0.14);
+    --code-search-match: rgba(234, 194, 63, 0.3);
+    --code-keyword: #c586c0;
+    --code-type: #4ec9b0;
+    --code-function: #dcdcaa;
+    --code-variable: #9cdcfe;
+    --code-string: #ce9178;
+    --code-number: #b5cea8;
+    --code-comment: #6a9955;
+    --code-punctuation: #d4d4d4;
+    --code-regexp: #d16969;
 
     --diff-add-bg: rgba(78, 201, 138, 0.14);
     --diff-del-bg: rgba(255, 123, 99, 0.14);
@@ -227,7 +259,7 @@
 
   --text-primary: #f2f2f4;
   --text-secondary: #a0a0a8;
-  --text-tertiary: #6e6e78;
+  --text-tertiary: #8c8c96;
   --text-inverted: #16161a;
 
   --accent: #79ded6;
@@ -239,6 +271,22 @@
   --danger: #ff7b63;
   --danger-soft: rgba(255, 123, 99, 0.14);
   --warning: #e2874a;
+
+  --code-bg: #111113;
+  --code-gutter: #151517;
+  --code-active-line: rgba(255, 255, 255, 0.035);
+  --code-selection: rgba(38, 79, 120, 0.68);
+  --code-bracket-match: rgba(121, 222, 214, 0.14);
+  --code-search-match: rgba(234, 194, 63, 0.3);
+  --code-keyword: #c586c0;
+  --code-type: #4ec9b0;
+  --code-function: #dcdcaa;
+  --code-variable: #9cdcfe;
+  --code-string: #ce9178;
+  --code-number: #b5cea8;
+  --code-comment: #6a9955;
+  --code-punctuation: #d4d4d4;
+  --code-regexp: #d16969;
 
   --diff-add-bg: rgba(78, 201, 138, 0.14);
   --diff-del-bg: rgba(255, 123, 99, 0.14);

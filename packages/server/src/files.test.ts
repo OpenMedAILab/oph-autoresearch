@@ -12,14 +12,20 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import JSZip from 'jszip'
 import {
   classify,
+  copyEntry,
   createEntry,
   deleteEntry,
   EntryExistsError,
+  FileChangedError,
   findByName,
   listTree,
+  moveEntry,
+  preview,
   renameEntry,
+  writeTextEntry,
 } from './files.ts'
 
 async function workspace(): Promise<string> {
@@ -123,6 +129,47 @@ describe('改名与删除', () => {
   })
 })
 
+describe('编辑、复制与移动', () => {
+  test('保存 UTF-8 中文代码，并拒绝覆盖外部修改', async () => {
+    const dir = await workspace()
+    const before = await preview(dir, 'a.ts')
+    const saved = await writeTextEntry(
+      dir,
+      'a.ts',
+      '// 中文注释保持清晰\nexport const 视力 = 1.0\n',
+      before.mtime,
+    )
+    expect(await readFile(join(dir, 'a.ts'), 'utf8')).toContain('中文注释保持清晰')
+    expect(saved.size).toBeGreaterThan(0)
+
+    await writeFile(join(dir, 'a.ts'), '// 外部修改\n', 'utf8')
+    expect(writeTextEntry(dir, 'a.ts', '// 不应覆盖\n', saved.mtime)).rejects.toThrow(
+      FileChangedError,
+    )
+  })
+
+  test('复制自动生成不冲突的副本名，移动保留名称且不覆盖', async () => {
+    const dir = await workspace()
+    const first = await copyEntry(dir, 'a.ts')
+    const second = await copyEntry(dir, 'a.ts')
+    expect(first.path).toBe('a copy.ts')
+    expect(second.path).toBe('a copy 2.ts')
+    expect(await readFile(join(dir, first.path), 'utf8')).toBe('export const a = 1\n')
+
+    await mkdir(join(dir, 'archive'))
+    const moved = await moveEntry(dir, first.path, 'archive')
+    expect(moved.path).toBe('archive/a copy.ts')
+    expect((await listTree(dir, '', 1)).map((node) => node.name)).not.toContain('a copy.ts')
+    expect(await readFile(join(dir, moved.path), 'utf8')).toBe('export const a = 1\n')
+  })
+
+  test('文件夹不能移动到自己里面', async () => {
+    const dir = await workspace()
+    await mkdir(join(dir, 'src', 'nested'))
+    expect(moveEntry(dir, 'src', 'src/nested')).rejects.toThrow('不能把文件夹移动到它自己里面')
+  })
+})
+
 describe('按名搜索', () => {
   test('子串匹配、大小写不敏感，目录也算命中', async () => {
     const dir = await workspace()
@@ -154,8 +201,52 @@ describe('预览分类', () => {
     expect(classify('a/b.ts')).toEqual({ kind: 'text', mime: 'text/plain', language: 'typescript' })
     expect(classify('x.png').kind).toBe('image')
     expect(classify('x.pdf').kind).toBe('pdf')
+    expect(classify('notes.md').kind).toBe('markdown')
+    expect(classify('analysis.py').language).toBe('python')
+    expect(classify('Pipeline.java').language).toBe('java')
+    expect(classify('report.docx').kind).toBe('office')
+    expect(classify('slides.pptx').kind).toBe('office')
+    expect(classify('table.xlsx').kind).toBe('office')
     // 回落是 text 而不是 binary：新扩展名永远追不完，把没见过的当文本读
     // 最多是一屏乱码，当二进制则是「能读却不给看」。
     expect(classify('x.qwerty')).toEqual({ kind: 'text', mime: 'text/plain' })
+  })
+
+  test('docx、pptx 与 xlsx 都在本机解包成只读 HTML', async () => {
+    const dir = await workspace()
+
+    const docx = new JSZip()
+    docx.file(
+      'word/document.xml',
+      '<w:document><w:body><w:p><w:r><w:t>眼底报告</w:t></w:r></w:p></w:body></w:document>',
+    )
+    await writeFile(join(dir, 'report.docx'), await docx.generateAsync({ type: 'nodebuffer' }))
+
+    const pptx = new JSZip()
+    pptx.file('ppt/slides/slide1.xml', '<p:sld><a:p><a:r><a:t>研究结论</a:t></a:r></a:p></p:sld>')
+    await writeFile(join(dir, 'slides.pptx'), await pptx.generateAsync({ type: 'nodebuffer' }))
+
+    const xlsx = new JSZip()
+    xlsx.file('xl/sharedStrings.xml', '<sst><si><t>患者编号</t></si></sst>')
+    xlsx.file(
+      'xl/worksheets/sheet1.xml',
+      '<worksheet><sheetData><row><c t="s"><v>0</v></c><c><v>42</v></c></row></sheetData></worksheet>',
+    )
+    await writeFile(join(dir, 'table.xlsx'), await xlsx.generateAsync({ type: 'nodebuffer' }))
+
+    expect((await preview(dir, 'report.docx')).content).toContain('眼底报告')
+    expect((await preview(dir, 'slides.pptx')).content).toContain('研究结论')
+    expect((await preview(dir, 'table.xlsx')).content).toContain('患者编号')
+    expect((await preview(dir, 'table.xlsx')).content).toContain('42')
+  })
+
+  test('PDF 以内联 data URI 返回，交给 WebView 原生阅读器', async () => {
+    const dir = await workspace()
+    const bytes = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n')
+    await writeFile(join(dir, 'report.pdf'), bytes)
+    const result = await preview(dir, 'report.pdf')
+    expect(result.kind).toBe('pdf')
+    expect(result.mime).toBe('application/pdf')
+    expect(result.dataUri).toBe(`data:application/pdf;base64,${bytes.toString('base64')}`)
   })
 })

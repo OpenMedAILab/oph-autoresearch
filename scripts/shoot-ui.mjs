@@ -21,6 +21,7 @@ import { chromium } from 'playwright'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WS_DIR = join(ROOT, '.tmp', 'shoot-ws')
 const OUT = join(ROOT, '.tmp', 'shots')
+const BUN = process.env.OPH_BUN_EXE || 'bun'
 
 const SHOTS = [
   { name: 'desktop-light', width: 1440, height: 900, scheme: 'light' },
@@ -52,6 +53,40 @@ async function startServer() {
     'export function add(a: number, b: number): number {\n  return a + b\n}\n',
     'utf8',
   )
+  await writeFile(
+    join(WS_DIR, 'ssh.json'),
+    `${JSON.stringify(
+      {
+        profiles: [
+          {
+            id: 'oph-gpu',
+            name: '眼科 GPU 数据目录',
+            host: 'gpu-lab.example.org',
+            username: 'researcher',
+            port: 22,
+            root: '/data/oph',
+            readOnly: true,
+            hostKeyPolicy: 'strict',
+          },
+        ],
+        recentConnections: [
+          {
+            host: 'gpu-lab.example.org',
+            username: 'researcher',
+            port: 22,
+            authMode: 'private-key',
+            hostKeyPolicy: 'strict',
+            home: '/home/researcher',
+            lastPath: '/data/oph',
+            lastConnectedAt: Date.now(),
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  )
 
   // 建成真实 git 仓库并留下未提交改动，否则 git 面板只能截到「不是 git 仓库」。
   const git = (...args) => run('git', ['-C', WS_DIR, ...args]).catch(() => {})
@@ -69,7 +104,7 @@ async function startServer() {
 
   // OPH_AUTORESEARCH_HOME 把配置与账本一起指到临时目录：既不污染用户的真实账本，
   // 也保证种子和 serve 读的是同一个库（config.dataPath() 就在这个目录下）。
-  await run('bun', [
+  await run(BUN, [
     'run',
     join(ROOT, 'scripts/seed-demo.ts'),
     join(WS_DIR, 'oph-autoresearch.sqlite3'),
@@ -77,7 +112,7 @@ async function startServer() {
   ])
 
   const proc = spawn(
-    'bun',
+    BUN,
     [
       'run',
       join(ROOT, 'packages/cli/src/index.ts'),
@@ -136,19 +171,6 @@ async function startServer() {
   })
 }
 
-/**
- * 打开右侧面板并翻到某一页。
- *
- * 页签是 `role="tab"` 带文字，**没有 `aria-label`**；面板默认收着，不先展开
- * 一个页签都点不到。这两条只要有一条不成立，翻页就静默失败，拍出来的是
- * 上一张的界面——所以点不到要往 `errors` 里记一条，不能吞掉。
- */
-async function openPanelTab(page, label) {
-  const expand = page.locator('[aria-label="展开侧面板"]')
-  if (await expand.count()) await expand.click()
-  await page.getByRole('tab', { name: label, exact: true }).click()
-}
-
 async function main() {
   await mkdir(OUT, { recursive: true })
   const { proc, token, port } = await startServer()
@@ -186,13 +208,32 @@ async function main() {
         errors.push(`[${shot.name}] 未连上：${txt}`)
       }
 
+      // 窄屏下右侧工作区默认覆盖全屏；先关掉它才能验证主工作区和左侧项目抽屉。
+      if (shot.width < 820) {
+        const closePanel = page.getByRole('button', { name: '关闭侧面板' })
+        if (await closePanel.count()) await closePanel.click()
+        await page.waitForTimeout(250)
+      }
+
       await page.screenshot({ path: join(OUT, `${shot.name}.png`) })
+
+      if (shot.name === 'desktop-light') {
+        const todoToggle = page.locator('.run-todos-toggle').last()
+        if ((await todoToggle.count()) === 0) {
+          errors.push(`[${shot.name}] 本轮读数条没有 Todo Chain 摘要入口`)
+        } else {
+          await todoToggle.click()
+          await page.locator('.run-todos-panel').last().waitFor({ state: 'visible', timeout: 3000 })
+          await page.screenshot({ path: join(OUT, `${shot.name}-todo-chain.png`) })
+          await todoToggle.click()
+        }
+      }
 
       if (shot.width < 820) {
         await page.click('.drawer-toggle').catch(() => {})
         await page.waitForTimeout(400)
         await page.screenshot({ path: join(OUT, `${shot.name}-drawer.png`) })
-        await page.getByRole('button', { name: '新建对话' }).click()
+        await page.locator('.sidebar-slot').getByRole('button', { name: '新建对话' }).click()
         await page.waitForTimeout(500)
         await page.screenshot({ path: join(OUT, `${shot.name}-research.png`) })
       } else {
@@ -206,37 +247,195 @@ async function main() {
         await page.screenshot({ path: join(OUT, `${shot.name}-palette.png`) })
         await page.keyboard.press('Escape')
 
-        // 侧栏面板：文件树和 git 变更各拍一张。
-        await openPanelTab(page, '文件').catch((e) =>
-          errors.push(`[${shot.name}] 翻不到文件页：${e.message}`),
-        )
-        await page.waitForTimeout(700)
+        // 文件与对话完全分栏：文件树在右侧，打开内容落到中央。
+        // 截图之外再走一遍“根目录 → src → 根目录”的真实拖放，避免只有样式没有移动。
+        const expandPanel = page.getByRole('button', { name: '展开侧面板' })
+        if (await expandPanel.count()) await expandPanel.click()
+        await page.getByRole('tab', { name: '文件', exact: true }).click()
+        await page.locator('.workspace-file-tree').waitFor({ state: 'visible', timeout: 5000 })
         await page.screenshot({ path: join(OUT, `${shot.name}-files.png`) })
 
-        await openPanelTab(page, '变更').catch((e) =>
-          errors.push(`[${shot.name}] 翻不到变更页：${e.message}`),
-        )
-        await page.waitForTimeout(900)
-        await page.screenshot({ path: join(OUT, `${shot.name}-git.png`) })
+        if (shot.name === 'desktop-light') {
+          const readme = page
+            .locator('.workspace-tree-row')
+            .filter({ hasText: 'README.md' })
+            .first()
+          const src = page.locator('.workspace-tree-row').filter({ hasText: 'src' }).first()
+          await readme
+            .dragTo(src)
+            .catch((e) => errors.push(`[${shot.name}] 文件拖不到目录：${e.message}`))
+          await page.waitForTimeout(500)
+          await page.locator('.workspace-tree-row').filter({ hasText: 'src' }).first().click()
+          const movedReadme = page
+            .locator('.workspace-tree-row')
+            .filter({ hasText: 'README.md' })
+            .first()
+          await movedReadme
+            .waitFor({ state: 'visible', timeout: 5000 })
+            .catch(() => errors.push(`[${shot.name}] 文件拖入目录后没有出现在目标目录`))
+        }
+        await page.screenshot({ path: join(OUT, `${shot.name}-drag-move.png`) })
 
-        // 手机接入：开局域网监听后应该出二维码。它是系统设置弹窗「通用」那一页里的
-        // 一个区块，不是一个类目——按类目找它找不到。找不到时这一步静默失败，
-        // 拍出来的 `-pair.png` 会是一张普通会话截图，所以失败要记进 `errors`。
-        await page.getByRole('button', { name: '系统设置' }).click()
-        await page.getByRole('button', { name: '通用', exact: true }).click()
+        await page.locator('.workspace-tree-row').filter({ hasText: 'README.md' }).first().click()
         await page.waitForTimeout(500)
+        await page.screenshot({ path: join(OUT, `${shot.name}-editor.png`) })
+
+        // 右侧“流程”只承载研究执行链导航；顶栏只保留一个展开/收起入口。
+        await page.getByRole('tab', { name: '流程', exact: true }).click()
+        await page.waitForTimeout(500)
+        if ((await page.locator('.workflow-todos').count()) > 0) {
+          errors.push(`[${shot.name}] 流程页仍重复显示 Todo Chain`)
+        }
+        await page.screenshot({ path: join(OUT, `${shot.name}-workflow.png`) })
+
+        // 右侧流程是导航，不承载详情：点击阶段后完整信息必须落到中央主区域。
+        await page.locator('.workflow-nav-list button').nth(1).click()
         await page
-          .locator('.pair-toggle input')
-          .check()
-          .catch((e) => errors.push(`[${shot.name}] 开不了局域网监听：${e.message}`))
-        await page.waitForTimeout(900)
-        // 手机接入是「通用」那一页最末的一块，不滚过去拍到的是页首的外观设置。
-        await page
-          .locator('.pair-qr')
-          .scrollIntoViewIfNeeded()
-          .catch((e) => errors.push(`[${shot.name}] 没出二维码：${e.message}`))
-        await page.waitForTimeout(300)
-        await page.screenshot({ path: join(OUT, `${shot.name}-pair.png`) })
+          .locator('.research-stage-view')
+          .waitFor({ state: 'visible', timeout: 5000 })
+          .catch(() => errors.push(`[${shot.name}] 点击研究阶段后中央详情没有打开`))
+        await page.screenshot({ path: join(OUT, `${shot.name}-stage-detail.png`) })
+
+        // SSH 首页覆盖最近连接、已保存数据目录和窄中央区的无横向溢出布局。
+        await page.getByRole('button', { name: 'Remote SSH' }).click()
+        await page.waitForTimeout(350)
+        const sshOverflow = await page
+          .locator('.remote-ssh-workbench')
+          .evaluate((element) => element.scrollWidth > element.clientWidth + 1)
+        if (sshOverflow) errors.push(`[${shot.name}] SSH 工作台出现横向溢出`)
+        if (shot.name === 'desktop-light') {
+          if ((await page.getByText('研究对话', { exact: true }).count()) > 0) {
+            errors.push(`[${shot.name}] 左栏仍显示重复的“研究对话”分组标题`)
+          }
+          await page.getByRole('button', { name: '密码认证', exact: true }).click()
+          const passwordOverflow = await page
+            .locator('.remote-command-card')
+            .evaluate((element) => element.scrollWidth > element.clientWidth + 1)
+          if (passwordOverflow) errors.push(`[${shot.name}] SSH 密码表单出现横向溢出`)
+          await page.screenshot({ path: join(OUT, `${shot.name}-ssh-password.png`) })
+          await page.getByRole('button', { name: '系统密钥', exact: true }).click()
+
+          const invalid = await page.request.post(`${base}/api/ssh/connect`, {
+            headers: { authorization: `Bearer ${token}` },
+            data: {
+              username: 'root',
+              host: '49.233.290.200',
+              port: 22,
+              authMode: 'system-key',
+            },
+          })
+          const error = await invalid.json().catch(() => ({}))
+          if (invalid.status() !== 502 || !String(error.error).includes('0 到 255')) {
+            errors.push(`[${shot.name}] 无效 IPv4 没有返回可恢复的 SSH 错误`)
+          }
+        }
+        await page.screenshot({ path: join(OUT, `${shot.name}-ssh.png`) })
+
+        if (shot.name === 'desktop-light') {
+          // 用协议级假服务器走通连接后的“选择目录 → 打开工作区 → 预览文件”界面。
+          // 真 SSH 的参数解析和错误路径由上面的真实服务请求覆盖；这里专门验布局与交互。
+          await page.route('**/api/ssh/connect**', (route) =>
+            route.fulfill({
+              json: {
+                sessionId: 'visual-test-session',
+                home: '/home/researcher',
+                message: '已连接 researcher@gpu-lab.example.org:22（系统密钥认证）',
+                target: { host: 'gpu-lab.example.org', username: 'researcher', port: 22 },
+              },
+            }),
+          )
+          await page.route('**/api/ssh/session/list?**', (route) => {
+            const path = new URL(route.request().url()).searchParams.get('path') || '/data/oph'
+            route.fulfill({
+              json: {
+                path,
+                entries: [
+                  { name: 'fundus', path: `${path}/fundus`, kind: 'dir', size: 0, mtime: 0 },
+                  {
+                    name: 'analysis.py',
+                    path: `${path}/analysis.py`,
+                    kind: 'file',
+                    size: 2460,
+                    mtime: 0,
+                  },
+                ],
+              },
+            })
+          })
+          await page.route('**/api/ssh/workspace**', (route) =>
+            route.fulfill({
+              json: {
+                profile: {
+                  id: 'oph-gpu',
+                  name: '眼科 GPU 数据目录',
+                  host: 'gpu-lab.example.org',
+                  username: 'researcher',
+                  port: 22,
+                  root: '/data/oph',
+                  readOnly: true,
+                  hostKeyPolicy: 'strict',
+                },
+              },
+            }),
+          )
+          await page.route('**/api/ssh/session/preview?**', (route) =>
+            route.fulfill({
+              json: {
+                path: '/data/oph/analysis.py',
+                kind: 'text',
+                mime: 'text/x-python',
+                size: 2460,
+                content: 'from pathlib import Path\n\nDATA_ROOT = Path("/data/oph/fundus")\n',
+                language: 'python',
+                truncated: false,
+              },
+            }),
+          )
+          await page.getByLabel('用户名').fill('researcher')
+          await page.getByLabel('主机地址').fill('gpu-lab.example.org')
+          await page.getByLabel('端口').fill('22')
+          await page.getByRole('button', { name: '连接', exact: true }).click()
+          await page.getByLabel('选择数据目录').fill('/data/oph')
+          await page.getByRole('button', { name: '转到', exact: true }).click()
+          await page.getByRole('button', { name: '设为 Agent 工作区' }).click()
+          await page.locator('.remote-row').filter({ hasText: 'analysis.py' }).click()
+          await page.waitForTimeout(350)
+          const explorerOverflow = await page
+            .locator('.remote-explorer')
+            .evaluate((element) => element.scrollWidth > element.clientWidth + 1)
+          if (explorerOverflow) errors.push(`[${shot.name}] SSH 连接后资源管理器出现横向溢出`)
+          await page.screenshot({ path: join(OUT, `${shot.name}-ssh-connected.png`) })
+
+          // 远程接入只保留三种通道；展开飞书后验证配置卡的分组布局与宽度。
+          await page.getByRole('button', { name: '系统设置' }).click()
+          await page.getByRole('button', { name: '远程接入', exact: true }).click()
+          await page.locator('.channel-catalog').waitFor({ state: 'visible', timeout: 5000 })
+          const channelRows = page.locator('.channel-row')
+          if ((await channelRows.count()) !== 3) {
+            errors.push(`[${shot.name}] 远程接入没有恰好显示飞书、企业微信和 QQ 三种通道`)
+          }
+          if ((await page.getByText('钉钉机器人', { exact: true }).count()) > 0) {
+            errors.push(`[${shot.name}] 已移除的钉钉通道仍出现在界面`)
+          }
+          await page.getByRole('button', { name: /飞书机器人/ }).click()
+          await page.locator('.channel-form').waitFor({ state: 'visible', timeout: 5000 })
+          const channelOverflow = await page
+            .locator('.channel-form')
+            .evaluate((element) => element.scrollWidth > element.clientWidth + 1)
+          if (channelOverflow) errors.push(`[${shot.name}] 机器人配置卡出现横向溢出`)
+          await page.screenshot({ path: join(OUT, `${shot.name}-remote-channels.png`) })
+          await page.getByRole('button', { name: '关闭', exact: true }).click()
+        }
+
+        // 下一套颜色主题应从同一份干净目录开始。这里走真实移动 API 复位测试夹具，
+        // 不把“拖回根目录”伪装成拖入文件夹这一条验收用例的一部分。
+        if (shot.name === 'desktop-light') {
+          const reset = await page.request.post(`${base}/api/files/move`, {
+            headers: { authorization: `Bearer ${token}` },
+            data: { path: 'src/README.md', destination: '' },
+          })
+          if (!reset.ok()) errors.push(`[${shot.name}] 拖放夹具复位失败：${reset.status()}`)
+        }
       }
       await ctx.close()
     }

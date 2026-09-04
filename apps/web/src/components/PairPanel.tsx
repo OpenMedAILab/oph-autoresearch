@@ -18,7 +18,7 @@ interface PairingInfo {
   candidates: Candidate[]
 }
 
-type ChannelKind = 'dingtalk' | 'feishu' | 'wecom' | 'qq'
+type ChannelKind = 'feishu' | 'wecom' | 'qq'
 type ControlLevel = 'chat' | 'review' | 'control'
 interface ChannelConfig {
   id: string
@@ -221,33 +221,59 @@ export default function PairPanel() {
                   <Show when={expanded() === configured()?.id ? configured() : undefined}>
                     {(row) => (
                       <div class="channel-form">
-                        <label>
-                          <span>App / Bot ID</span>
-                          <input
-                            value={row().appId}
-                            placeholder={item.credentialHint}
-                            onInput={(event) =>
-                              change(row().id, { appId: event.currentTarget.value })
-                            }
-                          />
-                        </label>
-                        <label>
-                          <span>密钥环境变量</span>
-                          <input
-                            value={row().secretEnv}
-                            spellcheck={false}
-                            onInput={(event) =>
-                              change(row().id, {
-                                secretEnv: event.currentTarget.value.toUpperCase(),
-                              })
-                            }
-                          />
-                        </label>
-                        <label class="wide">
-                          <span>允许操作者 ID（一行一个）</span>
+                        <div class="channel-form-head">
+                          <div>
+                            <strong>{row().name} 配置</strong>
+                            <span>{item.transport}</span>
+                          </div>
+                          <button
+                            class="channel-remove"
+                            type="button"
+                            onClick={() => {
+                              setDrafts(rows().filter((item) => item.id !== row().id))
+                              setExpanded('')
+                            }}
+                          >
+                            <IconTrash size={13} />
+                            移除配置
+                          </button>
+                        </div>
+
+                        <div class="channel-credential-grid">
+                          <label class="field">
+                            <span class="field-label">App / Bot ID</span>
+                            <input
+                              value={row().appId}
+                              placeholder={item.credentialHint}
+                              spellcheck={false}
+                              onInput={(event) =>
+                                change(row().id, { appId: event.currentTarget.value })
+                              }
+                            />
+                          </label>
+                          <label class="field">
+                            <span class="field-label">密钥环境变量</span>
+                            <input
+                              value={row().secretEnv}
+                              placeholder="例如 OPH_REMOTE_CHANNEL_SECRET"
+                              spellcheck={false}
+                              onInput={(event) =>
+                                change(row().id, {
+                                  secretEnv: event.currentTarget.value.toUpperCase(),
+                                })
+                              }
+                            />
+                            <small class="field-hint">只保存变量名，不保存密钥明文</small>
+                          </label>
+                        </div>
+
+                        <label class="field channel-operators">
+                          <span class="field-label">允许操作者 ID</span>
                           <textarea
-                            rows={3}
+                            rows={4}
                             value={row().allowFrom.join('\n')}
+                            placeholder={'每行一个用户 ID\n例如：user_12345'}
+                            spellcheck={false}
                             onInput={(event) =>
                               change(row().id, {
                                 allowFrom: event.currentTarget.value
@@ -257,43 +283,39 @@ export default function PairPanel() {
                               })
                             }
                           />
+                          <small class="field-hint">只有白名单内的账号可以遥控当前研究会话</small>
                         </label>
-                        <label>
-                          <span>遥控级别</span>
-                          <select
-                            value={row().controlLevel}
-                            onChange={(event) =>
-                              change(row().id, {
-                                controlLevel: event.currentTarget.value as ControlLevel,
-                              })
-                            }
-                          >
-                            <option value="chat">仅发起对话</option>
-                            <option value="review">对话 + 审批</option>
-                            <option value="control">对话 + 审批 + 停止运行</option>
-                          </select>
-                        </label>
-                        <label class="channel-enabled">
-                          <input
-                            type="checkbox"
-                            checked={row().enabled}
-                            onChange={(event) =>
-                              change(row().id, { enabled: event.currentTarget.checked })
-                            }
-                          />
-                          启用通道
-                        </label>
-                        <button
-                          class="icon-btn channel-remove"
-                          type="button"
-                          aria-label={`移除 ${row().name}`}
-                          onClick={() => {
-                            setDrafts(rows().filter((item) => item.id !== row().id))
-                            setExpanded('')
-                          }}
-                        >
-                          <IconTrash size={13} />
-                        </button>
+
+                        <div class="channel-control-grid">
+                          <label class="field">
+                            <span class="field-label">遥控权限</span>
+                            <select
+                              value={row().controlLevel}
+                              onChange={(event) =>
+                                change(row().id, {
+                                  controlLevel: event.currentTarget.value as ControlLevel,
+                                })
+                              }
+                            >
+                              <option value="chat">仅发起对话</option>
+                              <option value="review">对话 + 审批</option>
+                              <option value="control">对话 + 审批 + 停止运行</option>
+                            </select>
+                          </label>
+                          <label class="channel-enabled">
+                            <input
+                              type="checkbox"
+                              checked={row().enabled}
+                              onChange={(event) =>
+                                change(row().id, { enabled: event.currentTarget.checked })
+                              }
+                            />
+                            <span>
+                              <strong>启用此通道</strong>
+                              <small>保存配置后开始接收机器人消息</small>
+                            </span>
+                          </label>
+                        </div>
                       </div>
                     )}
                   </Show>

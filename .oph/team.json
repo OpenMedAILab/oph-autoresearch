@@ -1,8 +1,8 @@
 {
-  "templateVersion": 2,
+  "templateVersion": 3,
   "name": "oph-autoresearch 眼科科研团队",
   "rules": {
-    "maxConcurrent": 3,
+    "maxConcurrent": 4,
     "shared": "原始眼科影像与直接标识符不得离开获授权的 SSH 服务器。默认只读；训练、写入远程目录或改变数据前必须经过明确检查点。所有结论必须能追溯到研究产物与运行回执。"
   },
   "roles": [
@@ -139,6 +139,44 @@
         "glob",
         "grep"
       ],
+      "maxSteps": 24
+    },
+    {
+      "id": "clinical-challenger",
+      "name": "临床反证员",
+      "description": "从临床路径、适用人群和失败病例角度主动推翻候选假设与研究结论",
+      "systemPrompt": "你是对抗性审查者，不替候选方案润色。优先寻找不适用人群、替代解释、标签定义冲突、临床无意义终点和会导致结论失效的反例；输出可验证的反证清单。",
+      "modules": ["临床反例", "适用边界", "替代解释", "失败判据"],
+      "skills": ["oph-question-design", "oph-results-review"],
+      "allowedTools": [
+        "read_skill",
+        "read_file",
+        "list_dir",
+        "glob",
+        "grep",
+        "web_search",
+        "web_fetch"
+      ],
+      "maxSteps": 20
+    },
+    {
+      "id": "methodology-critic",
+      "name": "方法学批评员",
+      "description": "独立检查设计、统计、数据泄漏、评价指标和多重比较问题",
+      "systemPrompt": "你只依据显式产物与机器可核验证据审查。主动构造数据泄漏、偏倚、指标选择、样本量、阈值与多重比较方面的失败路径；不要把另一个模型的同意当作验证。",
+      "modules": ["研究设计批评", "统计审查", "泄漏挑战", "稳健性压力测试"],
+      "skills": ["oph-study-protocol", "oph-results-review"],
+      "allowedTools": ["read_skill", "read_file", "list_dir", "glob", "grep", "run_command"],
+      "maxSteps": 24
+    },
+    {
+      "id": "reproducibility-auditor",
+      "name": "可复现审计员",
+      "description": "核实命令是否真实运行，并校验代码、环境、配置、数据快照和结果之间的证据链",
+      "systemPrompt": "你是独立审计者。不得用 mock、跳过或模型自述代替真实验证；逐项核对运行日志、退出码、代码提交、环境锁定、配置哈希、数据快照和输出文件。证据不足就标记未验证。",
+      "modules": ["运行真实性", "环境与配置哈希", "产物追踪", "端到端复现"],
+      "skills": ["ssh-experiment-runner", "oph-results-review"],
+      "allowedTools": ["read_skill", "read_file", "list_dir", "glob", "grep", "run_command"],
       "maxSteps": 24
     }
   ]

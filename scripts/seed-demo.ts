@@ -347,6 +347,33 @@ step({
   },
 })
 
+// 收尾读数条的 Todo Chain 折叠入口。放在最后一次快照位置，截图与历史回放都能
+// 验证「摘要属于这一轮、展开后仍保持该轮结束时的清单快照」。
+const demoTodos = [
+  { id: 'todo_1', content: '确认发布归属写入点', status: 'completed' as const },
+  { id: 'todo_2', content: '修正接口与前台调用', status: 'completed' as const },
+  { id: 'todo_3', content: '完成回归测试并清理缓存', status: 'completed' as const },
+]
+step({
+  runId: run.id,
+  seq: 0,
+  kind: 'tool_action',
+  toolName: 'write_todos',
+  toolCallId: 'c9',
+  status: 'success',
+  payload: {
+    kind: 'tool_result',
+    args: { todos: demoTodos },
+    action: { kind: 'edit', objectLabel: '待办', target: null },
+    outcome: {
+      status: 'success',
+      executed: true,
+      message: '3 步全部完成',
+      data: { todos: demoTodos },
+    },
+  },
+})
+
 const assistant = appendMessage(store, {
   conversationId: conv.id,
   role: 'assistant',

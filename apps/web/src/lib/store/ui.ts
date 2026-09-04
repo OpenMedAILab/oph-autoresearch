@@ -17,9 +17,13 @@ import { isDesktopShell, tauriInvoke } from './shell.ts'
  * 打开的文件**不是这里的一个值**：它长在文件那一页里（`openFile` + `FileView`），
  * 和文件树并排。
  *
+ * 「待办」与「运行」不再是固定页：完整待办随工具卡留在聊天记录，进度缩略位于
+ * 输入框下方；运行读数进入状态栏（`Statusline`）。文件与流程之外没有第三个固定视图。
+ *
  * 终端不在这里：它是可多开、可关掉的一页，见 `PanelTabKind`。
  */
-export type PanelView = 'todos' | 'files' | 'changes' | 'runs'
+/** `changes` 仅为旧持久状态兼容；当前界面只展示 `files` 与 `workflow`。 */
+export type PanelView = 'workflow' | 'files' | 'changes'
 
 /**
  * 可多开的那几种页。
@@ -62,11 +66,14 @@ export interface PanelTab {
  * 同时成立，谁盖过谁只能靠每个调用点自觉，那就是第二本账。
  */
 export type PanelPage = PanelView | { tab: string }
-export const [sidePanel, setSidePanel] = createSignal<PanelPage | null>('todos')
+export const [sidePanel, setSidePanel] = createSignal<PanelPage | null>('files')
 
-/** 中央工作区以 Agent 对话为主；右侧入口只在用户点选后临时切换到研究详情。 */
-export type CenterView = 'chat' | 'workflow' | 'ssh'
+/** 中央工作区负责实际内容；右栏的执行链只做导航，阶段详情也在这里打开。 */
+export type CenterView = 'chat' | 'file' | 'ssh' | 'research'
 export const [centerView, setCenterView] = createSignal<CenterView>('chat')
+
+/** 右侧执行链当前选中的阶段；与中央阶段详情共用这一份状态。 */
+export const [selectedResearchStage, setSelectedResearchStage] = createSignal(0)
 
 const [tabs, setTabs] = createSignal<readonly PanelTab[]>([])
 
@@ -426,15 +433,14 @@ export function closeSettings(): void {
 export const [openFile, setOpenFile] = createSignal<string | null>(null)
 
 /**
- * 打开一个文件。**必须走这里**：它同时保证面板是开着的、且停在文件那一页。
+ * 打开一个文件。**必须走这里**：它更新唯一的打开文件状态，并把内容交给中央区域。
  *
- * 直接设 `openFile` 的话，从别的地方触发时
- * 面板可能收着或停在「变更」页，用户点一下什么都看不到。
- * 放大态**不动**：那个模式下面板占满内容区，正好是看文件最舒服的形状。
+ * 文件树位于右栏，内容不再挤在树旁边；无论从文件树还是其它入口触发，
+ * 都使用同一条中央文件视图路径。
  */
 export function openFileInPanel(path: string): void {
   setOpenFile(path)
-  openPanel('files')
+  setCenterView('file')
 }
 
 /**

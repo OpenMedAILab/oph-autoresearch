@@ -1,5 +1,5 @@
-import type { RunUsage, StopReason } from '@oph-autoresearch/core'
-import { formatMoney } from '@oph-autoresearch/core'
+import type { RunUsage, StopReason, TodoItem } from '@oph-autoresearch/core'
+import { formatMoney, todoProgress } from '@oph-autoresearch/core'
 import type { JSX } from 'solid-js'
 import {
   createContext,
@@ -48,7 +48,6 @@ import {
 } from '../lib/step-view.ts'
 import {
   composerStackAbove,
-  hasRunStatus,
   isRunning,
   loadOlderConversation,
   retryConversationHistory,
@@ -207,11 +206,7 @@ export function Transcript() {
 
   return (
     <div class="transcript" ref={scroller} onScroll={onScroll}>
-      <div
-        class="transcript-inner"
-        classList={{ 'with-stack': composerStackAbove(), 'with-run-status': hasRunStatus() }}
-        ref={inner}
-      >
+      <div class="transcript-inner" classList={{ 'with-stack': composerStackAbove() }} ref={inner}>
         <Show when={state.activeConversation}>
           {(id) => (
             <ConversationHistoryBoundary
@@ -607,8 +602,13 @@ function RunStatusBar(props: {
   liveNote?: string
   /** 报错正文，没有就是 null。有它时它**取代**停止原因那句话，不是并列多说一句。 */
   errorMessage?: string | null
+  /** 这一轮结束时可见的 Todo Chain 快照；运行中则是实时清单。 */
+  todos: readonly TodoItem[]
 }) {
+  const [todosOpen, setTodosOpen] = createSignal(false)
+  const todoRegionId = createUniqueId()
   const normal = () => !props.stopReason || props.stopReason === 'completed'
+  const progress = () => todoProgress(props.todos)
   /**
    * 停下来的说法。
    *
@@ -629,61 +629,83 @@ function RunStatusBar(props: {
     (props.stopReason !== 'completed' || Boolean(props.errorMessage?.trim()))
 
   return (
-    <div class="run-strip" classList={{ done: !props.running, abnormal: !normal() }}>
-      {/* 星河条：运行时星点流动、五格逐个提亮扫过去，跑完暂停动画并压暗——「还在跑」
+    <section class="run-block" aria-label={props.running ? '本轮运行状态' : '本轮运行结果'}>
+      <div class="run-strip" classList={{ done: !props.running, abnormal: !normal() }}>
+        {/* 星河条：运行时星点流动、五格逐个提亮扫过去，跑完暂停动画并压暗——「还在跑」
           和「跑完了」必须在余光里就能分清，光靠文字变化做不到。
           五格分开写：每格自己一条错开延时的动画，也各带各的星点数。 */}
-      <span class="run-galaxy" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-        <span />
-        <span />
-      </span>
-
-      <span class="run-readout">
-        <Show when={props.elapsed !== null}>
-          <span class="run-metric run-elapsed" data-tip="本轮耗时">
-            {props.elapsed!.toFixed(1)}s
-          </span>
-        </Show>
-        <Show when={props.usage}>
-          {(usage) => (
-            <>
-              <span class="run-metric" data-tip="输入 / 输出 token">
-                ↓{compact(usage().inputTokens)} ↑{compact(usage().outputTokens)}
-              </span>
-              {/* 计价为 0 时不显示金额：未知计价冒充免费更误导。 */}
-              <Show when={usage().cost > 0}>
-                <span class="run-metric run-cost">
-                  {formatMoney(usage().cost, usage().currency)}
-                </span>
-              </Show>
-            </>
-          )}
-        </Show>
-        {/* 即使模型在 usage 生成前报错，也必须把未知明确显示出来。
-            口径（最后一次调用、null 与 0 的区别）只由 `hitRate` 维护。 */}
-        <span class="run-metric" data-tip="最后一次模型调用的缓存命中占输入总量的比例">
-          命中 {props.usage ? hitRate(props.usage) : 'N/A'}
+        <span class="run-galaxy" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
         </span>
-        {/*
-         * 「正在思考…」跟在钱后面，和停止原因同一格。
-         *
-         * 别把它浮在输入区上方：那里没有它的位置，出现和消失会把输入框整体推动，
-         * 也就是 B9 说的「尺寸随内容变」。而这一格本来就是给「这一轮怎么样了」用的：
-         * 跑着的时候说在干什么，跑完了说为什么停，同一个位置、同一种语义。
-         */}
-        <Show when={props.running && props.liveNote}>
-          <span class="run-live">{props.liveNote}</span>
-        </Show>
-        {/* 停止原因排在**末位**：它长度不定，排在最前会把后面几格读数整体右推，
+
+        <span class="run-readout">
+          <Show when={props.elapsed !== null}>
+            <span class="run-metric run-elapsed" data-tip="本轮耗时">
+              {props.elapsed!.toFixed(1)}s
+            </span>
+          </Show>
+          <Show when={props.usage}>
+            {(usage) => (
+              <>
+                <span class="run-metric" data-tip="输入 / 输出 token">
+                  ↓{compact(usage().inputTokens)} ↑{compact(usage().outputTokens)}
+                </span>
+                {/* 计价为 0 时不显示金额：未知计价冒充免费更误导。 */}
+                <Show when={usage().cost > 0}>
+                  <span class="run-metric run-cost">
+                    {formatMoney(usage().cost, usage().currency)}
+                  </span>
+                </Show>
+              </>
+            )}
+          </Show>
+          {/* 即使模型在 usage 生成前报错，也必须把未知明确显示出来。
+            口径（最后一次调用、null 与 0 的区别）只由 `hitRate` 维护。 */}
+          <span class="run-metric" data-tip="最后一次模型调用的缓存命中占输入总量的比例">
+            命中 {props.usage ? hitRate(props.usage) : 'N/A'}
+          </span>
+          <Show when={props.todos.length > 0}>
+            <button
+              class="run-todos-toggle"
+              type="button"
+              aria-expanded={todosOpen()}
+              aria-controls={todoRegionId}
+              aria-label={`Todo Chain，已完成 ${progress().done} 项，共 ${progress().total} 项；${todosOpen() ? '收起详情' : '展开详情'}`}
+              on:click={() => setTodosOpen((open) => !open)}
+            >
+              <span>
+                Todo Chain {progress().done}/{progress().total}
+              </span>
+              <IconChevron size={11} dir={todosOpen() ? 'up' : 'down'} />
+            </button>
+          </Show>
+          {/*
+           * 「正在思考…」跟在钱后面，和停止原因同一格。
+           *
+           * 别把它浮在输入区上方：那里没有它的位置，出现和消失会把输入框整体推动，
+           * 也就是 B9 说的「尺寸随内容变」。而这一格本来就是给「这一轮怎么样了」用的：
+           * 跑着的时候说在干什么，跑完了说为什么停，同一个位置、同一种语义。
+           */}
+          <Show when={props.running && props.liveNote}>
+            <span class="run-live">{props.liveNote}</span>
+          </Show>
+          {/* 停止原因排在**末位**：它长度不定，排在最前会把后面几格读数整体右推，
             因此出错的那一轮和正常的那些轮列对不齐。放最后，前面几格的列位恒定。 */}
-        <Show when={showReason()}>
-          <span class="run-reason">{reason()}</span>
-        </Show>
-      </span>
-    </div>
+          <Show when={showReason()}>
+            <span class="run-reason">{reason()}</span>
+          </Show>
+        </span>
+      </div>
+      <Show when={todosOpen() && props.todos.length > 0}>
+        <div class="run-todos-panel" id={todoRegionId}>
+          <TodoList todos={props.todos} />
+        </div>
+      </Show>
+    </section>
   )
 }
 
@@ -716,13 +738,37 @@ function LiveRunBar() {
       elapsed={elapsed()}
       running={true}
       liveNote={liveStatus(now())}
+      todos={state.todos}
     />
   )
 }
 
+/**
+ * 找到这条收尾读数之前最后一次提交的 Todo Chain。
+ *
+ * 清单跨 run 延续，所以不能碰到上一条 run 就停；一轮没有调用 `write_todos` 时，
+ * 它仍应显示上一轮留下的清单。每张历史读数条由自己的位置向前取快照，因而不会被
+ * 会话当前的最新清单反向改写。
+ */
+function todosAtRun(
+  items: readonly TranscriptItem[],
+  runItem: TranscriptItem,
+): readonly TodoItem[] {
+  let snapshot: readonly TodoItem[] = []
+  for (const item of items) {
+    if (item.id === runItem.id) break
+    if (item.kind !== 'tool' || item.toolName !== 'write_todos') continue
+    const parsed = todosOf(item.args ?? {})
+    if (parsed) snapshot = parsed
+  }
+  return snapshot
+}
+
 /** 跑完那一轮的条目。耗时用落库的起止时刻算，和实时那条是同一个含义。 */
 function RunCard(props: { item: TranscriptItem }) {
+  const row = useContext(RowStream)
   const run = () => props.item.run
+  const todos = () => todosAtRun(row.items(), props.item)
   const elapsed = () => {
     const r = run()
     return r?.endedAt == null ? null : (r.endedAt - r.startedAt) / 1000
@@ -737,6 +783,7 @@ function RunCard(props: { item: TranscriptItem }) {
           elapsed={elapsed()}
           running={false}
           errorMessage={r().errorMessage}
+          todos={todos()}
         />
       )}
     </Show>
@@ -1072,7 +1119,7 @@ function DelegateCard(props: { item: TranscriptItem }) {
       if (sources.length === 0) continue
       // 这一组边流不流动，看它汇进去的那个节点在不在跑。
       const phase = stateOf(n)?.phase
-      const live = phase === 'spawned' || phase === 'working'
+      const live = phase === 'queued' || phase === 'spawned' || phase === 'working'
       const t = to.getBoundingClientRect()
       if (g.horizontal) {
         // 三格横排时每条边只连一对格子：左格右缘中点画到右格左缘中点，一条直线。

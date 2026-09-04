@@ -10,5 +10,7 @@
 - `experiment_spec.yaml`：可执行实验规格
 - `run_receipt.json`：运行与环境回执
 - `claim_evidence_map.yaml`：独立复核后的主张—证据映射
+- `artifact_ledger.yaml`：结论、数据快照、代码、运行与验证证据总账
+- `pitfall_registry.yaml`：失败路线、反例、偏倚与后续回避规则
 
 方案冻结和结果复核后都必须停在人工检查点。

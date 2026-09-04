@@ -609,7 +609,7 @@ describe('workflow 从父会话账本续接', () => {
     const first = await invoke(
       1,
       { goal: '两批完成', nodes },
-      { kind: 'start', goal: '两批完成', nodes },
+      { kind: 'start', goal: '两批完成', nodes, maxConcurrent: 4 },
     )
     expect(first.result.transition?.phase).toBe('waiting_review')
     expect(first.result.transition?.checkpointId).toBe('cp1')

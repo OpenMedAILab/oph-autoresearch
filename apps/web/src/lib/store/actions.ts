@@ -22,6 +22,11 @@ import { isDesktopShell, tauriInvoke } from './shell.ts'
 import { isRunning, markBusy, setState, state } from './state.ts'
 import { closeAllPanelTabs, setOpenFile, setWorkspace } from './ui.ts'
 
+/** 本地文件操作完成后，让文件树与已打开的预览统一失效。 */
+export function invalidateWorkspaceFiles(): void {
+  setState('fileVersion', (version) => version + 1)
+}
+
 /**
  * 拉这个项目的会话列表，并保证**总有一条是活动的**。
  *

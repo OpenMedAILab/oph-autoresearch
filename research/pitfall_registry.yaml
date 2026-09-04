@@ -1,0 +1,4 @@
+schema_version: 1
+pitfalls: []
+# 失败路线和反例不删除。每条记录至少包含：pitfall_id, stage, trigger,
+# evidence, impact, mitigation, status, related_artifacts。

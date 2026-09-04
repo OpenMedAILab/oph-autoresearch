@@ -9,6 +9,7 @@ import {
   newConversation,
   openSettings,
   selectConversation,
+  setCenterView,
   state,
   toggleSidebar,
   workspace,
@@ -59,7 +60,6 @@ export function Sidebar(props: { onClose?: () => void }) {
   const desktop = isDesktopShell()
   const [known, { refetch: refetchWorkspaces }] = createResource(loadKnownWorkspaces)
   const [error, setError] = createSignal<string | null>(null)
-
   /*
    * 连接一恢复就重拉项目清单。
    *
@@ -185,24 +185,27 @@ export function Sidebar(props: { onClose?: () => void }) {
                 {/* 只有当前项目展开会话：服务端一次回一个项目的列表，
                     而用户同一时刻也只看得见一个。 */}
                 <Show when={isCurrent()}>
-                  <ul class="nav-list">
-                    <For each={state.conversations}>
-                      {(c) => (
-                        <li>
-                          <ConversationRow
-                            conversation={c}
-                            active={c.id === state.activeConversation}
-                            running={state.busyConversations.includes(c.id)}
-                            onOpen={() => {
-                              void selectConversation(c.id)
-                              props.onClose?.()
-                            }}
-                            onError={setError}
-                          />
-                        </li>
-                      )}
-                    </For>
-                  </ul>
+                  <section class="project-conversation-section" aria-label="研究对话">
+                    <ul class="nav-list project-conversations">
+                      <For each={state.conversations}>
+                        {(c) => (
+                          <li>
+                            <ConversationRow
+                              conversation={c}
+                              active={c.id === state.activeConversation}
+                              running={state.busyConversations.includes(c.id)}
+                              onOpen={() => {
+                                setCenterView('chat')
+                                void selectConversation(c.id)
+                                props.onClose?.()
+                              }}
+                              onError={setError}
+                            />
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </section>
                 </Show>
               </div>
             )

@@ -1,6 +1,17 @@
-import { createEffect, createSignal, lazy, onCleanup, onMount, Show, Suspense } from 'solid-js'
+import {
+  createEffect,
+  createSignal,
+  lazy,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  Suspense,
+  Switch,
+} from 'solid-js'
 import { Composer } from './components/Composer.tsx'
-import { ResearchWorkspace } from './components/ResearchWorkspace.tsx'
+import RemoteSshBrowser from './components/RemoteSshBrowser.tsx'
+import { ResearchStageDetail } from './components/ResearchWorkspace.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
 import { Tooltip } from './components/Tooltip.tsx'
 import { Transcript } from './components/Transcript.tsx'
@@ -9,6 +20,7 @@ import { TrustDialog } from './components/TrustDialog.tsx'
 // 懒加载：这个模块带着 CodeMirror 核心，约 300 kB。
 // 只想聊天的用户不该为文件预览付首屏成本。
 const SidePanel = lazy(() => import('./components/SidePanel.tsx'))
+const FileView = lazy(() => import('./components/FileView.tsx'))
 
 // 设置弹窗只在真的打开设置时才下载。它下面还挂着十个类目，其中七个各自
 // 又是懒加载的——见 SettingsDialog 里的说明。
@@ -16,7 +28,13 @@ const SettingsDialog = lazy(() =>
   import('./components/settings/SettingsDialog.tsx').then((m) => ({ default: m.SettingsDialog })),
 )
 
-import { IconCheck, IconChevron, IconDownload, IconPanel } from './components/Icons.tsx'
+import {
+  IconCheck,
+  IconChevron,
+  IconDownload,
+  IconPanel,
+  IconTerminal,
+} from './components/Icons.tsx'
 import { WindowControls } from './components/WindowControls.tsx'
 import {
   centerView,
@@ -25,9 +43,11 @@ import {
   loadConversations,
   loadWorkspace,
   openBrowserTab,
+  openFile,
   PANEL_MIN,
   panelMaximized,
   panelWidth,
+  setCenterView,
   setState,
   settingsPage,
   setWorkspace,
@@ -180,6 +200,9 @@ export function App() {
         copyCode(e)
       }}
     >
+      <a class="skip-link" href="#workspace-main">
+        跳到主工作区
+      </a>
       <Show when={state.connection !== 'ready'}>
         <div class="conn-bar" classList={{ bad: state.connection === 'unauthorized' }}>
           {connLabel()}
@@ -234,6 +257,17 @@ export function App() {
         <div class="topbar-tools">
           <button
             class="icon-btn"
+            classList={{ active: centerView() === 'ssh' }}
+            type="button"
+            aria-label="Remote SSH"
+            aria-pressed={centerView() === 'ssh'}
+            data-tip="Remote SSH"
+            onClick={() => setCenterView(centerView() === 'ssh' ? 'chat' : 'ssh')}
+          >
+            <IconTerminal size={15} />
+          </button>
+          <button
+            class="icon-btn"
             type="button"
             aria-label={exportState() === 'working' ? '正在导出当前会话' : '导出当前会话'}
             data-tip={exportState() === 'done' ? '已导出' : '导出当前会话'}
@@ -264,6 +298,8 @@ export function App() {
 
       {/* 空会话时把输入区居中：只在底部钉一个输入框看起来像没加载完 */}
       <main
+        id="workspace-main"
+        tabIndex={-1}
         class="main"
         classList={{
           'detail-view': centerView() !== 'chat',
@@ -276,12 +312,39 @@ export function App() {
         {/* 面板放大时正文整块卸载，不是用 CSS 藏起来：`display: none` 会把
             滚动容器的 scrollTop 清成 0，还原时用户落在几百条之前的开头，而
             重新挂载会走一遍「贴底」的初始态，还原就停在最新那条上。 */}
-        <Show when={centerView() === 'chat'} fallback={<ResearchWorkspace />}>
-          <Show when={!panelMaximized()}>
-            <Transcript />
-          </Show>
-          <Composer />
-        </Show>
+        <Switch>
+          <Match when={centerView() === 'chat'}>
+            <Show when={!panelMaximized()}>
+              <Transcript />
+            </Show>
+            <Composer />
+          </Match>
+          <Match when={centerView() === 'file'}>
+            <Show
+              when={openFile()}
+              fallback={
+                <div class="file-empty-state">
+                  <strong>打开工作区文件</strong>
+                  <span>从右侧“文件”中选择 Markdown、Office、PDF 或代码。</span>
+                </div>
+              }
+            >
+              {(path) => (
+                <Suspense fallback={<div class="preview-loading" />}>
+                  <FileView path={path()} refresh={state.fileVersion} />
+                </Suspense>
+              )}
+            </Show>
+          </Match>
+          <Match when={centerView() === 'ssh'}>
+            <div class="workspace-view ssh-workspace-view">
+              <RemoteSshBrowser />
+            </div>
+          </Match>
+          <Match when={centerView() === 'research'}>
+            <ResearchStageDetail />
+          </Match>
+        </Switch>
       </main>
 
       {/*
@@ -315,8 +378,9 @@ export function App() {
 
 function activeTitle(): string {
   const detail = centerView()
-  if (detail === 'workflow') return '当前研究流程'
   if (detail === 'ssh') return 'SSH 研究数据'
+  if (detail === 'research') return '研究阶段详情'
+  if (detail === 'file') return openFile() || '工作区文件'
   const id = state.activeConversation
   return state.conversations.find((c) => c.id === id)?.title || '新研究任务'
 }

@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   loadSshProfiles,
+  loadSshRecentConnections,
   normalizePrivateKey,
+  normalizeSshTarget,
   parseSshCommand,
+  recordSshConnection,
   resolveSshPath,
   type SshProfile,
   saveSshProfiles,
@@ -62,6 +65,23 @@ describe('SSH 命令入口', () => {
   })
 })
 
+describe('SSH 独立连接字段', () => {
+  test('规范化用户名、主机与端口', () => {
+    expect(
+      normalizeSshTarget({ username: ' root ', host: ' 49.233.190.200 ', port: '22' }),
+    ).toEqual({ username: 'root', host: '49.233.190.200', port: 22 })
+  })
+
+  test('拒绝无效地址、端口与命令注入字符', () => {
+    expect(() => normalizeSshTarget({ host: '49.233.290.200', port: 22 })).toThrow('0 到 255')
+    expect(() => normalizeSshTarget({ host: 'server; reboot', port: 22 })).toThrow('主机地址无效')
+    expect(() =>
+      normalizeSshTarget({ username: 'root -o ProxyCommand=x', host: 'server' }),
+    ).toThrow('用户名无效')
+    expect(() => normalizeSshTarget({ host: 'server', port: 70000 })).toThrow('端口无效')
+  })
+})
+
 describe('SSH 私钥输入', () => {
   test('接受 OpenSSH 与 PEM 私钥外壳并规范换行', () => {
     expect(
@@ -106,5 +126,46 @@ describe('SSH 配置', () => {
     await expect(saveSshProfiles([{ ...profile, host: 'server; touch /tmp/x' }])).rejects.toThrow(
       '无效',
     )
+  })
+
+  test('成功连接会留下不含凭证的最近记录，并保留已有工作区', async () => {
+    const previous = process.env.OPH_AUTORESEARCH_HOME
+    process.env.OPH_AUTORESEARCH_HOME = await mkdtemp(join(tmpdir(), 'oph-ssh-recent-'))
+    try {
+      await saveSshProfiles([profile])
+      await recordSshConnection(profile, {
+        authMode: 'password',
+        hostKeyPolicy: 'accept-new',
+        home: '/home/researcher',
+        connectedAt: 100,
+      })
+      await recordSshConnection(profile, {
+        authMode: 'private-key',
+        hostKeyPolicy: 'strict',
+        home: '/home/researcher',
+        lastPath: '/data/oph',
+        connectedAt: 200,
+      })
+
+      expect(await loadSshProfiles()).toEqual([profile])
+      const recent = await loadSshRecentConnections()
+      expect(recent).toEqual([
+        {
+          host: profile.host,
+          username: 'researcher',
+          port: profile.port,
+          authMode: 'private-key',
+          hostKeyPolicy: 'strict',
+          home: '/home/researcher',
+          lastPath: '/data/oph',
+          lastConnectedAt: 200,
+        },
+      ])
+      expect('password' in (recent[0] as unknown as Record<string, unknown>)).toBe(false)
+      expect('privateKey' in (recent[0] as unknown as Record<string, unknown>)).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+      else process.env.OPH_AUTORESEARCH_HOME = previous
+    }
   })
 })

@@ -51,6 +51,7 @@ describe('workflow 调用判别', () => {
       call: {
         kind: 'start',
         goal: '做完',
+        maxConcurrent: 4,
         nodes: [
           { id: 'a', kind: 'agent', agent: 'ad-hoc', task: '先做' },
           { id: 'review', kind: 'checkpoint', label: '当前会话审查', needs: ['a'] },
@@ -75,6 +76,7 @@ describe('workflow 调用判别', () => {
       call: {
         kind: 'start',
         goal: '做完',
+        maxConcurrent: 4,
         nodes: [{ id: 'a', kind: 'agent', agent: 'ad-hoc', task: '先做' }],
       },
     })
@@ -102,6 +104,38 @@ describe('workflow 调用判别', () => {
         revisions: [],
       }),
     ).toMatchObject({ ok: true, call: { kind: 'review', decision: 'approve' } })
+  })
+
+  test('工作流可声明并发与节点 provider/model，错误组合直接拒绝', () => {
+    expect(
+      parseWorkflowCall({
+        goal: '交叉模型复核',
+        maxConcurrent: 2,
+        nodes: [
+          {
+            id: 'critic',
+            task: '独立复核',
+            provider: 'deepseek',
+            model: 'deepseek-reasoner',
+          },
+        ],
+      }),
+    ).toMatchObject({
+      ok: true,
+      call: {
+        maxConcurrent: 2,
+        nodes: [{ provider: 'deepseek', model: 'deepseek-reasoner' }],
+      },
+    })
+    expect(
+      parseWorkflowCall({
+        goal: '错误配置',
+        nodes: [{ id: 'critic', task: '复核', provider: 'deepseek' }],
+      }),
+    ).toEqual({ ok: false, error: '节点 critic 指定 provider 时必须同时指定 model' })
+    expect(
+      parseWorkflowCall({ goal: '错误并发', maxConcurrent: 0, nodes: [{ id: 'a', task: '做' }] }),
+    ).toEqual({ ok: false, error: 'maxConcurrent 必须是正整数' })
   })
 
   test('兼容端把 nodes 与 revisions 再次 JSON 编码时只在结构入口解一层', () => {

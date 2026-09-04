@@ -122,11 +122,6 @@
   .panel-grip {
     display: none;
   }
-  /* 窄屏就一列，树和内容并排会各剩一半。内容占满，树让位——
-     要看树就把文件关掉（头上那颗 × 一直在）。 */
-  .file-browser > .file-tree-col:not(:only-child) {
-    display: none;
-  }
   .side-head {
     height: calc(var(--header-h) + var(--safe-top));
     padding-top: var(--safe-top);
@@ -168,13 +163,32 @@
      它的基准规则写在这个文件之后，写在这儿会被原样盖掉。 */
 }
 
-/* ── 任务清单 ──
-   住在右侧面板里。钉在会话流上方的话，同一件事被摊在三处说：
-   顶部卡片、输入区状态条、展开后的清单。这里按密度分层——状态条只报
-   「第 N / M 步」，完整清单要点开面板才看。 */
-.todo-panel {
-  padding: var(--s-3);
+/* 触屏端沿用同一套组件，但命中区域升到 44px；桌面鼠标端仍保持高密度。 */
+@media (max-width: 820px) and (pointer: coarse) {
+  :root {
+    --header-h: 48px;
+  }
+
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .preview-head .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .side-tab,
+  .workspace-tree-row,
+  .nav-item {
+    min-height: 44px;
+  }
 }
+
+/* ── 任务清单 ──
+   完整清单在 `write_todos` 卡、每轮读数条的展开区与子会话详情中渲染；
+   研究流程不重复展示。 */
 .todo-list {
   list-style: none;
   margin: 0;

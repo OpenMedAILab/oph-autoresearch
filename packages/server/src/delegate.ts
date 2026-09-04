@@ -130,9 +130,10 @@ export function makeDelegate(ctx: {
   /** 这一次用哪一对：点名了就解析它，没点名就继承父会话。 */
   const pick = (
     named?: string,
+    provider?: string,
   ): { explicit: ModelRef } | { inherit: ModelRef } | Record<string, never> | { error: string } => {
     if (named) {
-      const r = resolveModel(named, deps.config)
+      const r = resolveModel(provider ? `${provider}/${named}` : named, deps.config)
       return 'error' in r ? r : { explicit: r }
     }
     const pair = inherited()
@@ -331,10 +332,12 @@ export function makeDelegate(ctx: {
       const workflowId = input.call.kind === 'start' ? input.stepId : input.call.workflowId
       let goal: string
       let nodes: WorkflowNode[]
+      let requestedMaxConcurrent: number
       let state: OrchestratorState
       if (input.call.kind === 'start') {
         goal = input.call.goal
         nodes = input.call.nodes
+        requestedMaxConcurrent = input.call.maxConcurrent
         state = {}
       } else {
         const folded = foldWorkflow(workflowRecords(input.stepId), workflowId)
@@ -354,6 +357,7 @@ export function makeDelegate(ctx: {
         }
         goal = projection.goal
         nodes = projection.nodes
+        requestedMaxConcurrent = projection.maxConcurrent
         state = {
           results: projection.results,
           approvals: projection.approvals,
@@ -366,6 +370,9 @@ export function makeDelegate(ctx: {
           },
         }
       }
+      // workflow 声明的是期望值，team.json 的规则是项目管理员硬上限。
+      const hardLimit = rules?.maxConcurrent ?? requestedMaxConcurrent
+      const effectiveMaxConcurrent = Math.min(requestedMaxConcurrent, hardLimit)
       const orchestrator = new TeamOrchestrator(
         // 临时子 agent 排在用户的角色**后面**：同 id 时先找到的是用户那条，
         // 用户定义的那一份盖过内置的默认。
@@ -375,6 +382,7 @@ export function makeDelegate(ctx: {
           signal: input.signal,
           secrets: collectSecrets(deps.config),
           runId: input.runId as RunId,
+          maxConcurrent: effectiveMaxConcurrent,
           resolveCli: (id) => clis.find((c) => c.id === id),
           // 进度带上 stepId：前端按它认领是哪一张图卡。不带的话事件到了也无处可落。
           emit: (ev: AgentEvent) =>
@@ -385,7 +393,7 @@ export function makeDelegate(ctx: {
               conversationId,
             ),
           runBuiltin: async (member) => {
-            const picked = pick(member.model)
+            const picked = pick(member.model, member.provider)
             if ('error' in picked) return { ok: false, output: '', error: picked.error }
             if (member.existingConversationId) {
               const parent = getConversation(deps.store, conversationId)
