@@ -290,6 +290,7 @@ export function makeDelegate(ctx: {
           {
             deps,
             workspaceRoot,
+            parentConversationId: conversationId,
             ...picked,
             onConversation: (cid) => {
               // 先落账再广播。用户此刻切走父会话会错过广播，但切回来从同一条 step
@@ -403,7 +404,8 @@ export function makeDelegate(ctx: {
                 !child ||
                 child.workspaceId !== parent.workspaceId ||
                 child.source !== 'workflow' ||
-                child.sourceRef !== member.role.id
+                child.sourceRef !== member.role.id ||
+                child.parentConversationId !== conversationId
               ) {
                 return {
                   ok: false,
@@ -415,6 +417,7 @@ export function makeDelegate(ctx: {
             return runBuiltinMember(member, {
               deps,
               workspaceRoot,
+              parentConversationId: conversationId,
               ...picked,
               ...(member.onConversation ? { onConversation: member.onConversation } : {}),
               // 子会话的事件按**它自己的会话 id** 发。这条与上面那个 `emit` 不是一回事：

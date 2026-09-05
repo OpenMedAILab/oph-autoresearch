@@ -25,6 +25,7 @@ import { handlePairingApi } from './pairing.ts'
 import { handlePluginsApi } from './plugins.ts'
 import { handleProbeApi } from './probe.ts'
 import { handleProviderModelsApi } from './provider-models.ts'
+import { handleResearchApi } from './research.ts'
 import { handleSchedulesApi } from './schedules.ts'
 import { handleSshApi } from './ssh.ts'
 import { handleTeamApi } from './team.ts'
@@ -73,6 +74,7 @@ const HANDLERS: ApiHandler[] = [
   handlePluginsApi,
   handleTeamApi,
   handleUsageApi,
+  handleResearchApi,
   handleConversationsApi,
   handleWorkspaceFsApi,
   handleGitApi,

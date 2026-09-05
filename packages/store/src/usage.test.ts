@@ -1,11 +1,23 @@
 import { describe, expect, test } from 'bun:test'
 import { Store } from './db.ts'
 import {
+  createConversation,
+  createRun,
+  openProviderRequest,
+  settleProviderRequest,
+  upsertWorkspace,
+} from './repos.ts'
+import {
   pruneUsage,
   recordUsage,
+  summaryOutputPercentile,
   type UsageEntry,
   usageBy,
+  usageDaily,
+  usageDailyByModel,
   usageEntries,
+  usageLongestRunMs,
+  usageStreaks,
   usageTotals,
 } from './usage.ts'
 
@@ -331,5 +343,172 @@ describe('按会话结账', () => {
     recordUsage(store, entry({ conversationId: 'cv_c', runId: 'run_9', cacheWriteTokens: 7 }))
     expect(usageTotals(store, { conversationId: 'cv_c' }).cacheWriteTokens).toBe(7)
     store.close()
+  })
+})
+
+describe('摘要长度统计', () => {
+  test('已回报的 in-run summary 请求与手动账本摘要各算一次样本', () => {
+    const store = fresh()
+    const workspace = upsertWorkspace(store, '/tmp/summary-percentile', 'summary-percentile')
+    const conversation = createConversation(store, {
+      workspaceId: workspace.id,
+      provider: 'p',
+      model: 'm',
+    })
+    const run = createRun(store, {
+      conversationId: conversation.id,
+      workspaceId: workspace.id,
+      model: 'm',
+      clientRequestId: 'summary-percentile',
+      userMessageId: null,
+      messageIdUpperBound: null,
+      contextSnapshot: [],
+    })
+    const request = openProviderRequest(store, {
+      runId: run.id,
+      turnIndex: 0,
+      retryIndex: 0,
+      purpose: 'summary',
+      model: 'm',
+      measuredInputTokens: 1,
+      sentCategories: {} as never,
+      omittedCategories: {} as never,
+      payloadHash: 'summary-percentile',
+    })
+    settleProviderRequest(store, request.id, 'received', {
+      inputTokens: 1,
+      outputTokens: 300,
+      cachedTokens: null,
+      cacheWriteTokens: null,
+    })
+    recordUsage(
+      store,
+      entry({ kind: 'summary', workspaceId: workspace.id, outputTokens: 100, runId: null }),
+    )
+
+    expect(summaryOutputPercentile(store, workspace.id, 0)).toBe(100)
+    expect(summaryOutputPercentile(store, workspace.id, 0.99)).toBe(300)
+    store.close()
+  })
+})
+
+describe('使用统计（逐日序列与连续天数）', () => {
+  const DAY = 86_400_000
+
+  /**
+   * 与 SQL 的 localtime 分组同口径：本地日 'YYYY-MM-DD'。
+   *
+   * **不能只用 `new Date(ts)`**：`bun test` 进程里 JS 的 Date 走 UTC，而 SQLite 的
+   * localtime 按系统时区（Windows 上 TZ 环境变量不生效）——东八区 0–8 点之间两个
+   * 口径差一天，这类测试在那几小时必红。偏移从 SQLite 自己探，探到的是系统真实时区。
+   */
+  let systemOffsetMs: number | null = null
+  function localDate(ts: number): string {
+    if (systemOffsetMs === null) systemOffsetMs = probeSystemOffsetMs()
+    const d = new Date(ts + systemOffsetMs)
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${d.getFullYear()}-${m}-${day}`
+  }
+
+  function probeSystemOffsetMs(): number {
+    const probe = fresh()
+    const row = probe.db
+      .query("SELECT strftime('%s','now','localtime') - strftime('%s','now','utc') AS off")
+      .get() as { off: number | null }
+    probe.close()
+    return Math.round((row.off ?? 0) * 1000)
+  }
+
+  test('逐日总量含缓存命中，本地日分组', () => {
+    const s = fresh()
+    const now = Date.now()
+    recordUsage(s, entry({ occurredAt: now, inputTokens: 100, outputTokens: 50, cachedTokens: 10 }))
+    recordUsage(s, entry({ occurredAt: now, inputTokens: 1, outputTokens: 2, cachedTokens: null }))
+    recordUsage(
+      s,
+      entry({ occurredAt: now - DAY, inputTokens: 7, outputTokens: 0, cachedTokens: 3 }),
+    )
+    const daily = usageDaily(s)
+    expect(daily).toEqual([
+      { date: localDate(now - DAY), tokens: 10 },
+      { date: localDate(now), tokens: 163 },
+    ])
+    s.close()
+  })
+
+  test('逐日分模型：同一日多模型各自成行', () => {
+    const s = fresh()
+    const now = Date.now()
+    recordUsage(
+      s,
+      entry({
+        occurredAt: now,
+        model: 'model-a',
+        inputTokens: 40,
+        outputTokens: 0,
+        cachedTokens: null,
+      }),
+    )
+    recordUsage(
+      s,
+      entry({
+        occurredAt: now,
+        model: 'model-b',
+        inputTokens: 1,
+        outputTokens: 2,
+        cachedTokens: null,
+      }),
+    )
+    const rows = usageDailyByModel(s)
+    expect(rows).toEqual([
+      { date: localDate(now), model: 'model-a', tokens: 40 },
+      { date: localDate(now), model: 'model-b', tokens: 3 },
+    ])
+    s.close()
+  })
+
+  test('最长单轮时长取 finished_at - created_at，未跑完的不算', () => {
+    const s = fresh()
+    s.db.exec(
+      "INSERT INTO workspaces (id, name, root_path, last_opened_at, created_at) VALUES ('ws_1', 'w', '/w', 0, 0)",
+    )
+    s.db.exec(
+      `INSERT INTO conversations (id, workspace_id, title, model, cache_generation, created_at, updated_at)
+       VALUES ('cv_1', 'ws_1', '', 'm', 0, 0, 0)`,
+    )
+    const run = (id: string, created: number, finished: number | null) => {
+      s.db
+        .query(
+          `INSERT INTO runs (id, conversation_id, workspace_id, model, client_request_id, status,
+                             created_at, finished_at)
+           VALUES (?, 'cv_1', 'ws_1', 'm', ?,
+                   ?, ?, ?)`,
+        )
+        .run(id, `${id}-c`, finished === null ? 'running' : 'done', created, finished)
+    }
+    run('run_1', 1_000, 61_000)
+    run('run_2', 5_000, 25_000)
+    run('run_3', 1_000, null)
+    expect(usageLongestRunMs(s)).toBe(60_000)
+    s.close()
+  })
+
+  test('连续天数：今天没数据按昨天锚定，断开归零', () => {
+    const now = Date.now()
+    const d0 = localDate(now)
+    const d1 = localDate(now - DAY)
+    const d2 = localDate(now - 2 * DAY)
+    const d5 = localDate(now - 5 * DAY)
+    const d6 = localDate(now - 6 * DAY)
+
+    expect(usageStreaks([])).toEqual({ current: 0, longest: 0 })
+    // today 与 localDate 同口径（SQL 探出的系统本地日）。
+    const today = localDate(Date.now())
+    // 今天 + 昨天 + 前天 + 5 天前 + 6 天前：当前 3 天（断在 4 天前），最长 3 天。
+    expect(usageStreaks([d5, d0, d2, d1, d6], today)).toEqual({ current: 3, longest: 3 })
+    // 没有今天的记录时，昨天开始数；昨天也没有就断。
+    expect(usageStreaks([d1, d2], today)).toEqual({ current: 2, longest: 2 })
+    expect(usageStreaks([d5, d6], today)).toEqual({ current: 0, longest: 2 })
   })
 })

@@ -18,6 +18,7 @@ import type {
   ProviderRequest,
   ProviderRequestDiagnostic,
   ProviderRequestId,
+  ProviderRequestPurpose,
   ProviderRequestStatus,
   Run,
   RunContextSegment,
@@ -242,11 +243,14 @@ export function createConversation(
     title?: string
     source?: Conversation['source']
     sourceRef?: string
+    parentConversationId?: ConversationId
+    /** 显式 id。只有种子/测试需要固定 id 做引用；正常运行不传，用生成器。 */
+    id?: string
   },
 ): Conversation {
   const now = Date.now()
   const conv: Conversation = {
-    id: newConversationId(),
+    id: (input.id ?? newConversationId()) as ConversationId,
     workspaceId: input.workspaceId,
     title: input.title ?? '',
     provider: input.provider,
@@ -255,14 +259,15 @@ export function createConversation(
     cacheGeneration: 0,
     source: input.source ?? null,
     sourceRef: input.sourceRef ?? null,
+    parentConversationId: input.parentConversationId ?? null,
     createdAt: now,
     updatedAt: now,
   }
   store.db
     .query(
       `INSERT INTO conversations
-       (id, workspace_id, title, provider, model, compaction_manifest, cache_generation, source, source_ref, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+       (id, workspace_id, title, provider, model, compaction_manifest, cache_generation, source, source_ref, created_at, updated_at, parent_conversation_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       conv.id,
@@ -276,6 +281,7 @@ export function createConversation(
       conv.sourceRef,
       now,
       now,
+      conv.parentConversationId,
     )
   return conv
 }
@@ -285,6 +291,19 @@ export function getConversation(store: Store, id: ConversationId): Conversation 
     .query<ConversationRow, [string]>('SELECT * FROM conversations WHERE id = ?')
     .get(id)
   return row ? rowToConversation(row) : null
+}
+
+/** The same descendant set that parent_conversation_id's DELETE CASCADE removes. */
+export function conversationTreeIds(store: Store, id: ConversationId): ConversationId[] {
+  return store.db
+    .query<{ id: ConversationId }, [string]>(
+      `WITH RECURSIVE descendants(id) AS (
+      SELECT id FROM conversations WHERE id = ?
+      UNION SELECT c.id FROM conversations c JOIN descendants d ON c.parent_conversation_id = d.id
+    ) SELECT id FROM descendants`,
+    )
+    .all(id)
+    .map((row) => row.id)
 }
 
 /**
@@ -1097,6 +1116,8 @@ export function openProviderRequest(
     runId: RunId
     turnIndex: number
     retryIndex: number
+    /** Omitted by existing callers: a normal model turn. */
+    purpose?: ProviderRequestPurpose
     providerName?: string
     providerKind?: ProviderKind
     model: string
@@ -1113,6 +1134,7 @@ export function openProviderRequest(
     runId: input.runId,
     turnIndex: input.turnIndex,
     retryIndex: input.retryIndex,
+    purpose: input.purpose ?? 'turn',
     providerName: input.providerName ?? null,
     providerKind: input.providerKind ?? null,
     model: input.model,
@@ -1140,17 +1162,18 @@ export function openProviderRequest(
   store.db
     .query(
       `INSERT INTO provider_requests
-       (id, run_id, turn_index, retry_index, provider_name, provider_kind, model, status, measured_input_tokens,
+       (id, run_id, turn_index, retry_index, purpose, provider_name, provider_kind, model, status, measured_input_tokens,
         provider_input_tokens, provider_output_tokens, provider_cached_tokens, provider_cache_write_tokens,
         sent_categories, omitted_categories, error_code, payload_hash, request_bytes, cache_route_fingerprint,
         sent_at, first_event_at, first_content_at, completed_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?,NULL,?,?,?,NULL,NULL,NULL,NULL,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?,NULL,?,?,?,NULL,NULL,NULL,NULL,?)`,
     )
     .run(
       row.id,
       row.runId,
       row.turnIndex,
       row.retryIndex,
+      row.purpose,
       row.providerName,
       row.providerKind,
       row.model,
@@ -1251,7 +1274,7 @@ export function latestSentProviderRequest(
     .query<ProviderRequestRow, [string]>(
       `SELECT pr.* FROM provider_requests pr
        JOIN runs r ON r.id = pr.run_id
-       WHERE r.conversation_id = ? AND pr.sent_at IS NOT NULL
+       WHERE r.conversation_id = ? AND pr.purpose = 'turn' AND pr.sent_at IS NOT NULL
        ORDER BY pr.sent_at DESC, pr.id DESC
        LIMIT 1`,
     )
@@ -1273,7 +1296,7 @@ export function latestAnchoredProviderRequest(
     .query<ProviderRequestRow, [string]>(
       `SELECT pr.* FROM provider_requests pr
        JOIN runs r ON r.id = pr.run_id
-       WHERE r.conversation_id = ? AND pr.provider_input_tokens IS NOT NULL
+       WHERE r.conversation_id = ? AND pr.purpose = 'turn' AND pr.provider_input_tokens IS NOT NULL
        ORDER BY pr.sent_at DESC, pr.id DESC
        LIMIT 1`,
     )
@@ -1296,6 +1319,7 @@ function rowToProviderRequest(r: ProviderRequestRow): ProviderRequest {
     runId: r.run_id,
     turnIndex: r.turn_index,
     retryIndex: r.retry_index,
+    purpose: r.purpose,
     providerName: r.provider_name,
     providerKind: r.provider_kind,
     model: r.model,
@@ -1548,6 +1572,7 @@ function rowToConversation(r: ConversationRow): Conversation {
     cacheGeneration: r.cache_generation,
     source: r.source,
     sourceRef: r.source_ref,
+    parentConversationId: r.parent_conversation_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }

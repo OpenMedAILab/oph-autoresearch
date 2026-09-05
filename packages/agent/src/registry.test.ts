@@ -11,6 +11,10 @@
 
 import { describe, expect, test } from 'bun:test'
 import {
+  decideResearchCapability,
+  RESTRICTED_RESEARCH_CAPABILITY_DENIED,
+} from '@oph-autoresearch/core'
+import {
   resolveAction,
   sanitizeToolName,
   TOOL_NAME_PATTERN,
@@ -64,6 +68,76 @@ describe('执行入口 fail-closed', () => {
       message: '未注册调用：missing_tool',
       errorKind: 'unregistered_tool_call',
     })
+  })
+
+  test('restricted clinical boundary rejects before any tool-derived behavior', async () => {
+    const registry = new ToolRegistry()
+    let actionCalls = 0
+    let permissionCalls = 0
+    let toolCalls = 0
+    registry.register({
+      ...spec('mcp__alias__shell'),
+      actionKind: () => {
+        actionCalls++
+        return 'run'
+      },
+      permissionEffect: () => {
+        permissionCalls++
+        return 'execute'
+      },
+      targetExtractor: () => {
+        permissionCalls++
+        return 'canary-target'
+      },
+      fn: async () => {
+        toolCalls++
+        return { status: 'success', message: 'canary-result' }
+      },
+    })
+    const out = await registry.execute(
+      'mcp__alias__shell',
+      { command: 'canary-argument', mode: 'full' },
+      {
+        researchBoundary: 'restricted-clinical',
+        requestPermission: async () => {
+          permissionCalls++
+          return true
+        },
+      } as unknown as ToolContext,
+    )
+    expect(out).toEqual({
+      status: 'failure',
+      executed: false,
+      message: RESTRICTED_RESEARCH_CAPABILITY_DENIED,
+      errorKind: 'research_boundary_denied',
+    })
+    expect(actionCalls).toBe(0)
+    expect(permissionCalls).toBe(0)
+    expect(toolCalls).toBe(0)
+    expect(JSON.stringify(out)).not.toContain('canary')
+    const unknown = await registry.execute(
+      'plugin__canary__raw_file',
+      { secret: 'canary-unknown-argument' },
+      { researchBoundary: 'restricted-clinical' } as ToolContext,
+    )
+    expect(unknown).toEqual({
+      status: 'failure',
+      executed: false,
+      message: RESTRICTED_RESEARCH_CAPABILITY_DENIED,
+      errorKind: 'research_boundary_denied',
+    })
+    expect(JSON.stringify(unknown)).not.toContain('canary')
+  })
+
+  test('standard boundary leaves registered tools unchanged', async () => {
+    const registry = new ToolRegistry()
+    registry.register(spec('read_file'))
+    const out = await registry.execute('read_file', {}, {
+      researchBoundary: 'standard',
+      requestPermission: async () => true,
+    } as unknown as ToolContext)
+    expect(out).toMatchObject({ status: 'success', executed: true, message: 'ok' })
+    expect(decideResearchCapability('standard', 'tool-execution')).toEqual({ allowed: true })
   })
 })
 

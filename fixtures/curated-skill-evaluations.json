@@ -1,0 +1,369 @@
+[
+  {
+    "schema": "static-skill-pre-admission-v1",
+    "source": {
+      "repository": "https://github.com/K-Dense-AI/scientific-agent-skills",
+      "commit": "1e5eeffbdad3749125afe7ab48a39694e27f181c",
+      "path": "skills/hypothesis-generation/SKILL.md",
+      "contentHash": "sha256:8153fdc33e0a4cd012109931c6a822c0e0afe206769e1af3e7a3d07ea37e1137",
+      "gitBlobHash": "905ccdcc1e4d0460698b211a52b1994fae2e7b78",
+      "byteLength": 15725,
+      "license": "MIT"
+    },
+    "decision": "rejected-until-reviewed",
+    "executionEnabled": false,
+    "dependencyClosureReviewed": false,
+    "behaviorEvaluated": false,
+    "findings": [
+      {
+        "code": "dependency-closure-unreviewed",
+        "line": null,
+        "lineHash": null
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 107,
+        "lineHash": "sha256:c9058551d442a15d67b9fbe40151d32ef200ccc573afe83710dcd84999a6879d"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 146,
+        "lineHash": "sha256:fe4c9f689f1d4e3ff9cb38016a50404e8ee83ac9cee2f114234e962e923234fa"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 161,
+        "lineHash": "sha256:213c6544556aaf88cfae21f18b04313f1896b69ad58bb6aba213384897e5c403"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 179,
+        "lineHash": "sha256:17248276e8eb843dbe40423e4b41da87b039cca2ea91b8bd168d9cd9a0cfe4c7"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 196,
+        "lineHash": "sha256:9a6c3e799919017658813b10ed877b648233c7c7f6e05a12da2b7a11ebfc3a99"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 211,
+        "lineHash": "sha256:a2e9d05f893e04f02f23c8ea8c1f39cc5525adaaccc60756897b9dc37e28c62b"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 241,
+        "lineHash": "sha256:0ed8abeed703bbeb2103825b20e6850af9d1e682ee288291b4ce5499b5d330b4"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 241,
+        "lineHash": "sha256:0ed8abeed703bbeb2103825b20e6850af9d1e682ee288291b4ce5499b5d330b4"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 242,
+        "lineHash": "sha256:e52d4435df8eee8bd101fe7b8c1970efb6793695213969c4cd0bcbc9e6a376c1"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 242,
+        "lineHash": "sha256:e52d4435df8eee8bd101fe7b8c1970efb6793695213969c4cd0bcbc9e6a376c1"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 243,
+        "lineHash": "sha256:02562a97ccc3871ed48aea681452fdfe960f492827350678253c2a7d3fc80e27"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 243,
+        "lineHash": "sha256:02562a97ccc3871ed48aea681452fdfe960f492827350678253c2a7d3fc80e27"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 244,
+        "lineHash": "sha256:f1d2b3d8b8d328656f0f2ba33f27ba3e755adf683fe4e84e0ef1506786a15b2b"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 245,
+        "lineHash": "sha256:53f41cde8c294a9460f82bfc4cf7861749c90289670b3109fae369f487c0ce27"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 245,
+        "lineHash": "sha256:53f41cde8c294a9460f82bfc4cf7861749c90289670b3109fae369f487c0ce27"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 246,
+        "lineHash": "sha256:f7c22e5fb3f9fa1b32218593dd41791c68a92d76d260afeba6024b175b07ed86"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 246,
+        "lineHash": "sha256:f7c22e5fb3f9fa1b32218593dd41791c68a92d76d260afeba6024b175b07ed86"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 247,
+        "lineHash": "sha256:5585567cb7c4caa429caa19c819455dc808883b4bbe6166c9c2ab0e3e14677c5"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 247,
+        "lineHash": "sha256:5585567cb7c4caa429caa19c819455dc808883b4bbe6166c9c2ab0e3e14677c5"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 249,
+        "lineHash": "sha256:2dc6c6e12957b2f51e54485241816221c4f7eb833122a1e65b9209ee061e4225"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 253,
+        "lineHash": "sha256:780a302768f39e2fc5e80458fd9731f32a7f3a131a51020f5bf3da08c709afba"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 254,
+        "lineHash": "sha256:b4d267a5d8de904e45ec492564737d538c0cc8d0a87074bba62e39bdd4bcccbf"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 255,
+        "lineHash": "sha256:6cbc89733c10553174b04b692f6ec0c2a2d79a25985d0dcf8c3f350f7b95d289"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 256,
+        "lineHash": "sha256:6ce812940d727a18fa8a4f8798d1070ea8a99a1e10fe986e5182e3632bc3b0e5"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 257,
+        "lineHash": "sha256:8feabe274bf2d0c8d89fc86eda042fd431b9fdeba53f5d96b337bae15cf4d5c2"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 258,
+        "lineHash": "sha256:4c712fed2bc1935cf19e7943e9ae2f0ca066248cbe3e7c1f7ab0788b2e16f1d1"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 259,
+        "lineHash": "sha256:3b8cd260bf006fca69dec76cca258df756a3683f14ba85cc1055fd3cf5d65c5a"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 260,
+        "lineHash": "sha256:9d8e1bf31137b6b2ae078a811ebc6e91759ad8fea045aa475e4678d37efbcc1d"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 261,
+        "lineHash": "sha256:39e62c62653ed2fc5be4d3eb941220b20a4c93468850ba87e3bff7f874a1fc4c"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 262,
+        "lineHash": "sha256:21565fb159d0ba24fe31a7a2f28e5354f79169aa8082e00d9fc9af778ae0f851"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 264,
+        "lineHash": "sha256:d860c1352b223afcf5b4f55bc5bd417e9ca136c79513b87b6866375a53239cf0"
+      }
+    ],
+    "reportHash": "sha256:84296e32bd1aedd79bda26f318c876c30779a8af9038c8b39bea222b5553d427"
+  },
+  {
+    "schema": "static-skill-pre-admission-v1",
+    "source": {
+      "repository": "https://github.com/K-Dense-AI/scientific-agent-skills",
+      "commit": "1e5eeffbdad3749125afe7ab48a39694e27f181c",
+      "path": "skills/statistical-analysis/SKILL.md",
+      "contentHash": "sha256:1b1d63fd667ef454a8e0cadf32457a511883d3308dcc79c47c48bc565d9a23f7",
+      "gitBlobHash": "6f6d0fa886b5f5825618af731ca77e76daea4a24",
+      "byteLength": 20915,
+      "license": "MIT"
+    },
+    "decision": "rejected-until-reviewed",
+    "executionEnabled": false,
+    "dependencyClosureReviewed": false,
+    "behaviorEvaluated": false,
+    "findings": [
+      {
+        "code": "dependency-closure-unreviewed",
+        "line": null,
+        "lineHash": null
+      },
+      {
+        "code": "dependency-install-not-reviewed",
+        "line": 35,
+        "lineHash": "sha256:1d97b0aad6406d7d13ddfa3e0e2b2df684e050096d8e081ca431f2d044857779"
+      },
+      {
+        "code": "dependency-install-not-reviewed",
+        "line": 38,
+        "lineHash": "sha256:b486fee98e68d8cb55cc5754dc90e734809c5a4b22bb1a4f258e581832d805db"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 58,
+        "lineHash": "sha256:3a5709632c28d609eee3a219c6db0a238234f4de9504b68c25f8d0d287fafe9b"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 59,
+        "lineHash": "sha256:db1ca225d4687b9923a8ef6acdb6e79b41e4bc658ea6fdacbc86ea4d0da82171"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 71,
+        "lineHash": "sha256:854b6923a656ada66e7a52db7df6d40a63f4de1e277df9e110df819e395bd4ad"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 92,
+        "lineHash": "sha256:16e68c303ea75f9623e2653d2927e040f3ffd8066139269063c9b497856d10da"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 100,
+        "lineHash": "sha256:921f9059a5fce782173b5d0ce757c3f4ed439c1896a12590d80037506ebf9541"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 146,
+        "lineHash": "sha256:e6da7db942a4f7303eaf21a167dbc721e1e7c7d8a92483c0c5e0fa0978e1ca37"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 251,
+        "lineHash": "sha256:b045602983fee4d2445f56024cc7eb1b07e27c29f14ab335389e81cd474de2e4"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 336,
+        "lineHash": "sha256:61497aeb0b237ca7ee7f1a01055eea2d8029c2f79bfd24b250944c302cc603e3"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 342,
+        "lineHash": "sha256:70ec6da795c017db83a01f19293995b18d647d25333d5250fda2f613a1bb7883"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 411,
+        "lineHash": "sha256:3883f5d5c818889adda315343334649922233b9a9cb3609c2501c21c6ecb2b1d"
+      }
+    ],
+    "reportHash": "sha256:e8795c48253ea9f36612b995393834f989e16e7a5f7f151806d9324046622f9d"
+  },
+  {
+    "schema": "static-skill-pre-admission-v1",
+    "source": {
+      "repository": "https://github.com/K-Dense-AI/scientific-agent-skills",
+      "commit": "1e5eeffbdad3749125afe7ab48a39694e27f181c",
+      "path": "skills/literature-review/SKILL.md",
+      "contentHash": "sha256:950a6d0863ef657523813b985fe86599ac6bb99b695eee5953612d7e20c78011",
+      "gitBlobHash": "2f85676f1a06fd71d7f9c6ebfa6d2670c099a2e1",
+      "byteLength": 13659,
+      "license": "MIT"
+    },
+    "decision": "rejected-until-reviewed",
+    "executionEnabled": false,
+    "dependencyClosureReviewed": false,
+    "behaviorEvaluated": false,
+    "findings": [
+      {
+        "code": "dependency-closure-unreviewed",
+        "line": null,
+        "lineHash": null
+      },
+      {
+        "code": "declared-tools-not-granted",
+        "line": 4,
+        "lineHash": "sha256:e117b1824f9073d4ac4b65ad36f1e8201a7127456272a304f83c2ffa1e779526"
+      },
+      {
+        "code": "external-credential-required",
+        "line": 10,
+        "lineHash": "sha256:9cacbc00305ede6d49aced109f2396ca7391dbd680a8413a2bb6dab15bec7b6a"
+      },
+      {
+        "code": "external-credential-required",
+        "line": 12,
+        "lineHash": "sha256:b143478e7ff43b831e2c782a63750a57dfe8e25f05a681dbfd6c704bd6de3b7b"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 51,
+        "lineHash": "sha256:ccca0beeedc4848a939dbc0cd00261e4ba1a901090170ff30b9cedb57860e1a1"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 76,
+        "lineHash": "sha256:66d3be8f839fb3fd09ea168b8f6a3e0cac0374b6d4eb42fd07b5df6f3ed782ff"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 90,
+        "lineHash": "sha256:3c66548e1495a449d36d9a8738c9bc4a38c19b16fed0835ab37a8a3a362f3591"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 91,
+        "lineHash": "sha256:b810cde6d16e8d15529176688613e828e717d443e524f2e73d6197afc9df72b9"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 191,
+        "lineHash": "sha256:347d6cfdd29afcfff9bba48e1c97ff39a19c4e57495c2d923bdf856c0247cd47"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 192,
+        "lineHash": "sha256:2e8b5a07dd6f03ce47cc0e7067024329ae7b871c17383cc241a0e39537d057b6"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 193,
+        "lineHash": "sha256:18000694c6863bd106b18834145a22fee692d490165104f7806dd1819691c8a7"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 196,
+        "lineHash": "sha256:885b38e168ad677a607b81d193a4fa8fcddb36b4984a42d97b5d86846319f4ae"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 197,
+        "lineHash": "sha256:618c39a2e4af6994a1b71a36b5baf107e2b86ebd8bb593b3ffbd3d3e561986ed"
+      },
+      {
+        "code": "referenced-support-file-not-reviewed",
+        "line": 200,
+        "lineHash": "sha256:722d1cc7b0b2b291a1dde4f0998f1a60b033a596e9784c0f901300fb833c5b8f"
+      },
+      {
+        "code": "remote-shell-pipeline-not-reviewed",
+        "line": 224,
+        "lineHash": "sha256:fa29547c089bc7beb327dcb2404163a2965a179afc855cdf21fa3340815ab71b"
+      },
+      {
+        "code": "dependency-install-not-reviewed",
+        "line": 231,
+        "lineHash": "sha256:60fbe286a81661626a84d19531049c35578b5be2c35e7fa827cd53d3cae93d11"
+      },
+      {
+        "code": "referenced-script-not-reviewed",
+        "line": 247,
+        "lineHash": "sha256:a6118a581412259e170535b1c100da362c7ab5b174c9858e86f4fc70db7ffffa"
+      }
+    ],
+    "reportHash": "sha256:27f838f7acea52a1711bdbb483bce505f930e4478d14c96e05a6d9e232e50133"
+  }
+]

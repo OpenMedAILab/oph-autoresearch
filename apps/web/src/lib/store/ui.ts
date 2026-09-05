@@ -5,6 +5,7 @@
  * 混进业务 store 只会让每次事件推送都要绕过大量与服务端无关的字段。
  */
 
+import type { Attachment } from '@oph-autoresearch/core'
 import { createSignal } from 'solid-js'
 import { isDesktopShell, tauriInvoke } from './shell.ts'
 
@@ -458,20 +459,24 @@ export interface WorkspaceInfo {
 export const [workspace, setWorkspace] = createSignal<WorkspaceInfo | null>(null)
 
 /**
- * 工作区相对路径 → **本机绝对路径**。
+ * 输入框草稿：正文与待发附件。
  *
- * 分隔符跟着项目根走：根用反斜杠就拼反斜杠，用斜杠就拼斜杠。后端一律回 posix
- * 风格的相对路径（`server/files.ts` 的 `toPosix`），直接拼出来的混合写法
- * （`C:\ws/src/a.ts`）复制到别处用不了。
+ * **必须放在模块级，不能长在 `Composer` 组件里。** 中央视图一切换（文件、SSH、
+ * 流程详情），`App.tsx` 的 `<Switch>` 就把整个 Composer 卸载——草稿是组件内部
+ * 信号的话，切出去看一眼再回来就是空的。这里与 store 同生命周期，组件重挂后
+ * 接着用同一份。
  *
- * 一处定义：文件视图的标题栏和右键菜单的「复制路径」必须拼出同一个字符串，
- * 各写一遍必然分叉。
+ * 生命周期是「这一次打开」：换会话、换项目都保留（Composer 常驻时本来就是这样，
+ * 附件也随发送条目归属原会话）。正文的唯一权威就是 `composerDraft`——
+ * `composerSeed` 只是设置页递进来的起手指令，读到就写进草稿并清空自己。
  */
-/**
- * 投递给输入框的一条起手指令。
+export const [composerDraft, setComposerDraft] = createSignal('')
+export const [composerAttachments, setComposerAttachments] = createSignal<Attachment[]>([])
+
+/** 投递给输入框的一条起手指令。
  *
- * **一次性，不是第二份正文。** `Composer` 读到就写进自己的 `text`、聚焦、随即把这里
- * 清空。正文的唯一权威始终是 `Composer` 内部那个 `text`——不要拿这个信号当
+ * **一次性，不是第二份正文。** `Composer` 读到就写进 `composerDraft`、聚焦、随即把这里
+ * 清空。正文的唯一权威始终是 `composerDraft`——不要拿这个信号当
  * 「输入框现在是什么」来读，它绝大多数时候是 `null`。
  *
  * 用途：设置页里那些「新增」按钮。建一条记忆 / 一个技能 / 一个定时任务，靠面板里填
@@ -484,6 +489,17 @@ export function askInChat(prompt: string): void {
   closeSettings()
   setComposerSeed(prompt)
 }
+
+/**
+ * 工作区相对路径 → **本机绝对路径**。
+ *
+ * 分隔符跟着项目根走：根用反斜杠就拼反斜杠，用斜杠就拼斜杠。后端一律回 posix
+ * 风格的相对路径（`server/files.ts` 的 `toPosix`），直接拼出来的混合写法
+ * （`C:\ws/src/a.ts`）复制到别处用不了。
+ *
+ * 一处定义：文件视图的标题栏和右键菜单的「复制路径」必须拼出同一个字符串，
+ * 各写一遍必然分叉。
+ */
 export function absPath(rel: string): string {
   const root = workspace()?.root ?? ''
   if (!root) return rel

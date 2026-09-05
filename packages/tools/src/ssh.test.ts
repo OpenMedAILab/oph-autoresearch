@@ -1,8 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  clearSshCredential,
+  deleteSshEntry,
+  forgetSshRecentConnection,
+  loadSshCredential,
+  loadSshCredentials,
   loadSshProfiles,
   loadSshRecentConnections,
   normalizePrivateKey,
@@ -11,7 +16,9 @@ import {
   recordSshConnection,
   resolveSshPath,
   type SshProfile,
+  saveSshCredential,
   saveSshProfiles,
+  sshConfigPath,
 } from './ssh.ts'
 
 const profile: SshProfile = {
@@ -167,5 +174,103 @@ describe('SSH 配置', () => {
       if (previous === undefined) delete process.env.OPH_AUTORESEARCH_HOME
       else process.env.OPH_AUTORESEARCH_HOME = previous
     }
+  })
+})
+
+describe('SSH 保存凭证', () => {
+  const target = { host: 'gpu.example.org', username: 'researcher', port: 22 }
+
+  async function withTempHome(fn: () => Promise<void>): Promise<void> {
+    const previous = process.env.OPH_AUTORESEARCH_HOME
+    process.env.OPH_AUTORESEARCH_HOME = await mkdtemp(join(tmpdir(), 'oph-ssh-cred-'))
+    try {
+      await fn()
+    } finally {
+      if (previous === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+      else process.env.OPH_AUTORESEARCH_HOME = previous
+    }
+  }
+
+  test('保存、读取、清除走同一把键，用户名不同是另一把键', async () => {
+    await withTempHome(async () => {
+      await saveSshCredential(target, { mode: 'password', password: 's3cret' })
+      expect(await loadSshCredential(target)).toEqual({ mode: 'password', password: 's3cret' })
+      expect(await loadSshCredential({ host: target.host, port: target.port })).toBeUndefined()
+      await clearSshCredential(target)
+      expect(await loadSshCredential(target)).toBeUndefined()
+    })
+  })
+
+  test('坏凭证条目加载时丢弃，不影响其余', async () => {
+    await withTempHome(async () => {
+      await writeFile(
+        sshConfigPath(),
+        JSON.stringify({
+          profiles: [],
+          recentConnections: [],
+          credentials: {
+            good: { mode: 'password', password: 'ok' },
+            missing: { mode: 'password' },
+            wrongShape: { mode: 'password', password: 42 },
+            '': { mode: 'password', password: 'x' },
+          },
+        }),
+        'utf8',
+      )
+      const credentials = await loadSshCredentials()
+      expect(credentials).toEqual({ good: { mode: 'password', password: 'ok' } })
+    })
+  })
+
+  test('删除远程条目拒绝根目录本身', async () => {
+    await expect(deleteSshEntry({ ...profile, root: '/' }, '/')).rejects.toThrow('根目录')
+  })
+})
+
+describe('SSH 忘掉最近连接', () => {
+  const targetA = { host: 'gpu.example.org', username: 'researcher', port: 22 }
+  const targetB = { host: 'legacy.example.org', port: 2222 }
+
+  async function withTempHome(fn: () => Promise<void>): Promise<void> {
+    const previous = process.env.OPH_AUTORESEARCH_HOME
+    process.env.OPH_AUTORESEARCH_HOME = await mkdtemp(join(tmpdir(), 'oph-ssh-forget-'))
+    try {
+      await fn()
+    } finally {
+      if (previous === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+      else process.env.OPH_AUTORESEARCH_HOME = previous
+    }
+  }
+
+  test('删除目标条目并清除同一把键的凭证，不动其他条目', async () => {
+    await withTempHome(async () => {
+      await saveSshCredential(targetA, { mode: 'password', password: 's3cret' })
+      await saveSshCredential(targetB, { mode: 'private-key', privateKey: 'k' })
+      await recordSshConnection(targetA, {
+        authMode: 'password',
+        hostKeyPolicy: 'strict',
+        home: '/home/researcher',
+      })
+      await recordSshConnection(targetB, {
+        authMode: 'private-key',
+        hostKeyPolicy: 'strict',
+        home: '/srv/data',
+      })
+
+      const leftover = await forgetSshRecentConnection(targetA)
+      expect(leftover.map((item) => item.host)).toEqual([targetB.host])
+      expect(await loadSshCredential(targetA)).toBeUndefined()
+      expect(await loadSshCredential(targetB)).toEqual({ mode: 'private-key', privateKey: 'k' })
+      // 只删除条目时不牵连已保存数据目录。
+      expect(await loadSshProfiles()).toEqual([])
+    })
+  })
+
+  test('删除不存在的目标也是幂等成功的', async () => {
+    await withTempHome(async () => {
+      const leftover = await forgetSshRecentConnection(targetA)
+      expect(leftover).toEqual([])
+      expect(await loadSshCredential(targetA)).toBeUndefined()
+    })
   })
 })

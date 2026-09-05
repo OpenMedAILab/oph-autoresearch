@@ -1,3 +1,4 @@
+import type { ResearchRequestGuard } from './research-request-guard.ts'
 /**
  * 把 store / adapter / registry / loop 接成一个可执行的 run。
  *
@@ -22,6 +23,7 @@ import {
 } from '@oph-autoresearch/agent'
 import {
   buildAdapter,
+  type ChatRequest,
   type ContentBlock,
   computeCost,
   type LlmAdapter,
@@ -39,6 +41,7 @@ import type {
   EffortLevel,
   FollowUp,
   GoalWriteResult,
+  ResearchExecutionBoundary,
   RunId,
   RunInterruption,
   Step,
@@ -49,6 +52,7 @@ import {
   isInlineImage,
   isInlineVideo,
   mimeOf,
+  RESTRICTED_RESEARCH_CAPABILITY_DENIED,
   toPosixPath,
 } from '@oph-autoresearch/core'
 import {
@@ -64,6 +68,7 @@ import {
   finishRun,
   getConversation,
   getRun,
+  getWorkspace,
   latestAnchoredProviderRequest,
   latestTodos,
   listDisabledExtras,
@@ -112,6 +117,13 @@ import { RuntimeSink } from './sink.ts'
 import { buildHistory } from './transcript.ts'
 
 export interface SessionOptions {
+  researchRequestGuard?: ResearchRequestGuard
+  /** Logical campaign workspace; evidence-only execution still uses an isolated scratch root. */
+  researchWorkspaceId?: string
+  /** A fresh evidence-only research session: no workspace memories, extensions or unscoped tools. */
+  researchEvidenceOnly?: boolean
+  researchSkills?: ToolContextBase['researchSkills']
+  researchBoundary?: ResearchExecutionBoundary
   store: Store
   config: OphConfig
   workspaceRoot: string
@@ -187,9 +199,12 @@ export interface AskOptions {
    */
   source?: Conversation['source']
   sourceRef?: string
+  /** 新建编排成员会话所属的父会话；续跑已有会话时无效。 */
+  parentConversationId?: ConversationId
 }
 
 export class Session {
+  private readonly researchEvidenceOnly: boolean
   private readonly registry = new ToolRegistry()
   private readonly workspaceId: string
   private seqCounter = new Map<string, number>()
@@ -214,7 +229,13 @@ export class Session {
   private readonly extraDirs: string[]
 
   constructor(private readonly opts: SessionOptions) {
-    this.extraDirs = normalizeAdditionalDirectories(opts.config.additionalDirectories).dirs
+    this.researchEvidenceOnly = opts.researchEvidenceOnly === true
+    if (opts.researchBoundary !== undefined && opts.researchBoundary !== 'standard') {
+      throw new Error(RESTRICTED_RESEARCH_CAPABILITY_DENIED)
+    }
+    this.extraDirs = opts.researchEvidenceOnly
+      ? []
+      : normalizeAdditionalDirectories(opts.config.additionalDirectories).dirs
 
     // 派活与装插件都跟着各自的通道走：成员会话两条都拿不到，因此它那边既没有
     // `subagent`（子 agent 不得再派活，递归没有终止条件），也没有 `install_plugin`
@@ -224,7 +245,13 @@ export class Session {
       plugins: opts.plugins !== undefined,
       mcpConfig: true,
     }
-    if (opts.allowedTools === undefined) {
+    if (opts.researchEvidenceOnly && !opts.researchSkills)
+      throw new Error('Evidence-only research requires a locked skill port')
+    if (opts.researchEvidenceOnly) {
+      const all = new ToolRegistry()
+      registerBuiltinTools(all, { delegate: false, plugins: false, mcpConfig: false })
+      for (const spec of all.list()) if (spec.name === 'read_skill') this.registry.register(spec)
+    } else if (opts.allowedTools === undefined) {
       registerBuiltinTools(this.registry, withDelegate)
     } else {
       // 先注册到一个临时表再挑：内置集合是 registerBuiltinTools 的私有知识，
@@ -236,8 +263,14 @@ export class Session {
         if (allow.has(spec.name)) this.registry.register(spec)
       }
     }
-    const ws = upsertWorkspace(opts.store, opts.workspaceRoot, basename(opts.workspaceRoot))
-    this.workspaceId = ws.id
+    if (this.researchEvidenceOnly) {
+      if (!opts.researchWorkspaceId || !getWorkspace(opts.store, opts.researchWorkspaceId as never))
+        throw new Error('Evidence review requires an existing logical campaign workspace')
+      this.workspaceId = opts.researchWorkspaceId
+    } else {
+      const ws = upsertWorkspace(opts.store, opts.workspaceRoot, basename(opts.workspaceRoot))
+      this.workspaceId = ws.id
+    }
   }
 
   /**
@@ -320,7 +353,15 @@ export class Session {
     options?: AskOptions,
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const { store, config } = this.opts
+    if (this.researchEvidenceOnly && (existing || options?.attachments?.length))
+      throw new Error('Research evidence sessions require a fresh context without attachments')
 
+    if (
+      this.researchEvidenceOnly &&
+      (!options?.parentConversationId ||
+        getConversation(store, options.parentConversationId)?.workspaceId !== this.workspaceId)
+    )
+      throw new Error('Evidence review parent must belong to its logical workspace')
     const conversationId =
       existing ??
       createConversation(store, {
@@ -330,6 +371,9 @@ export class Session {
         model: options?.model ?? config.active.model,
         ...(options?.source ? { source: options.source } : {}),
         ...(options?.sourceRef ? { sourceRef: options.sourceRef } : {}),
+        ...(options?.parentConversationId
+          ? { parentConversationId: options.parentConversationId }
+          : {}),
       }).id
 
     // 模型优先级：本轮显式指定 > 会话当前模型 > 配置默认。
@@ -361,18 +405,21 @@ export class Session {
      * 同行落库。loop 内任何一次 provider 请求都不再临时重算，重启也从同一份快照
      * 重建，因此上下文字节不会随执行波次漂移。
      */
-    const adapter = buildAdapter(this.resolveProfile(target))
+    const rawAdapter = buildAdapter(this.resolveProfile(target))
+    const adapter = this.opts.researchRequestGuard
+      ? this.opts.researchRequestGuard.wrap(rawAdapter)
+      : rawAdapter
     const disabled = listDisabledExtras(store, conversationId)
-    if (!this.extensions) {
+    if (!this.extensions && !this.researchEvidenceOnly) {
       await this.loadExtensionTools(adapter.spec.density, disabled, conversationId)
     }
     const roots = scopeRoots(this.opts.workspaceRoot)
-    const skills = (await scanSkills(roots).catch(() => [])).filter(
+    const skills = (this.opts.researchSkills ? [] : await scanSkills(roots).catch(() => [])).filter(
       (skill) => !disabled.has(`skill:${skill.name}`),
     )
-    const memories = (await listScopedEntries(roots).catch(() => [])).filter(
-      (memory) => !disabled.has(`memory:${memory.key}`),
-    )
+    const memories = (
+      this.researchEvidenceOnly ? [] : await listScopedEntries(roots).catch(() => [])
+    ).filter((memory) => !disabled.has(`memory:${memory.key}`))
     const contextSnapshot = buildTailNotes({
       workspaceRoot: this.opts.workspaceRoot,
       platform: process.platform,
@@ -504,20 +551,24 @@ export class Session {
 
     // 压缩端口绑定到本会话与本 run 的高水位：压缩范围不得越过 run 创建时定格的水位，
     // 否则会把排队期间新到的消息一起压掉——那些消息本轮根本还没看到。
-    const compaction = new RuntimeCompaction({
-      store,
-      conversationId,
-      messageIdUpperBound: run.messageIdUpperBound,
-      summarize: makeSummarizer({
-        store,
-        conversationId,
-        workspaceId: this.workspaceId,
-        profile: () => this.resolveProfile(target),
-        effort: () => resolveModel(this.opts.config, target)?.effort,
-        signal: this.opts.signal,
-      }),
-      preserveAssistantReasoning,
-    })
+    const compaction = this.researchEvidenceOnly
+      ? undefined
+      : new RuntimeCompaction({
+          store,
+          conversationId,
+          messageIdUpperBound: run.messageIdUpperBound,
+          summarize: makeSummarizer({
+            store,
+            conversationId,
+            workspaceId: this.workspaceId,
+            profile: () => this.resolveProfile(target),
+            providerName: () =>
+              typeof target === 'string' ? this.opts.config.active.provider : target.provider,
+            effort: () => resolveModel(this.opts.config, target)?.effort,
+            signal: this.opts.signal,
+          }),
+          preserveAssistantReasoning,
+        })
 
     /*
      * 心跳：**告诉别的进程「这一轮还有人在跑」。**
@@ -898,6 +949,8 @@ export class Session {
     // 两次不同的解析结果。
     const spec = buildAdapter(this.resolveProfile(target)).spec
     return {
+      researchBoundary: this.opts.researchBoundary ?? 'standard',
+      ...(this.opts.researchSkills ? { researchSkills: this.opts.researchSkills } : {}),
       workspaceRoot: this.opts.workspaceRoot,
       conversationId,
       runId,
@@ -1066,6 +1119,7 @@ export class Session {
 }
 
 export interface SummarizerOptions {
+  providerName?: () => string
   store: Store
   workspaceId: string
   /**
@@ -1102,7 +1156,8 @@ export interface SummarizerOptions {
  * null：半份摘要比没有更坏——它看起来完整。
  */
 export function makeSummarizer(opts: SummarizerOptions): Summarizer {
-  return async (prompt, budgetTokens) => {
+  return async (prompt, budgetTokens, trace) => {
+    opts.signal?.throwIfAborted()
     const profile = opts.profile()
     const adapter = buildAdapter(profile)
     const selectedEffort = opts.effort?.()
@@ -1130,46 +1185,94 @@ export function makeSummarizer(opts: SummarizerOptions): Summarizer {
     let text = ''
     /** 摘要被输出上限截断。**截断的摘要一律不采用**——半份摘要看起来完整。 */
     let truncated = false
-    // 摘要也花钱。它不属于任何一个 run 的 usage，所以在账本出现之前
-    // **这笔钱是完全看不见的**——压缩越频繁，账单和界面上的数字差得越多。
+    let finish: string | undefined
+    // 摘要也花钱。一轮之内的摘要请求由 trace 记进这一轮（provider_requests + 这一轮的 usage）；
+    // 手动压缩不在任何一轮里，在下面单独记一笔账本行。
     let spent: { cost: number; u: ProviderUsage } | null = null
+    const req: ChatRequest = {
+      model: adapter.spec.id,
+      system: [{ text: '你是会话摘要器。只输出摘要正文。' }],
+      messages: [{ role: 'user', content: prompt }],
+      tools: [],
+      /*
+       * **会思考的模型不能拿正文预算当 `max_tokens`。**
+       *
+       * 思考与正文共用这一个上限，而思考**不进投影**——压成正文预算的话，
+       * 模型在思考阶段就把额度耗尽，正文没写完即被截断，整份作废
+       * （实测 deepseek-v4-flash：一句话摘要花 259 个思考 token，
+       * 正文只有 10 个字）。因此摘要段恒失败，压缩退化成只有收纳段。
+       *
+       * 正文长度由提示词里那句字数要求约束，这里只负责让模型有地方把话说完。
+       * 不思考的模型上正文就是全部输出，直申预算即可。
+       */
+      maxOutputTokens: willThink
+        ? adapter.spec.maxOutputTokens
+        : Math.min(adapter.spec.maxOutputTokens ?? budgetTokens, budgetTokens),
+      ...(effort ? { effort } : {}),
+      signal: ac.signal,
+    }
+    const requestId = trace?.open(req, {
+      adapter,
+      ...(opts.providerName ? { providerName: opts.providerName() } : {}),
+    })
+    let settled = false
+    const settleSummary = (
+      status: 'received' | 'uncertain' | 'rejected',
+      errorCode: string | null,
+      reported: ProviderUsage | null = spent?.u ?? null,
+    ) => {
+      if (settled) return
+      settled = true
+      if (reported?.source !== 'provider') reported = null
+      if (trace && requestId) trace.settle(requestId, status, reported, errorCode, finish)
+      else if (reported)
+        recordUsage(opts.store, {
+          kind: 'summary',
+          conversationId: opts.conversationId,
+          workspaceId: opts.workspaceId,
+          model: adapter.spec.id,
+          provider: profile.kind,
+          inputTokens: reported.inputTokens,
+          outputTokens: reported.outputTokens,
+          cachedTokens: reported.cachedTokens,
+          cacheWriteTokens: reported.cacheWriteTokens,
+          reasoningTokens: reported.reasoningTokens,
+          cost: computeCost(adapter.spec, reported),
+          currency: adapter.spec.pricing.currency ?? 'USD',
+        })
+    }
+    let sawEvent = false
     try {
       // 首个事件之前就要起计时：没回过一个字节是最典型的卡死形状。
       bump()
-      for await (const ev of adapter.stream({
-        model: adapter.spec.id,
-        system: [{ text: '你是会话摘要器。只输出摘要正文。' }],
-        messages: [{ role: 'user', content: prompt }],
-        tools: [],
-        /*
-         * **会思考的模型不能拿正文预算当 `max_tokens`。**
-         *
-         * 思考与正文共用这一个上限，而思考**不进投影**——压成正文预算的话，
-         * 模型在思考阶段就把额度耗尽，正文没写完即被截断，整份作废
-         * （实测 deepseek-v4-flash：一句话摘要花 259 个思考 token，
-         * 正文只有 10 个字）。因此摘要段恒失败，压缩退化成只有收纳段。
-         *
-         * 正文长度由提示词里那句字数要求约束，这里只负责让模型有地方把话说完。
-         * 不思考的模型上正文就是全部输出，直申预算即可。
-         */
-        maxOutputTokens: willThink
-          ? adapter.spec.maxOutputTokens
-          : Math.min(adapter.spec.maxOutputTokens ?? budgetTokens, budgetTokens),
-        ...(effort ? { effort } : {}),
-        signal: ac.signal,
-      })) {
+      if (trace && requestId) trace.sent(requestId)
+      for await (const ev of adapter.stream(req)) {
         bump()
+        if (trace && requestId && !sawEvent && ev.type !== 'request_prepared') {
+          sawEvent = true
+          trace.firstEvent(requestId)
+        }
         if (ev.type === 'text_delta') text += ev.delta
-        else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
-        else if (ev.type === 'usage') {
-          spent = { cost: computeCost(adapter.spec, ev.usage), u: ev.usage }
+        else if (ev.type === 'done') {
+          truncated = ev.stopReason === 'max_tokens'
+          finish = ev.rawStopReason
+        } else if (ev.type === 'usage') {
+          if (ev.usage.source === 'provider')
+            spent = { cost: computeCost(adapter.spec, ev.usage), u: ev.usage }
         }
       }
     } catch (err) {
+      const pe = err instanceof ProviderError ? err : null
+      settleSummary(
+        !stalled && pe?.status !== undefined ? 'rejected' : 'uncertain',
+        stalled ? 'stream_idle_timeout' : ac.signal.aborted ? null : (pe?.code ?? 'internal_error'),
+        pe?.usage ?? spent?.u ?? null,
+      )
       // 掐流与用户按停止在适配器那侧是同一个 AbortError，`stalled` 是唯一的区分依据。
       if (stalled) {
         throw new ProviderError({
           code: 'stream_idle_timeout',
+          timedOut: true,
           message: '模型响应中断',
           provider: adapter.spec.provider,
           cause: err,
@@ -1181,22 +1284,7 @@ export function makeSummarizer(opts: SummarizerOptions): Summarizer {
       opts.signal?.removeEventListener('abort', followOuter)
     }
 
-    if (spent) {
-      recordUsage(opts.store, {
-        kind: 'summary',
-        conversationId: opts.conversationId,
-        workspaceId: opts.workspaceId,
-        model: adapter.spec.id,
-        provider: profile.kind,
-        inputTokens: spent.u.inputTokens,
-        outputTokens: spent.u.outputTokens,
-        cachedTokens: spent.u.cachedTokens,
-        cacheWriteTokens: spent.u.cacheWriteTokens,
-        reasoningTokens: spent.u.reasoningTokens,
-        cost: spent.cost,
-        currency: adapter.spec.pricing.currency ?? 'USD',
-      })
-    }
+    settleSummary(ac.signal.aborted ? 'uncertain' : 'received', null)
     // 截断作废与空摘要同一个终态：调用方据此判摘要段没做成，收纳段照常落库。
     return truncated ? null : text.trim() || null
   }

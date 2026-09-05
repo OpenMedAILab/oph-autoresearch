@@ -27,7 +27,14 @@ import {
   MCP_CONFIG,
   Session,
 } from '@oph-autoresearch/runtime'
-import { lanCandidates, processExitObservationFromEnv, serve } from '@oph-autoresearch/server'
+import {
+  lanCandidates,
+  processExitObservationFromEnv,
+  runEvidenceCliWorker,
+  runRemoteDaemonService,
+  runResearchJobWorker,
+  serve,
+} from '@oph-autoresearch/server'
 import { ContentStore, contentPathFor, Store } from '@oph-autoresearch/store'
 import {
   detectSandbox,
@@ -59,6 +66,12 @@ const USAGE = `oph —— oph-autoresearch 编码 agent
   oph serve                启动本地服务（桌面端与手机端都连它）
     --port <端口>         默认 7717，0 = 随机可用端口
     --host <地址>         默认 0.0.0.0（手机可连）；仅本机用 127.0.0.1
+    --research-daemon-root <dir> 固定合成模板的本地受控子进程与持久账本
+    --research-human-auth <file> 启动时固定的人类签名公钥/审查人配置，启用研究派发审批
+    --research-tracking <file> 合成 Runner 的固定跟踪配置，须配合 --research-daemon-root
+    --research-deployment <file> 机构启动合同：核验本机绑定、公钥指纹与研究能力
+    --research-ssh-daemon <file> 固定 SSH 隧道连接远端研究 authority，派发须绑定审批
+    --restricted-clinical 受限实例：可信临床后端不可用时仅开放安全状态
     --cwd <路径>          指定工作区
     --static <目录>       前端构建产物目录
     --print-token         把令牌打到 stdout（供 Tauri 读取）
@@ -151,6 +164,21 @@ async function main(argv: string[]): Promise<number> {
    * `oph serve` 自己再执行一次这个二进制、把它当作「跑命令的那个父进程」。
    * 理由见 `tools/runner.ts` 的模块注释。
    */
+  if (cmd === 'research-job-worker') {
+    return await runResearchJobWorker(rest)
+  }
+  if (cmd === 'research-evidence-worker') {
+    await runEvidenceCliWorker()
+    return 0
+  }
+  if (cmd === 'research-daemon') {
+    return await runRemoteDaemonService(
+      rest,
+      Bun.main.endsWith('.ts')
+        ? [process.execPath, Bun.main, 'research-job-worker']
+        : [process.execPath, 'research-job-worker'],
+    )
+  }
   if (cmd === 'runner') {
     runCommandRunner()
     // 靠 IPC 通道钉住事件循环；父进程一退，这一侧的 stdin 关闭，随之退出。
@@ -287,9 +315,48 @@ async function runServe(args: string[]): Promise<number> {
   const runnerArgv = Bun.main.endsWith('.ts')
     ? [process.execPath, Bun.main, 'runner']
     : [process.execPath, 'runner']
-  setCommandRunner(startCommandRunner(runnerArgv))
 
+  const researchHumanAuth = flags.researchHumanAuth
+    ? await Bun.file(resolve(flags.researchHumanAuth)).json()
+    : undefined
+  if (flags.researchTracking && !flags.researchDaemonRoot)
+    throw new Error('--research-tracking requires --research-daemon-root')
+  const researchTracking = flags.researchTracking
+    ? await Bun.file(resolve(flags.researchTracking)).json()
+    : undefined
   const handle = serve({
+    ...(flags.researchReviewCli
+      ? {
+          researchReviewCli: {
+            workerArgv: Bun.main.endsWith('.ts')
+              ? [process.execPath, Bun.main, 'research-evidence-worker']
+              : [process.execPath, 'research-evidence-worker'],
+          },
+        }
+      : {}),
+    ...(flags.researchSshDevices
+      ? { researchSshDevices: await Bun.file(resolve(flags.researchSshDevices)).json() }
+      : {}),
+    ...(flags.researchSshDaemon
+      ? { researchSshDaemon: await Bun.file(resolve(flags.researchSshDaemon)).json() }
+      : {}),
+    ...(flags.researchDeployment
+      ? { researchDeployment: await Bun.file(resolve(flags.researchDeployment)).json() }
+      : {}),
+    ...(flags.researchDaemonRoot
+      ? {
+          researchDaemon: {
+            ...(researchTracking ? { tracking: researchTracking } : {}),
+            dbPath: resolve(flags.researchDaemonRoot, 'jobs.sqlite'),
+            outputRoot: resolve(flags.researchDaemonRoot, 'outputs'),
+            workerArgv: Bun.main.endsWith('.ts')
+              ? [process.execPath, Bun.main, 'research-job-worker']
+              : [process.execPath, 'research-job-worker'],
+          },
+        }
+      : {}),
+    ...(researchHumanAuth ? { researchHumanAuth, researchRequireApproval: true } : {}),
+    researchBoundary: flags.restrictedClinical ? 'restricted-clinical' : 'standard',
     store,
     config,
     ...(workspaceRoot ? { workspaceRoot } : {}),
@@ -300,6 +367,7 @@ async function runServe(args: string[]): Promise<number> {
     ...(process.env.OPH_AUTORESEARCH_TOKEN ? { token: process.env.OPH_AUTORESEARCH_TOKEN } : {}),
     ...(previousProcessExit ? { previousProcessExit } : {}),
   })
+  if (!flags.restrictedClinical) setCommandRunner(startCommandRunner(runnerArgv))
 
   // 父进程守望。
   //
@@ -406,6 +474,14 @@ function renderHuman(ev: AgentEvent): void {
 // ───────────────────────── 小工具 ─────────────────────────
 
 interface Flags {
+  researchReviewCli?: boolean
+  researchSshDevices?: string
+  researchSshDaemon?: string
+  researchDeployment?: string
+  researchDaemonRoot?: string
+  researchTracking?: string
+  researchHumanAuth?: string
+  restrictedClinical?: boolean
   positional: string[]
   cwd?: string
   json?: boolean
@@ -424,7 +500,43 @@ function parseFlags(args: string[]): Flags {
   }
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!
-    if (a === '--cwd') {
+    if (a === '--restricted-clinical') {
+      out.restrictedClinical = true
+    } else if (a === '--research-review-cli') {
+      out.researchReviewCli = true
+    } else if (a === '--research-ssh-devices') {
+      const [v, ni] = takeValue(i)
+      if (!v)
+        throw new Error('--research-ssh-devices requires a fixed administrator device catalog')
+      out.researchSshDevices = v
+      i = ni
+    } else if (a === '--research-ssh-daemon') {
+      const [v, ni] = takeValue(i)
+      if (!v) throw new Error('--research-ssh-daemon requires a pinned SSH authority startup file')
+      out.researchSshDaemon = v
+      i = ni
+    } else if (a === '--research-deployment') {
+      const [v, ni] = takeValue(i)
+      if (!v) throw new Error('--research-deployment requires an administrator startup manifest')
+      out.researchDeployment = v
+      i = ni
+    } else if (a === '--research-daemon-root') {
+      const [v, ni] = takeValue(i)
+      if (!v) throw new Error('--research-daemon-root requires an explicit local daemon directory')
+      out.researchDaemonRoot = v
+      i = ni
+    } else if (a === '--research-tracking') {
+      const [v, ni] = takeValue(i)
+      if (!v) throw new Error('--research-tracking requires an explicit startup configuration file')
+      out.researchTracking = v
+      i = ni
+    } else if (a === '--research-human-auth') {
+      const [v, ni] = takeValue(i)
+      if (!v)
+        throw new Error('--research-human-auth requires a launch public-key configuration file')
+      out.researchHumanAuth = v
+      i = ni
+    } else if (a === '--cwd') {
       const [v, ni] = takeValue(i)
       if (v) out.cwd = v
       i = ni

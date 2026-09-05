@@ -58,6 +58,30 @@ export interface UsageResponse {
 }
 
 /**
+ * `GET /api/usage/overview` —— 使用统计页的总览：累计、峰值、最长单轮、连续天数、
+ * 近一年的逐日（含逐模型）序列。热力图、趋势图与统计卡都由它驱动。
+ *
+ * token 口径全表统一：输入 + 输出 + 缓存命中。
+ */
+export interface UsageOverviewResponse {
+  /** 全时段累计 token。 */
+  totalTokens: number
+  entries: number
+  /** 单日峰值（本地日）。没有记录时是 null。 */
+  peakDay: { date: string; tokens: number } | null
+  /** 最长单轮时长（毫秒）。没有跑完过的轮次时是 null。 */
+  longestRunMs: number | null
+  /** 当前连续活跃天数（今天没数据就按昨天锚定）。 */
+  currentStreak: number
+  /** 历史最长连续活跃天数。 */
+  longestStreak: number
+  /** 近一年逐日总量，按本地日升序。 */
+  days: { date: string; tokens: number }[]
+  /** 近一年逐日分模型，按（日, 模型）升序。 */
+  dailyByModel: { date: string; model: string; tokens: number }[]
+}
+
+/**
  * `GET /api/conversations/:id/usage` —— 这一条会话的**完整**花费。
  *
  * `entries` 逐笔给，不只给合计：合计里含压缩摘要那种不属于任何一轮的开销，

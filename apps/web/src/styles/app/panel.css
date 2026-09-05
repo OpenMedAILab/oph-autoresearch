@@ -31,6 +31,13 @@
   flex: 1;
   overflow: auto;
   padding: 22px clamp(20px, 4vw, 46px) 40px;
+  /*
+   * 中央详情视图的横向适配看**容器宽**，不看视口宽：右侧面板开着时，中央列被
+   * 压到 360–510px，而视口可能还有 1200+——按视口写的媒体查询在那里一条都不会
+   * 触发，详情就是被挤成两栏的窄条。所以这里是尺寸容器，研究详情与 SSH 工作台
+   * 一律用 `@container` 查询跟着它走。
+   */
+  container-type: inline-size;
 }
 
 .workspace-back {
@@ -562,10 +569,19 @@
 .remote-row {
   display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 9px 12px;
   color: var(--text-secondary);
+  text-align: left;
+}
+
+.remote-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  color: inherit;
   text-align: left;
 }
 
@@ -578,13 +594,34 @@
 .remote-row.active {
   background: var(--accent-soft);
 }
-.remote-row > span:nth-child(2) {
+.remote-row-main > span:nth-child(2) {
   flex: 1;
 }
 .remote-size {
   flex: none;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
+}
+/* 删除常显但低对比，悬停才转红：远端不可恢复，入口必须看得见，
+   同时不抢「点开看看」的主动作。 */
+.remote-row-del {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 5px;
+  border-radius: var(--r-xs);
+  color: var(--text-tertiary);
+  opacity: 0.55;
+}
+.remote-row-del:hover,
+.remote-row-del:focus-visible {
+  opacity: 1;
+}
+.remote-row-del:hover {
+  color: var(--danger);
+  background: var(--bg-hover);
 }
 
 .remote-preview {
@@ -958,18 +995,11 @@
 }
 
 .remote-recent-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
+  display: flex;
+  align-items: stretch;
   width: 100%;
-  padding: 10px 13px;
   color: var(--text-secondary);
   text-align: left;
-}
-
-.remote-recent-row > svg:first-child {
-  grid-row: 1 / 3;
 }
 
 .remote-recent-row + .remote-recent-row {
@@ -980,26 +1010,43 @@
   background: var(--bg-hover);
 }
 
-.remote-recent-row > span:not(.remote-history-action) {
+/* 主按钮持有三列栅格（图标 | 文本 | 状态），行本身只做弹性布局。 */
+.remote-recent-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 13px;
+  color: inherit;
+  text-align: left;
+}
+
+.remote-recent-main > svg:first-child {
+  grid-row: 1 / 3;
+}
+
+.remote-recent-main > span:not(.remote-history-action) {
   display: grid;
   min-width: 0;
   gap: 2px;
 }
 
-.remote-recent-row strong,
-.remote-recent-row code,
-.remote-recent-row em {
+.remote-recent-main strong,
+.remote-recent-main code,
+.remote-recent-main em {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.remote-recent-row > em {
+.remote-recent-main > em {
   grid-column: 2;
   grid-row: 2;
 }
 
-.remote-recent-row > svg:last-child,
+.remote-recent-main > svg:last-child,
 .remote-history-action {
   grid-column: 3;
   grid-row: 1 / 3;
@@ -1015,11 +1062,29 @@
   white-space: nowrap;
 }
 
-.remote-recent-row code,
-.remote-recent-row em {
+.remote-recent-main code,
+.remote-recent-main em {
   color: var(--text-tertiary);
   font-size: 10px;
   font-style: normal;
+}
+
+/* 删除入口常显：悬停才露面的按钮被用户当成「没有删除」。永远看得见，
+   但默认低对比，悬停才转红，不抢「点开连接」的主动作。 */
+.remote-recent-del {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  margin-right: 5px;
+  border-radius: var(--r-xs);
+  color: var(--text-tertiary);
+  opacity: 0.55;
+}
+.remote-recent-del:hover {
+  opacity: 1;
+  color: var(--danger);
+  background: var(--bg-hover);
 }
 
 .remote-connection-bar {
@@ -1124,7 +1189,9 @@
 
 .remote-explorer {
   display: grid;
-  grid-template-columns: minmax(220px, 0.32fr) minmax(0, 0.68fr);
+  /* 侧栏窄、预览区宽：文件列表只是入口，右侧内容才是看的地方。
+     上限 260px 是锚——文件树再长也不占预览区的配额。 */
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -1218,17 +1285,19 @@
   color: var(--danger);
 }
 
-@media (max-width: 1050px) {
+/* SSH 工作台的横向适配按容器宽走（见 `.workspace-view` 的注释）。断点对照旧的
+   视口断点换算：1050 视口 ≈ 中央列 800px，760 视口 ≈ 520px，440 视口 ≈ 440px。 */
+@container (max-width: 800px) {
   .remote-connect-start {
     grid-template-columns: 1fr;
   }
 
   .remote-explorer {
-    grid-template-columns: minmax(210px, 0.38fr) minmax(0, 0.62fr);
+    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
   }
 }
 
-@media (max-width: 760px) {
+@container (max-width: 520px) {
   .remote-ssh-workbench {
     padding: 14px 12px 16px;
   }
@@ -1239,9 +1308,6 @@
 
   .remote-target-host {
     grid-column: 1 / -1;
-  }
-
-  .remote-target-host {
     grid-row: 1;
   }
 
@@ -1281,7 +1347,7 @@
   }
 }
 
-@media (max-width: 440px) {
+@container (max-width: 440px) {
   .remote-target-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1544,6 +1610,13 @@
   display: flex;
   flex-direction: column;
 }
+/* 浏览器页：整块的面板面积，链接由 iframe 自己导航。 */
+.panel-browser-frame {
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  background: var(--bg-app);
+}
 /* 子会话页：一条跑完的子 agent 会话的回放。会话流那些行的样式是全局的，
    这里只负责给它一个能滚的盒子与左右留白——不套 `.transcript-inner` 的
    760px 居中，面板本来就窄，再居中会挤成一条。 */
@@ -1585,6 +1658,11 @@
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.cli-empty {
+  margin: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
 }
 
 /* 那一页的代码还在下载时的占位。**同样尺寸的空壳**，不是转圈也不是文案：
@@ -2132,6 +2210,60 @@
   height: 100%;
   border: none;
 }
+/* HTML 预览：无脚本沙箱 iframe，白底是页面自己的底色（多数页面假设白纸）。 */
+.html-preview-frame {
+  background: #fff;
+}
+/* pdf.js 分页预览：细头 + 纵向页流。 */
+.pdf-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.pdf-preview-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  height: 31px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.pdf-preview-count {
+  flex: none;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.pdf-preview-pages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 16px 56px;
+  background: var(--bg-inset);
+}
+.pdf-page {
+  display: block;
+  max-width: 100%;
+  background: #fff;
+  box-shadow: var(--shadow-md);
+}
+.pdf-preview-note {
+  flex: none;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
 .code-view {
   flex: 1;
   min-height: 0;
@@ -2364,6 +2496,13 @@
   border: 1px solid var(--border-default);
   text-align: left;
   vertical-align: top;
+}
+/* docx 里解出来的内联图：按页面宽缩放，不放大会糊。 */
+.office-preview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 12px 0;
 }
 .office-slides {
   display: grid;
@@ -2720,6 +2859,11 @@
   width: min(960px, 100%);
 }
 
+/* 「收起详情」是内容自宽的按钮，不随行宽拉满——拉满的话整行空白都成了它的命中区。 */
+.research-stage-view > .workspace-back {
+  width: fit-content;
+}
+
 .research-stage-view > .workspace-view-head .execution-state {
   margin-top: 19px;
   padding: 5px 9px;
@@ -2740,6 +2884,50 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.research-campaign-panel {
+  padding: 20px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.research-campaign-panel form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.research-campaign-panel label {
+  flex-basis: 100%;
+}
+
+.research-campaign-panel input {
+  flex: 1 1 200px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+}
+
+.research-campaign-panel button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+}
+
+.research-campaign-panel button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.research-campaign-panel article {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 16px;
 }
 
 .research-stage-meta > div {
@@ -2808,7 +2996,8 @@
   margin: 14px 0 0;
 }
 
-@media (max-width: 720px) {
+/* 阶段元信息跟着容器宽折成单列（同 `.workspace-view` 容器，见其注释）。 */
+@container (max-width: 640px) {
   .research-stage-meta {
     grid-template-columns: 1fr;
   }
@@ -2827,11 +3016,14 @@
     grid-template-columns: 1fr;
   }
 }
+/* 预览区高度跟着容器走。**不许给最小高度**：窗口矮的时候编辑器必须让位给
+   上面的连接区与目录条，由它自己的滚动接管，而不是撑出一段要靠外层再滚的空白。 */
 .remote-explorer .code-view,
 .remote-explorer .cm-editor,
-.remote-explorer .preview-frame {
+.remote-explorer .preview-frame,
+.remote-explorer .pdf-preview {
   height: calc(100% - 39px);
-  min-height: 440px;
+  min-height: 0;
 }
 
 /* ── 会话变更记录 ──

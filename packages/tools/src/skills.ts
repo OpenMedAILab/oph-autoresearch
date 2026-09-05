@@ -222,6 +222,17 @@ export const readSkillTool: ToolSpec = {
   async fn(args, ctx) {
     const wanted = String(args.name ?? '').trim()
     if (!wanted) return { status: 'failure', message: '缺少 name' }
+    if (ctx.researchSkills) {
+      try {
+        return {
+          status: 'success',
+          message: await ctx.researchSkills.read(wanted),
+          data: { name: wanted, source: 'research-lock' },
+        }
+      } catch {
+        return { status: 'failure', message: '研究技能未准入或已发生漂移' }
+      }
+    }
 
     const skills = await scanSkills(ctx.workspaceRoot)
     const hit = skills.find((s) => s.name === wanted || s.dir.endsWith(wanted))

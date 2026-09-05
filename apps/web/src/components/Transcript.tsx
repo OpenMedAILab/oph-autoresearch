@@ -205,59 +205,77 @@ export function Transcript() {
   })
 
   return (
-    <div class="transcript" ref={scroller} onScroll={onScroll}>
-      <div class="transcript-inner" classList={{ 'with-stack': composerStackAbove() }} ref={inner}>
-        <Show when={state.activeConversation}>
-          {(id) => (
-            <ConversationHistoryBoundary
-              conversationId={id()}
-              onLoadOlder={() => loadOlderAnchored(id())}
-            />
-          )}
-        </Show>
-        <TranscriptRows items={transcript()} />
+    <div class="transcript-host">
+      <div class="transcript" ref={scroller} onScroll={onScroll}>
+        <div
+          class="transcript-inner"
+          classList={{ 'with-stack': composerStackAbove() }}
+          ref={inner}
+        >
+          <Show when={state.activeConversation}>
+            {(id) => (
+              <ConversationHistoryBoundary
+                conversationId={id()}
+                onLoadOlder={() => loadOlderAnchored(id())}
+              />
+            )}
+          </Show>
+          <TranscriptRows items={transcript()} />
 
-        {/*
-         * 没有 run 收尾条可挂的那些错误。
-         *
-         * **报错正文的正常落点是读数条**（`run.finished` 时并进那一轮的条目里），
-         * 一句话一个地方。这里只收另一半：`run.error` 之后没有 `run.finished`
-         * 的那些——没配 key、档案解析失败、会话已有任务在跑、找不到项目目录。
-         * 它们连 run 行都没有，不在这儿说就一个字都看不到。
-         *
-         * 不给引导文案、不给重试按钮：正文本身已经说了该干什么
-         * （`ai/src/errors.ts` 的分类文案就是按「用户的下一步动作」写的），
-         * 再挂一句是同一件事说两遍；要重发，输入框一直在。
-         */}
-        <Show when={view().error}>
-          {(e) => (
-            <div class="error-card" role="alert">
-              {e().message}
-            </div>
-          )}
-        </Show>
+          {/*
+           * 没有 run 收尾条可挂的那些错误。
+           *
+           * **报错正文的正常落点是读数条**（`run.finished` 时并进那一轮的条目里），
+           * 一句话一个地方。这里只收另一半：`run.error` 之后没有 `run.finished`
+           * 的那些——没配 key、档案解析失败、会话已有任务在跑、找不到项目目录。
+           * 它们连 run 行都没有，不在这儿说就一个字都看不到。
+           *
+           * 不给引导文案、不给重试按钮：正文本身已经说了该干什么
+           * （`ai/src/errors.ts` 的分类文案就是按「用户的下一步动作」写的），
+           * 再挂一句是同一件事说两遍；要重发，输入框一直在。
+           */}
+          <Show when={view().error}>
+            {(e) => (
+              <div class="error-card" role="alert">
+                {e().message}
+              </div>
+            )}
+          </Show>
 
-        {/* 指令被拒绝的回执。fail-closed 的 UI 落点：拒绝必须被看见。
+          {/* 指令被拒绝的回执。fail-closed 的 UI 落点：拒绝必须被看见。
             用 <output> 而不是 div+role="status"：隐含语义一样，少一个属性。 */}
-        <Show when={state.notice}>
-          {(n) => (
-            <output class="notice-card">
-              <span>{n().message}</span>
-              <button class="ghost-btn" type="button" onClick={() => setState('notice', null)}>
-                知道了
-              </button>
-            </output>
-          )}
-        </Show>
+          <Show when={state.notice}>
+            {(n) => (
+              <output class="notice-card">
+                <span>{n().message}</span>
+                <button class="ghost-btn" type="button" onClick={() => setState('notice', null)}>
+                  知道了
+                </button>
+              </output>
+            )}
+          </Show>
 
-        {/* 还在跑的那一轮没有 run 行可读，挂在流尾；跑完由 `run.finished`
+          {/* 还在跑的那一轮没有 run 行可读，挂在流尾；跑完由 `run.finished`
             落成条目，位置就在它那一轮的最后一步之后。
             收尾条一落下就撤（`runClosed`），不等 `conversation.busy` 那一帧——
             两帧之间画出来的是同一个位置上下两条读数条。 */}
-        <Show when={isRunning() && !runClosed()}>
-          <LiveRunBar />
-        </Show>
+          <Show when={isRunning() && !runClosed()}>
+            <LiveRunBar />
+          </Show>
+        </div>
       </div>
+      {/* 往上翻过才出现：一键回到最新。按钮挂在不滚动的外壳上，滚动时位置恒定。 */}
+      <Show when={!pinned()}>
+        <button
+          class="transcript-jump"
+          type="button"
+          aria-label="回到最新"
+          data-tip="回到最新"
+          onClick={stickToBottom}
+        >
+          <IconChevron size={16} dir="down" />
+        </button>
+      </Show>
     </div>
   )
 }

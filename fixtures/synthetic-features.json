@@ -1,0 +1,115 @@
+{
+  "schema": "synthetic-features-v1",
+  "rows": [
+    {
+      "id": "tr-1",
+      "patientId": "train-a",
+      "eye": "L",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-tr-a",
+      "split": "train",
+      "label": 0,
+      "feature": -2.197224577336219
+    },
+    {
+      "id": "tr-2",
+      "patientId": "train-b",
+      "eye": "R",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-tr-b",
+      "split": "train",
+      "label": 1,
+      "feature": 2.1972245773362196
+    },
+    {
+      "id": "va-1",
+      "patientId": "val-a",
+      "eye": "L",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-va",
+      "split": "validation",
+      "label": 0,
+      "feature": -1.3862943611198906
+    },
+    {
+      "id": "va-2",
+      "patientId": "val-b",
+      "eye": "R",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-vb",
+      "split": "validation",
+      "label": 1,
+      "feature": 1.3862943611198908
+    },
+    {
+      "id": "te-1",
+      "patientId": "test-a",
+      "eye": "L",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-ta",
+      "split": "test",
+      "label": 1,
+      "feature": 2.1972245773362196
+    },
+    {
+      "id": "te-2",
+      "patientId": "test-a",
+      "eye": "L",
+      "visitId": "v2",
+      "duplicateGroupId": "dg-ta",
+      "split": "test",
+      "label": 1,
+      "feature": 1.7346010553881064
+    },
+    {
+      "id": "te-3",
+      "patientId": "test-a",
+      "eye": "R",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-ta",
+      "split": "test",
+      "label": 1,
+      "feature": 1.3862943611198908
+    },
+    {
+      "id": "te-4",
+      "patientId": "test-b",
+      "eye": "L",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-tb",
+      "split": "test",
+      "label": 0,
+      "feature": -1.7346010553881064
+    },
+    {
+      "id": "te-5",
+      "patientId": "test-b",
+      "eye": "R",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-tb",
+      "split": "test",
+      "label": 0,
+      "feature": -1.0986122886681098
+    },
+    {
+      "id": "te-6",
+      "patientId": "test-c",
+      "eye": "L",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-tc",
+      "split": "test",
+      "label": 1,
+      "feature": 1.0986122886681098
+    },
+    {
+      "id": "te-7",
+      "patientId": "test-d",
+      "eye": "R",
+      "visitId": "v1",
+      "duplicateGroupId": "dg-td",
+      "split": "test",
+      "label": 0,
+      "feature": -0.8472978603872036
+    }
+  ]
+}

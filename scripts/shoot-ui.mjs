@@ -12,7 +12,7 @@
  *   node scripts/shoot-ui.mjs
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -40,6 +40,20 @@ function run(cmd, args) {
     p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exit ${code}`))))
     p.on('error', reject)
   })
+}
+
+async function killTree(proc) {
+  // shell: true 时 proc 是 cmd 壳，proc.kill() 只杀壳，bun serve 还握着 stdio 管道——
+  // node 的退出被未闭合的 pipe 吊住，脚本就永远「执行中」却没有下一步输出。
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'])
+    } catch {
+      /* 进程已经没了就不必补刀 */
+    }
+  } else {
+    proc.kill('SIGTERM')
+  }
 }
 
 async function startServer() {
@@ -441,6 +455,7 @@ async function main() {
     }
   } finally {
     await browser.close()
+    await killTree(proc)
     proc.kill()
   }
 

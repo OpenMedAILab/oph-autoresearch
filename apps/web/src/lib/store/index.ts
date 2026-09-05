@@ -7,6 +7,7 @@
 
 export * from './actions.ts'
 export * from './connection.ts'
+export { researchRefreshVersion } from './research.ts'
 export * from './settings.ts'
 // 具名，不跟上面几行的 `export *`——B6 的判据是「这个模块对外承诺了什么」，
 // 而 theme 只承诺三个符号。

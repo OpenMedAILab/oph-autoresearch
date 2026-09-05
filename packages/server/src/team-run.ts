@@ -119,6 +119,8 @@ export async function runBuiltinMember(
     deps: Omit<CommandDeps, 'ws'>
     /** 父会话所在的项目目录。成员会话跑在同一个根下——一轮编排不跨项目。 */
     workspaceRoot: string
+    /** 新建成员会话必须记录它所属的父会话。 */
+    parentConversationId: ConversationId
     /** 父会话当前的「接口 × 模型」，谁都没点名时成员跟着它跑。 */
     inherit?: ModelRef
     /** 用户这一次点名的那一对，盖过角色与父会话。 */
@@ -171,6 +173,7 @@ export async function runBuiltinMember(
       // 开头的条目，而点进去只有半截独白。
       source: 'workflow',
       sourceRef: role.id,
+      parentConversationId: ctx.parentConversationId,
     })) {
       if (ev.type === 'run.started') {
         conversationId = ev.conversationId

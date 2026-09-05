@@ -199,6 +199,39 @@ export async function detectClis(env: NodeJS.ProcessEnv = process.env): Promise<
 }
 
 /**
+ * PATH 之外再补的几处标准用户级安装目录。
+ *
+ * 单独成函数是为了可测：生产上由 `resolveInstalledCli` 拿真实家目录求值，
+ * 测试锁的是「这几处必须在」。某家 CLI 换了默认安装位置，界面上就是「读不到」
+ * ——新增目录只许加在这里。
+ */
+export function cliCandidateDirs(home: string, env: NodeJS.ProcessEnv): string[] {
+  const local = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+  const roaming = env.APPDATA ?? join(home, 'AppData', 'Roaming')
+  return [
+    join(roaming, 'npm'),
+    join(home, '.local', 'bin'),
+    join(home, '.bun', 'bin'),
+    join(home, '.cargo', 'bin'),
+    // Codex 的原生安装落在 `.codex/bin` 或 `.codex/.sandbox-bin`，两个位置都收。
+    join(home, '.codex', 'bin'),
+    join(home, '.codex', '.sandbox-bin'),
+    // Claude Code 的 Windows 原生安装。
+    join(home, '.claude', 'local'),
+    join(local, 'Microsoft', 'WinGet', 'Links'),
+    join(local, 'Microsoft', 'WindowsApps'),
+  ]
+}
+
+/** Codex 桌面版把可执行文件放在带版本标识的一级子目录里。 */
+export function codexDesktopCandidatePaths(local: string, versions: readonly string[]): string[] {
+  return [...versions]
+    .sort()
+    .reverse()
+    .map((version) => join(local, 'OpenAI', 'Codex', 'bin', version, 'codex.exe'))
+}
+
+/**
  * 桌面程序从开始菜单启动时拿到的 PATH 可能不包含当前已安装
  * CLI 自动刷新；Windows 的 Store/应用执行别名甚至不一定是一个可 `access()` 的文件。
  * 因此生产探测在 PATH 之外补几处标准用户级安装目录。测试传入的隔离 env 不走补全，
@@ -212,24 +245,24 @@ async function resolveInstalledCli(
   const direct = await resolveOnPath(bin, env)
   if (direct || !includeUserLocations) return direct
 
-  const home = homedir()
-  const local = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
-  const roaming = env.APPDATA ?? join(home, 'AppData', 'Roaming')
-  const candidates = [
-    join(roaming, 'npm'),
-    join(home, '.local', 'bin'),
-    join(home, '.bun', 'bin'),
-    join(home, '.cargo', 'bin'),
-    join(local, 'Microsoft', 'WinGet', 'Links'),
-    join(local, 'Microsoft', 'WindowsApps'),
-  ]
+  const candidates = cliCandidateDirs(homedir(), env)
   const augmented = { ...env, PATH: candidates.join(delimiter) }
   const standard = await resolveOnPath(bin, augmented)
   if (standard) return standard
 
   // Codex 桌面版自带可非交互调用的 codex.exe，但 WindowsApps 的执行别名本身
-  // 可能不可枚举。只为同名 CLI 查已安装包的资源目录，不扫描或读取任何凭证。
+  // 可能不可枚举。先查当前桌面版的版本目录，再查 Store 包资源目录；两条路都只找
+  // 同名可执行文件，不扫描或读取任何凭证。
   if (process.platform === 'win32' && bin === 'codex') {
+    const local = env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local')
+    const desktopRoot = join(local, 'OpenAI', 'Codex', 'bin')
+    const versions = await readdir(desktopRoot, { withFileTypes: true })
+      .then((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name))
+      .catch(() => [])
+    for (const executable of codexDesktopCandidatePaths(local, versions)) {
+      if (await exists(executable)) return executable
+    }
+
     const appRoot = join(env.ProgramFiles ?? 'C:\\Program Files', 'WindowsApps')
     const entries = await readdir(appRoot, { withFileTypes: true }).catch(() => [])
     const packages = entries

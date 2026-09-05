@@ -28,6 +28,7 @@ import {
   contentPathFor,
   createConversation,
   createRun,
+  getConversation,
   listMessages,
   listRuns,
   listSteps,
@@ -248,6 +249,9 @@ describe('派一件的进度', () => {
       .at(-1)
     expect(live?.childConversationId).toBe(res.conversationId as ConversationId)
     expect(live?.childConversationId).toBeTruthy()
+    expect(getConversation(store, res.conversationId as ConversationId)?.parentConversationId).toBe(
+      cid,
+    )
 
     const done = members().at(-1)
     expect(done?.phase).toBe('done')
@@ -404,6 +408,7 @@ describe('workflow 从父会话账本续接', () => {
       title: '节点 a',
       source: 'workflow',
       sourceRef: 'ad-hoc',
+      parentConversationId: parent,
     })
     appendMessage(store, { conversationId: child.id, role: 'user', content: '先给一个初稿' })
     appendMessage(store, {
@@ -546,6 +551,40 @@ describe('workflow 从父会话账本续接', () => {
     expect(listRuns(store, ordinary.id)).toHaveLength(0)
   })
 
+  test('另一父会话的同角色子节点不能续接', async () => {
+    const parent = conversation()
+    const otherParent = conversation()
+    const child = createConversation(store, {
+      workspaceId: workspaceId as never,
+      provider: 'fake',
+      model: 'deepseek-v4-flash',
+      title: '另一张图的节点 a',
+      source: 'workflow',
+      sourceRef: 'ad-hoc',
+      parentConversationId: otherParent,
+    })
+    const first = seedWaitingWorkflow(parent, child.id, 'foreign-parent')
+    const result = await delegate(parent).runGraph({
+      call: {
+        kind: 'review',
+        workflowId: first.id,
+        checkpointId: 'review',
+        decision: 'revise',
+        note: '返工',
+        revisions: [{ nodeId: 'a', instruction: '继续' }],
+      },
+      runId: 'rn_foreign_parent',
+      stepId: 'st_foreign_parent',
+      signal: new AbortController().signal,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.transition?.receipts[0]?.status).toBe('failed')
+    expect(result.transition?.receipts[0]?.error).toContain('不属于当前工作流节点')
+    expect(result.transition?.receipts[0]?.conversationId).toBe(child.id)
+    expect(listRuns(store, child.id)).toHaveLength(0)
+  })
+
   test('start → revise → approve 下一批 → approve 完成全程从同一父账本推进', async () => {
     const parent = conversation()
     const run = createRun(store, {
@@ -618,6 +657,9 @@ describe('workflow 从父会话账本续接', () => {
       'b',
     ])
     const firstA = first.result.transition?.receipts.find((receipt) => receipt.nodeId === 'a')
+    expect(
+      getConversation(store, firstA?.conversationId as ConversationId)?.parentConversationId,
+    ).toBe(parent)
 
     const reviseArgs = {
       workflowId: first.step.id,

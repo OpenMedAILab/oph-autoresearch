@@ -207,7 +207,24 @@ export class OpenAICompatAdapter implements LlmAdapter {
         })
       }
     } catch (err) {
-      throw classifyProviderError('openai_chat_completions', err)
+      const classified = classifyProviderError('openai_chat_completions', err)
+      // A cancellation can interrupt the SDK while it is reading the next SSE frame. By then a
+      // usage frame may already have arrived in this adapter, even though no ProviderEvent could
+      // be yielded before the iterator threw. Keep only provider-reported values: attaching the
+      // initial estimated zero would turn an unknown charge into a false fact.
+      if (usage.source !== 'provider' || classified.usage) throw classified
+      throw new ProviderError({
+        timedOut: classified.timedOut,
+        code: classified.code,
+        message: classified.message,
+        provider: classified.provider,
+        ...(classified.status !== undefined ? { status: classified.status } : {}),
+        ...(classified.detail ? { detail: classified.detail } : {}),
+        ...(classified.capacity ? { capacity: classified.capacity } : {}),
+        usage,
+        ...(classified.retryAfterMs !== null ? { retryAfterMs: classified.retryAfterMs } : {}),
+        cause: classified.cause ?? err,
+      })
     }
 
     yield { type: 'usage', usage }

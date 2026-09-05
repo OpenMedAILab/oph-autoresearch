@@ -141,7 +141,8 @@ export class TeamOrchestrator {
     const announcedQueued = new Set<string>()
 
     while (true) {
-      if (this.deps.signal.aborted && running.size === 0) {
+      if (this.deps.signal.aborted) {
+        await Promise.all(running.values())
         return this.finish('failed', receipts, appliedReview)
       }
 
@@ -170,6 +171,7 @@ export class TeamOrchestrator {
 
       let skippedThisPass = false
       for (const node of ready) {
+        if (this.deps.signal.aborted) break
         if (running.size >= maxConcurrent) {
           if (!announcedQueued.has(node.id)) {
             announcedQueued.add(node.id)

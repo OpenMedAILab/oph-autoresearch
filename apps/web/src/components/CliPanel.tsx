@@ -48,7 +48,7 @@ export default function CliPanel(props: { id: string }) {
 
   return (
     <div class="cli-pane">
-      <Show when={body()}>
+      <Show when={body()} fallback={<p class="cli-empty">正在启动或等待输出…</p>}>
         <pre class="cli-out">{body()}</pre>
       </Show>
     </div>

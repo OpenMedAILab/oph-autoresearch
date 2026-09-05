@@ -10,8 +10,17 @@
  * 比其中一个报错要难查得多。
  */
 
-import type { UsageResponse } from '@oph-autoresearch/core'
-import { type GroupBy, usageBy, usageTotals } from '@oph-autoresearch/store'
+import type { UsageOverviewResponse, UsageResponse } from '@oph-autoresearch/core'
+import type { Store } from '@oph-autoresearch/store'
+import {
+  type GroupBy,
+  usageBy,
+  usageDaily,
+  usageDailyByModel,
+  usageLongestRunMs,
+  usageStreaks,
+  usageTotals,
+} from '@oph-autoresearch/store'
 import { type ApiHandler, json } from './types.ts'
 
 const GROUPS: GroupBy[] = ['model', 'day', 'workspace', 'kind']
@@ -20,7 +29,50 @@ const DEFAULT_DAYS = 30
 /** 上限只是防手滑传个天文数字，不是业务约束——账本本来就不删旧数据。 */
 const MAX_DAYS = 3650
 
+/**
+ * 使用统计页的总览：一年窗口内的逐日序列，配全时段统计。
+ *
+ * token 口径与 `usageDaily` 同一条：输入 + 输出 + 缓存命中。
+ */
+export async function usageOverview(store: Store): Promise<UsageOverviewResponse> {
+  const since = Date.now() - 370 * 86_400_000
+  const [days, dailyByModel, totals] = await Promise.all([
+    usageDaily(store, { since }),
+    usageDailyByModel(store, { since }),
+    usageTotals(store, {}),
+  ])
+  const longestRunMs = usageLongestRunMs(store)
+  const totalTokens = totals.inputTokens + totals.outputTokens + (totals.cachedTokens ?? 0)
+  let peakDay: UsageOverviewResponse['peakDay'] = null
+  for (const day of days) {
+    if (!peakDay || day.tokens > peakDay.tokens) {
+      peakDay = { date: day.date, tokens: day.tokens }
+    }
+  }
+  const streakDay = store.db
+    .query("SELECT strftime('%Y-%m-%d', 'now', 'localtime') AS d")
+    .get() as { d: string | null }
+  const streaks = usageStreaks(
+    days.map((d) => d.date),
+    streakDay.d ?? undefined,
+  )
+  return {
+    totalTokens,
+    entries: totals.entries,
+    peakDay,
+    longestRunMs,
+    currentStreak: streaks.current,
+    longestStreak: streaks.longest,
+    days,
+    dailyByModel,
+  }
+}
+
 export const handleUsageApi: ApiHandler = async (url, _req, d) => {
+  if (url.pathname === '/api/usage/overview') {
+    return json(await usageOverview(d.store))
+  }
+
   if (url.pathname !== '/api/usage') return null
 
   const days = Number(url.searchParams.get('days') ?? DEFAULT_DAYS)

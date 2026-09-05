@@ -1,3 +1,10 @@
+import { captureResearchDeployment } from './research/deployment-governance.ts'
+import { createResearchDevices, quoteResearchDevice } from './research/execution-devices.ts'
+import { createHumanAuthVerifier, type HumanAuthVerifierConfig } from './research/human-auth.ts'
+import { JobDaemon } from './research/job-daemon.ts'
+import { createLiteratureCollector } from './research/literature-evidence.ts'
+import type { RunnerTrackingConfig } from './research/runner-tracking.ts'
+import { createSshDaemonClient, type SshDaemonConfig } from './research/ssh-daemon-client.ts'
 /**
  * `oph serve` —— 本地 HTTP + WebSocket 服务。
  *
@@ -17,8 +24,10 @@ import type {
   ClientCommand,
   EventEnvelope,
   HelloFrame,
+  ResearchExecutionBoundary,
   Workspace,
 } from '@oph-autoresearch/core'
+import { RESTRICTED_RESEARCH_CAPABILITY_DENIED } from '@oph-autoresearch/core'
 import type { OphConfig } from '@oph-autoresearch/runtime'
 import {
   acquireExtensions,
@@ -33,6 +42,7 @@ import {
   createConversation,
   getWorkspaceByPath,
   mostRecentWorkspace,
+  recoverRunningSyntheticAttempts,
   recoverStaleRuns,
   upsertWorkspace,
 } from '@oph-autoresearch/store'
@@ -47,11 +57,26 @@ import { handleHello } from './handshake.ts'
 import { CORS_HEADERS, hostLabel, serveStatic, withCors } from './http-util.ts'
 import { extractToken, Pairing, preferredLanAddress } from './pairing.ts'
 import { sanitizeProcessExitObservation } from './process-exit.ts'
+import { publishResearchEvents } from './research-events.ts'
 import { ensureResearchWorkspace } from './research-template.ts'
 import { startRun } from './run-control.ts'
 import { RunManager } from './runs.ts'
 
 export interface ServeOptions {
+  researchReviewCli?: { workerArgv?: readonly string[] }
+  researchDeployment?: unknown
+  researchSshDaemon?: SshDaemonConfig
+  researchSshDevices?: readonly { id: string; config: SshDaemonConfig }[]
+  researchDaemon?: {
+    dbPath: string
+    outputRoot: string
+    workerArgv?: readonly string[]
+    tracking?: RunnerTrackingConfig
+  }
+  researchHumanAuth?: HumanAuthVerifierConfig
+  researchRequireApproval?: boolean
+  /** Trusted, immutable launch setting; never sourced from workspace or HTTP config. */
+  researchBoundary?: ResearchExecutionBoundary
   store: Store
   config: OphConfig
   /**
@@ -122,6 +147,48 @@ function bootstrapWorkspace(
 }
 
 export function serve(opts: ServeOptions) {
+  if (
+    [opts.researchDaemon, opts.researchSshDaemon, opts.researchSshDevices].filter(Boolean).length >
+    1
+  )
+    throw new Error('Configure one research authority or one fixed device catalog')
+  const researchHumanAuth = opts.researchHumanAuth
+    ? createHumanAuthVerifier(opts.researchHumanAuth)
+    : undefined
+  const researchRequireApproval = opts.researchRequireApproval ?? Boolean(researchHumanAuth)
+  const researchBoundary = opts.researchBoundary ?? 'standard'
+  const restricted = researchBoundary !== 'standard'
+  const researchDeployment =
+    opts.researchDeployment === undefined
+      ? undefined
+      : captureResearchDeployment(opts.researchDeployment, {
+          host: opts.host,
+          boundary: researchBoundary,
+          humanAuth: opts.researchHumanAuth,
+          requireApproval: researchRequireApproval,
+          daemonConfigured: Boolean(
+            opts.researchDaemon || opts.researchSshDaemon || opts.researchSshDevices,
+          ),
+        })
+  const researchLiteratureCollector =
+    !restricted && researchDeployment?.allowPublicMetadata !== false
+      ? createLiteratureCollector({})
+      : undefined
+  const researchExecutionDevices =
+    !restricted && opts.researchSshDevices
+      ? createResearchDevices(opts.researchSshDevices)
+      : undefined
+  const researchDaemonBackend =
+    !restricted && opts.researchSshDaemon
+      ? { kind: 'ssh-daemon' as const, daemon: createSshDaemonClient(opts.researchSshDaemon) }
+      : !restricted && opts.researchDaemon
+        ? {
+            daemon: new JobDaemon(opts.researchDaemon),
+            ...(opts.researchDaemon.workerArgv
+              ? { workerArgv: [...opts.researchDaemon.workerArgv] }
+              : {}),
+          }
+        : undefined
   const bus = new EventBus()
   const runs = new RunManager(opts.store, bus)
   const gitWatch = createGitWatch(opts.store, bus)
@@ -144,7 +211,7 @@ export function serve(opts: ServeOptions) {
    * 的源码树。
    */
   const { workspace, rootPath: workspaceRoot } = bootstrapWorkspace(opts.store, opts.workspaceRoot)
-  const researchTemplate = ensureResearchWorkspace(workspaceRoot)
+  const researchTemplate = restricted ? { created: [] } : ensureResearchWorkspace(workspaceRoot)
   if (researchTemplate.created.length > 0) {
     process.stderr.write(`[oph] 已补齐研究工作区模板：${researchTemplate.created.join('、')}\n`)
   }
@@ -168,20 +235,21 @@ export function serve(opts: ServeOptions) {
    * 异步、不阻塞服务启动——一个慢插件不该让整个服务起不来。
    */
   let pluginTeardown: (() => void) | null = null
-  void acquireExtensions(workspaceRoot, (line) => process.stderr.write(`${line}\n`))
-    .then((ext) => {
-      for (const f of ext.mcp.failures) {
-        process.stderr.write(`[oph] MCP ${f.server}：${f.reason}\n`)
-      }
-      for (const f of ext.plugins.failures) {
-        process.stderr.write(`[oph] 插件加载失败 ${f.dir}：${f.reason}\n`)
-      }
-      if (ext.team.error) process.stderr.write(`[oph] team 配置：${ext.team.error}\n`)
-      pluginTeardown = () => releaseExtensions(workspaceRoot)
-    })
-    .catch((err) => {
-      process.stderr.write(`[oph] 扩展加载失败：${String(err)}\n`)
-    })
+  if (!restricted)
+    void acquireExtensions(workspaceRoot, (line) => process.stderr.write(`${line}\n`))
+      .then((ext) => {
+        for (const f of ext.mcp.failures) {
+          process.stderr.write(`[oph] MCP ${f.server}：${f.reason}\n`)
+        }
+        for (const f of ext.plugins.failures) {
+          process.stderr.write(`[oph] 插件加载失败 ${f.dir}：${f.reason}\n`)
+        }
+        if (ext.team.error) process.stderr.write(`[oph] team 配置：${ext.team.error}\n`)
+        pluginTeardown = () => releaseExtensions(workspaceRoot)
+      })
+      .catch((err) => {
+        process.stderr.write(`[oph] 扩展加载失败：${String(err)}\n`)
+      })
 
   // 回收上次进程留下的 running run。必须在开始服务**之前**做：
   // 留着不管的话 isBusy 会一直判真，用户在那个会话里发不出任何消息——会话被永久锁死。
@@ -193,6 +261,10 @@ export function serve(opts: ServeOptions) {
     ? sanitizeProcessExitObservation(opts.previousProcessExit, collectSecrets(opts.config))
     : undefined
   const stale = recoverStaleRuns(opts.store, previousExit)
+  if (!restricted) {
+    recoverRunningSyntheticAttempts(opts.store)
+    publishResearchEvents(opts.store, bus)
+  }
   if (stale.recovered > 0) {
     process.stderr.write(
       `[oph] 已回收上次残留的 ${stale.recovered} 个执行记录` +
@@ -235,6 +307,7 @@ export function serve(opts: ServeOptions) {
   schedulerTimer.unref?.()
 
   async function tickSchedules(): Promise<void> {
+    if (restricted) return
     const all = await loadSchedules().catch(() => [] as Schedule[])
     // 只管本工作区的：一台机器上可能同时开着两个工作区的 sidecar，
     // 不加这条过滤会让同一条任务被触发两次。
@@ -308,6 +381,8 @@ export function serve(opts: ServeOptions) {
    * 所以传 port 0 让内核挑一个空闲的，二维码指向这个新端口。
    */
   const enableLan = (): { port: number } => {
+    if (researchDeployment)
+      throw new Error('Deployment contract forbids widening the loopback listener')
     if (!lanServer) {
       // 复用同一份 handler：两个监听器共用 bus / runs / store，
       // 手机连上后看到的是同一份状态，不是另一个副本。
@@ -339,6 +414,7 @@ export function serve(opts: ServeOptions) {
         if (!pairing.verify(extractToken(req))) {
           return new Response('unauthorized', { status: 401 })
         }
+        if (restricted) return withCors(json({ error: RESTRICTED_RESEARCH_CAPABILITY_DENIED }, 403))
         const ok = srv.upgrade(req, {
           data: {
             id: crypto.randomUUID(),
@@ -365,6 +441,47 @@ export function serve(opts: ServeOptions) {
         if (!pairing.verify(extractToken(req))) {
           return withCors(json({ error: 'unauthorized' }, 401))
         }
+        if (req.method === 'GET' && url.pathname === '/api/research/security') {
+          return withCors(
+            json({ researchBoundary, clinicalBackend: 'unavailable', mutableViaApi: false }),
+          )
+        }
+        if (req.method === 'GET' && url.pathname === '/api/research/deployment') {
+          return withCors(
+            json({ deployment: researchDeployment ?? null, clinicalAcceptance: false }),
+          )
+        }
+        if (req.method === 'GET' && url.pathname === '/api/research/execution-backend') {
+          return withCors(
+            json({
+              backend:
+                researchDaemonBackend && 'kind' in researchDaemonBackend
+                  ? researchDaemonBackend.kind
+                  : researchDaemonBackend
+                    ? 'localhost-daemon'
+                    : 'builtin-local',
+              backendPolicyHash:
+                researchDaemonBackend && 'backendPolicyHash' in researchDaemonBackend.daemon
+                  ? researchDaemonBackend.daemon.backendPolicyHash
+                  : null,
+              trackingPolicyHash: researchDaemonBackend?.daemon.trackingPolicyHash ?? null,
+              clinicalAcceptance: false,
+            }),
+          )
+        }
+        if (req.method === 'GET' && url.pathname === '/api/research/execution-devices') {
+          return withCors(
+            json(
+              await quoteResearchDevice(
+                researchExecutionDevices ??
+                  (researchDaemonBackend && 'availability' in researchDaemonBackend.daemon
+                    ? [{ id: 'configured', authority: researchDaemonBackend.daemon }]
+                    : []),
+              ),
+            ),
+          )
+        }
+        if (restricted) return withCors(json({ error: RESTRICTED_RESEARCH_CAPABILITY_DENIED }, 403))
         try {
           const res = await handleApi(url, req, {
             store: opts.store,
@@ -390,6 +507,14 @@ export function serve(opts: ServeOptions) {
               })
             },
             watchGit: () => gitWatch.retarget(),
+            ...(researchHumanAuth ? { researchHumanAuth } : {}),
+            researchRequireApproval,
+            ...(researchLiteratureCollector ? { researchLiteratureCollector } : {}),
+            ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
+            ...(!restricted && opts.researchReviewCli
+              ? { researchReviewCli: opts.researchReviewCli }
+              : {}),
+            ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
           })
           if (res) return withCors(res)
         } catch (err) {
@@ -399,6 +524,7 @@ export function serve(opts: ServeOptions) {
       }
 
       // ── 静态资源 ──
+      if (restricted) return withCors(json({ error: RESTRICTED_RESEARCH_CAPABILITY_DENIED }, 403))
       if (opts.staticDir) {
         const served = await serveStatic(opts.staticDir, url.pathname)
         if (served) return served
@@ -408,6 +534,10 @@ export function serve(opts: ServeOptions) {
 
     websocket: {
       async message(ws: ServerWebSocket<SocketData>, raw: string | Buffer) {
+        if (restricted) {
+          ws.close(1008, RESTRICTED_RESEARCH_CAPABILITY_DENIED)
+          return
+        }
         let frame: HelloFrame | ClientCommand
         try {
           frame = JSON.parse(String(raw))
@@ -452,7 +582,7 @@ export function serve(opts: ServeOptions) {
   boundPort = server.port ?? opts.port
 
   // 分支名跟着 `.git/HEAD` 走，理由与边界都在 `git-watch.ts`。
-  gitWatch.retarget()
+  if (!restricted) gitWatch.retarget()
 
   return {
     server,
@@ -470,6 +600,9 @@ export function serve(opts: ServeOptions) {
     pairingUrl: () => pairing.qrUrl(boundPort),
     lanUrl: () => `http://${preferredLanAddress()}:${boundPort}`,
     stop() {
+      for (const device of researchExecutionDevices ?? []) device.authority.close()
+      researchDaemonBackend?.daemon.close()
+      clearInterval(schedulerTimer)
       gitWatch.stop()
       runs.interruptAll()
       disableLan()

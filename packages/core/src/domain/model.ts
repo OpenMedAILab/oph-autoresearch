@@ -161,6 +161,8 @@ export interface Conversation {
    */
   source: 'workflow' | null
   sourceRef: string | null
+  /** 编排成员所属的父会话；用户会话没有父会话。 */
+  parentConversationId: ConversationId | null
   createdAt: number
   updatedAt: number
 }
@@ -1020,7 +1022,9 @@ export function envelopeHeadTokens(breakdown: ContextBreakdown): number {
  * **usage 四个字段允许为 null。** `null` = provider 没回报，与真实的 0 是两回事。中转站漏 usage 是
  * 常态，把没回报记成 0 会让上下文锚点误判成「这次请求什么都没占」。
  */
+export type ProviderRequestPurpose = 'turn' | 'summary'
 export interface ProviderRequest {
+  purpose: ProviderRequestPurpose
   id: ProviderRequestId
   runId: RunId
   /** 本 run 内第几次模型往返，从 0 起。 */

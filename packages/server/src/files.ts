@@ -15,6 +15,7 @@ import JSZip from 'jszip'
 export type PreviewKind =
   | 'text'
   | 'markdown'
+  | 'html'
   | 'office'
   | 'image'
   | 'pdf'
@@ -56,8 +57,10 @@ export interface PreviewResult {
 const MAX_TEXT_BYTES = 512 * 1024
 /** 内联二进制上限（data URI 会膨胀约 1.37 倍）。 */
 const MAX_INLINE_BYTES = 4 * 1024 * 1024
+/** PDF 单独一档上限：论文、报告动辄十几 MB，而前端渲染是分页按需的。 */
+const MAX_INLINE_PDF_BYTES = 32 * 1024 * 1024
 /** Office OOXML 在本机解包渲染；限制原始压缩包，避免巨型文档耗尽内存。 */
-const MAX_OFFICE_BYTES = 32 * 1024 * 1024
+export const MAX_OFFICE_BYTES = 32 * 1024 * 1024
 
 const EXT_LANGUAGE: Record<string, string> = {
   '.ts': 'typescript',
@@ -127,6 +130,8 @@ const EXT_KIND: Record<string, PreviewKind> = {
   '.ico': 'image',
   '.avif': 'image',
   '.svg': 'text', // SVG 既是图片也是文本；给文本以便直接编辑，UI 侧再叠加渲染
+  '.html': 'html',
+  '.htm': 'html',
   '.pdf': 'pdf',
   '.mp3': 'audio',
   '.wav': 'audio',
@@ -165,6 +170,8 @@ const EXT_MIME: Record<string, string> = {
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
   '.avif': 'image/avif',
+  '.html': 'text/html',
+  '.htm': 'text/html',
   '.pdf': 'application/pdf',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -512,7 +519,7 @@ export async function preview(workspaceRoot: string, relPath: string): Promise<P
     ...(language ? { language } : {}),
   }
 
-  if (kind === 'text' || kind === 'markdown' || kind === 'tabular') {
+  if (kind === 'text' || kind === 'markdown' || kind === 'html' || kind === 'tabular') {
     // 表格族里 csv/tsv 是文本，xlsx 不是——按实际能否解码决定走哪条路。
     const buf = await readFile(abs)
     const slice = buf.subarray(0, MAX_TEXT_BYTES)
@@ -552,7 +559,8 @@ export async function preview(workspaceRoot: string, relPath: string): Promise<P
   }
 
   if (kind === 'image' || kind === 'pdf' || kind === 'audio' || kind === 'video') {
-    if (info.size > MAX_INLINE_BYTES) {
+    const cap = kind === 'pdf' ? MAX_INLINE_PDF_BYTES : MAX_INLINE_BYTES
+    if (info.size > cap) {
       return {
         ...base,
         truncated: true,
@@ -566,7 +574,8 @@ export async function preview(workspaceRoot: string, relPath: string): Promise<P
   return { ...base, note: kind === 'archive' ? '归档文件' : '二进制文件' }
 }
 
-async function renderOffice(bytes: Buffer, ext: string): Promise<string> {
+/** 把 OOXML（docx/xlsx/pptx）字节渲染成预览 HTML。SSH 远程预览与本地预览共用同一份。 */
+export async function renderOffice(bytes: Buffer, ext: string): Promise<string> {
   const zip = await JSZip.loadAsync(bytes)
   if (ext === '.docx') return renderDocx(zip)
   if (ext === '.pptx') return renderPptx(zip)
@@ -576,8 +585,15 @@ async function renderOffice(bytes: Buffer, ext: string): Promise<string> {
 async function renderDocx(zip: JSZip): Promise<string> {
   const xml = await zip.file('word/document.xml')?.async('string')
   if (!xml) throw new Error('缺少 word/document.xml')
-  const body = xml.match(/<w:body[\s\S]*?<\/w:body>/)?.[0] ?? xml
-  const blocks = body.match(/<w:(?:p|tbl)\b[\s\S]*?<\/w:(?:p|tbl)>/g) ?? []
+  const body = xml.match(/<w:body\b[\s\S]*?<\/w:body>/)?.[0] ?? xml
+  // 图片先从 rels 换成 data URI，再按块切分——img 落在它所在的段落里。
+  const withImages = await inlineDocxImages(zip, body)
+  /*
+   * 块的正则必须带反向引用：`<w:tbl>` 的单元格里是完整段落，`</w:p>` 比
+   * `</w:tbl>` 先出现——不带 \1 时表格块会被单元格里第一个段落结束标签截断，
+   * 表现为表格整个丢失、格内文字散成孤段。
+   */
+  const blocks = withImages.match(/<w:(p|tbl)\b[\s\S]*?<\/w:\1>/g) ?? []
   const html = blocks
     .map((block) => {
       if (block.startsWith('<w:tbl')) {
@@ -594,6 +610,63 @@ async function renderDocx(zip: JSZip): Promise<string> {
     })
     .join('')
   return `<article class="office-document">${html || '<p>文档没有可显示的正文</p>'}</article>`
+}
+
+const DOCX_IMAGE_EXTS: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+}
+
+/** 内联图片总字节上限：研究报告里的图按 MB 算，超了宁可缺图也不把页面撑爆。 */
+const DOCX_MEDIA_CAP = 12 * 1024 * 1024
+
+/**
+ * 把 word/media 里的图片按 rels 映射嵌回正文。
+ *
+ * 只处理 `word/_rels/document.xml.rels` 里声明的关系：无 rels 或 media 缺失时
+ * 正文原样返回，不把「没图」当错误。
+ */
+async function inlineDocxImages(zip: JSZip, body: string): Promise<string> {
+  const relsXml = await zip.file('word/_rels/document.xml.rels')?.async('string')
+  if (!relsXml) return body
+  const mediaByRid = new Map<string, { path: string; mime: string }>()
+  for (const m of relsXml.matchAll(/<Relationship\b[^>]*\/?>/g)) {
+    const tag = m[0]
+    const id = tag.match(/\bId="([^"]+)"/)?.[1]
+    const target = tag.match(/\bTarget="([^"]+)"/)?.[1]
+    const type = tag.match(/\bType="([^"]+)"/)?.[1]
+    if (!id || !target || !type?.includes('/image')) continue
+    const ext = extname(target.split('?')[0] ?? '').toLowerCase()
+    const mime = DOCX_IMAGE_EXTS[ext]
+    if (!mime) continue
+    mediaByRid.set(id, { path: `word/${target.replace(/^\/+/, '')}`, mime })
+  }
+  if (mediaByRid.size === 0) return body
+
+  let total = 0
+  const dataUriByRid = new Map<string, string>()
+  for (const [rid, { path, mime }] of mediaByRid) {
+    const file = zip.file(path)
+    if (!file) continue
+    if (total >= DOCX_MEDIA_CAP) break
+    const bytes = await file.async('nodebuffer')
+    if (total + bytes.length > DOCX_MEDIA_CAP) continue
+    total += bytes.length
+    dataUriByRid.set(rid, `data:${mime};base64,${bytes.toString('base64')}`)
+  }
+  if (dataUriByRid.size === 0) return body
+
+  return body.replace(
+    /<w:drawing\b[\s\S]*?r:embed="([^"]+)"[\s\S]*?<\/w:drawing>/g,
+    (whole, rid: string) => {
+      const uri = dataUriByRid.get(rid)
+      return uri ? `<img src="${uri}" alt="文档图片" />` : whole
+    },
+  )
 }
 
 async function renderPptx(zip: JSZip): Promise<string> {
@@ -652,11 +725,14 @@ async function renderXlsx(zip: JSZip): Promise<string> {
 }
 
 function officeText(xml: string): string {
-  return (xml.match(/<(?:w:t|a:t|t)(?:\s[^>]*)?>([\s\S]*?)<\/(?:w:t|a:t|t)>/g) ?? [])
+  const text = (xml.match(/<(?:w:t|a:t|t)(?:\s[^>]*)?>([\s\S]*?)<\/(?:w:t|a:t|t)>/g) ?? [])
     .map((node) => node.replace(/^<[^>]+>|<\/[^>]+>$/g, ''))
     .map(decodeXml)
     .map(escapeHtml)
     .join('')
+  // 图片通常独占一个 run；排在段落文字后面，位置差异在图与文字混排时才会看出来。
+  const images = (xml.match(/<img\b[^>]*>/g) ?? []).join('')
+  return `${text}${images}`
 }
 
 function decodeXml(value: string): string {

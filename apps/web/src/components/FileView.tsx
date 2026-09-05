@@ -3,9 +3,11 @@ import {
   createEffect,
   createResource,
   createSignal,
+  lazy,
   Match,
   onCleanup,
   Show,
+  Suspense,
   Switch,
 } from 'solid-js'
 import { filterXSS, getDefaultWhiteList } from 'xss'
@@ -27,11 +29,15 @@ import {
 } from '../lib/store/index.ts'
 import { IconCheck, IconCopy, IconSave, IconSearch, IconX } from './Icons.tsx'
 
+// 懒加载：pdf.js 及其 worker 只跟着 PDF 预览走，不进文件视图的常驻块。
+const PdfPreview = lazy(() => import('./PdfPreview.tsx').then((m) => ({ default: m.PdfPreview })))
+
 interface PreviewResult {
   path: string
   kind:
     | 'text'
     | 'markdown'
+    | 'html'
     | 'office'
     | 'image'
     | 'pdf'
@@ -63,7 +69,7 @@ interface PreviewResult {
  * 只想聊天的用户不该为它付首屏成本。
  */
 export default function FileView(props: { path: string; refresh?: number }) {
-  const [markdownMode, setMarkdownMode] = createSignal<'preview' | 'source'>('preview')
+  const [docMode, setDocMode] = createSignal<'preview' | 'source'>('preview')
   const [copyState, setCopyState] = createSignal<'idle' | 'done'>('idle')
   const [draft, setDraft] = createSignal('')
   const [baseline, setBaseline] = createSignal('')
@@ -85,7 +91,7 @@ export default function FileView(props: { path: string; refresh?: number }) {
 
   createEffect(() => {
     props.path
-    setMarkdownMode('preview')
+    setDocMode('preview')
     setCopyState('idle')
     setDraft('')
     setBaseline('')
@@ -117,8 +123,13 @@ export default function FileView(props: { path: string; refresh?: number }) {
     return (
       value?.kind === 'text' ||
       value?.kind === 'tabular' ||
-      (value?.kind === 'markdown' && markdownMode() === 'source')
+      value?.kind === 'html' ||
+      (value?.kind === 'markdown' && docMode() === 'source')
     )
+  }
+  const toggleable = () => {
+    const kind = current()?.kind
+    return kind === 'markdown' || kind === 'html'
   }
   const fileName = () => props.path.split('/').pop() ?? props.path
   const directory = () => {
@@ -218,20 +229,20 @@ export default function FileView(props: { path: string; refresh?: number }) {
               </Show>
             </button>
           </Show>
-          <Show when={loaded(result)?.kind === 'markdown'}>
+          <Show when={toggleable()}>
             <fieldset class="preview-mode-switch">
-              <legend>Markdown 查看方式</legend>
+              <legend>{current()?.kind === 'html' ? 'HTML 查看方式' : 'Markdown 查看方式'}</legend>
               <button
                 type="button"
-                classList={{ active: markdownMode() === 'preview' }}
-                onClick={() => setMarkdownMode('preview')}
+                classList={{ active: docMode() === 'preview' }}
+                onClick={() => setDocMode('preview')}
               >
                 预览
               </button>
               <button
                 type="button"
-                classList={{ active: markdownMode() === 'source' }}
-                onClick={() => setMarkdownMode('source')}
+                classList={{ active: docMode() === 'source' }}
+                onClick={() => setDocMode('source')}
               >
                 源码
               </button>
@@ -294,9 +305,9 @@ export default function FileView(props: { path: string; refresh?: number }) {
                   }}
                 />
               </Match>
-              <Match when={r().kind === 'markdown'}>
+              <Match when={r().kind === 'markdown' || r().kind === 'html'}>
                 <Show
-                  when={markdownMode() === 'preview'}
+                  when={docMode() === 'preview'}
                   fallback={
                     <CodeView
                       content={draft()}
@@ -314,7 +325,20 @@ export default function FileView(props: { path: string; refresh?: number }) {
                     />
                   }
                 >
-                  <article class="file-markdown markdown" innerHTML={renderMarkdown(draft())} />
+                  {r().kind === 'markdown' ? (
+                    <article class="file-markdown markdown" innerHTML={renderMarkdown(draft())} />
+                  ) : (
+                    /*
+                     * HTML 预览放进无脚本的沙箱 iframe：页面样式与脚本都不许碰到应用，
+                     * 链接和表单在沙箱里也点不出去。sandbox 空值 = 全部能力关闭。
+                     */
+                    <iframe
+                      class="preview-frame html-preview-frame"
+                      sandbox=""
+                      srcdoc={draft()}
+                      title={r().path}
+                    />
+                  )}
                 </Show>
               </Match>
               <Match when={r().kind === 'office'}>
@@ -324,8 +348,9 @@ export default function FileView(props: { path: string; refresh?: number }) {
                 <img class="preview-media" src={r().dataUri} alt={r().path} />
               </Match>
               <Match when={r().kind === 'pdf'}>
-                {/* WKWebView 和 WebView2 都内建 PDF 渲染，不需要额外的 JS 阅读器 */}
-                <iframe class="preview-frame" src={r().dataUri} title={r().path} />
+                <Suspense fallback={<div class="preview-loading" />}>
+                  <PdfPreview dataUri={r().dataUri ?? ''} title={r().path} />
+                </Suspense>
               </Match>
               <Match when={r().kind === 'video'}>
                 <video class="preview-media" src={r().dataUri} controls />
@@ -370,7 +395,7 @@ const OFFICE_WHITELIST = {
   th: ['colspan', 'rowspan'],
 }
 
-function sanitizeOfficeHtml(html: string): string {
+export function sanitizeOfficeHtml(html: string): string {
   return filterXSS(html, { whiteList: OFFICE_WHITELIST })
 }
 

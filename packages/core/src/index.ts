@@ -31,7 +31,14 @@ export {
   type StepId,
   type WorkspaceId,
 } from './domain/ids.ts'
-
+export {
+  canonicalLabelSetReference,
+  changeImpact,
+  type DependencyEdge,
+  type LabelSetReference,
+  validateLabelSetReference,
+  validateLabelSetSuccessor,
+} from './domain/labelset.ts'
 // 领域模型：落库形状与读数口径，几乎每个包都要
 export {
   type Attachment,
@@ -73,6 +80,7 @@ export {
   type ProviderKind,
   type ProviderRequest,
   type ProviderRequestDiagnostic,
+  type ProviderRequestPurpose,
   type ProviderRequestStatus,
   type ProviderRetryDecision,
   REASONING_ECHOES,
@@ -102,7 +110,47 @@ export {
   type UsageTotals,
   type Workspace,
 } from './domain/model.ts'
-
+// 服务端 → 客户端的事件
+export {
+  type ArtifactVersion,
+  canonicalResearchBundle,
+  foldResearchEvents,
+  type HumanApproval,
+  isResearchTemplateId,
+  RESEARCH_STAGES,
+  RESEARCH_STATUSES,
+  type ResearchApprovalScope,
+  type ResearchAttempt,
+  type ResearchBudget,
+  type ResearchCampaign,
+  type ResearchCampaignInput,
+  type ResearchCommand,
+  type ResearchEvent,
+  type ResearchExecutionStage,
+  type ResearchJobSpec,
+  type ResearchJsonObject,
+  type ResearchJsonValue,
+  type ResearchLiteratureCitation,
+  type ResearchModelReview,
+  type ResearchStage,
+  type ResearchStatus,
+  type ResearchTaskRevision,
+  type ResearchTemplateId,
+  type ResearchWriteResult,
+  SYNTHETIC_EVALUATION_TEMPLATE,
+  SYNTHETIC_RETINAL_TEMPLATE,
+  SYNTHETIC_SUMMARY_TEMPLATE,
+  SYNTHETIC_TRAINING_TEMPLATE,
+  type SyntheticCompletionValidation,
+  type TrustedHumanReviewerProof,
+} from './domain/research.ts'
+export {
+  decideResearchCapability,
+  RESTRICTED_RESEARCH_CAPABILITY_DENIED,
+  type ResearchCapability,
+  type ResearchCapabilityDecision,
+  type ResearchExecutionBoundary,
+} from './domain/research-policy.ts'
 // workflow 的跨层序列化契约与纯投影：team/server/web 共用，不能各算一份。
 export {
   checkpointOutput,
@@ -127,7 +175,6 @@ export {
   workflowGroupId,
   workflowTransitionOf,
 } from './domain/workflow.ts'
-
 // 服务端 → 客户端的事件
 export type {
   ActionDescriptor,
@@ -142,9 +189,9 @@ export { SUBAGENT_NODE_ID } from './protocol/events.ts'
 export type {
   ConversationHistoryPageResponse,
   ConversationUsageResponse,
+  UsageOverviewResponse,
   UsageResponse,
 } from './protocol/http.ts'
-
 // 客户端 → 服务端的指令、握手与配对
 export {
   type ClientCommand,

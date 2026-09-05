@@ -13,7 +13,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { ChatRequest, LlmAdapter, ProviderEvent, WireMessage } from '@oph-autoresearch/ai'
 import { classifyProviderError, DEFAULT_DENSITY, lookupModel } from '@oph-autoresearch/ai'
-import type { AgentEvent } from '@oph-autoresearch/core'
+import type { AgentEvent, RunUsage } from '@oph-autoresearch/core'
 import {
   createConversation,
   createRun,
@@ -1212,5 +1212,227 @@ describe('结果形态对用户可见', () => {
     }
     expect(recorded[0]?.phase).toBe('skipped')
     expect(recorded[0]?.reasonCode).toBe('nothing_to_fold')
+  })
+})
+
+/**
+ * 会调摘要器的压缩端口：通过 `trace` 把摘要请求记成这一轮的普通请求。
+ * 投影在压过之后变小，重发才有意义。
+ */
+function summarizingCompaction(
+  outcome: CompactionOutcome,
+  options: { status?: 'received' | 'uncertain' | 'rejected'; settleTwice?: boolean } = {},
+) {
+  const state = { runs: 0, folded: false }
+  const port: CompactionPort = {
+    project: (messages) =>
+      state.folded ? messages.map((message) => ({ ...message, content: '折' })) : messages,
+    run: async (input: CompactionRunInput) => {
+      state.runs++
+      state.folded = true
+      const trace = input.trace
+      if (trace) {
+        const id = trace.open({
+          model: 'claude-opus-5',
+          system: [{ text: '你是会话摘要器。' }],
+          messages: [{ role: 'user', content: '摘要提示词' }],
+          tools: [],
+          maxOutputTokens: null,
+        })
+        trace.sent(id)
+        trace.firstEvent(id)
+        const usage =
+          options.status === 'rejected'
+            ? null
+            : {
+                inputTokens: 7,
+                outputTokens: 3,
+                cachedTokens: null,
+                cacheWriteTokens: null,
+                reasoningTokens: 0,
+                source: 'provider' as const,
+              }
+        trace.settle(
+          id,
+          options.status ?? 'received',
+          usage,
+          options.status === 'rejected' ? 'rejected' : null,
+          'end_turn',
+        )
+        // Trace may be called more than once by a failing adapter's cleanup path. The loop must
+        // preserve one persisted request and one usage sample.
+        if (options.settleTwice)
+          trace.settle(id, options.status ?? 'received', usage, null, 'end_turn')
+      }
+      return outcome
+    },
+  }
+  return { port, state }
+}
+
+/** 与 `okAdapter` 同形，只多回报一次 usage：这里要看 usage 里有没有两笔。 */
+function usageAdapter(): LlmAdapter {
+  return {
+    kind: 'anthropic_messages',
+    transmits: { effort: true },
+    spec: lookupModel('claude-opus-5', 'anthropic_messages'),
+    async *stream(_req: ChatRequest): AsyncGenerator<ProviderEvent, void, unknown> {
+      yield { type: 'request_prepared', measuredInputTokens: 10 }
+      yield { type: 'text_delta', delta: '完成' }
+      yield {
+        type: 'usage',
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cachedTokens: null,
+          cacheWriteTokens: null,
+          reasoningTokens: 0,
+          source: 'provider',
+        },
+      }
+      yield { type: 'done', stopReason: 'end_turn', rawStopReason: '' }
+    },
+  }
+}
+
+function storedRun() {
+  const store = new Store({ path: ':memory:' })
+  const workspace = upsertWorkspace(store, 'C:/ws', 'ws')
+  const conversation = createConversation(store, {
+    workspaceId: workspace.id,
+    provider: 'p',
+    model: 'm',
+  })
+  const run = createRun(store, {
+    conversationId: conversation.id,
+    workspaceId: workspace.id,
+    model: 'm',
+    clientRequestId: 'req-summary',
+    userMessageId: null,
+    messageIdUpperBound: null,
+    contextSnapshot: [],
+  })
+  const persist: LoopPersistence = {
+    ...noopPersistence(),
+    openRequest: (input) => openProviderRequest(store, input).id,
+    markRequestSent: (id) => markProviderRequestSent(store, id as never),
+    settleRequest: (id, status, usage, errorCode, finishReason) =>
+      settleProviderRequest(store, id as never, status, usage, errorCode, finishReason),
+  }
+  return { store, run, persist }
+}
+
+/**
+ * Run-scoped compaction summaries are provider requests, rather than standalone ledger entries.
+ * They consume a turn number, merge once into this run's usage, and remain visible even if the
+ * provider rejects the summary request.
+ */
+describe('摘要请求按普通请求记账', () => {
+  test('发送前压缩：摘要请求占 turn 0，主请求顺延到 turn 1，usage 仅合并一次', async () => {
+    const { store, run, persist } = storedRun()
+    const compaction = summarizingCompaction(okOutcome, { settleTwice: true })
+    const saved: RunUsage[] = []
+    const loop = new AgentLoop({
+      adapter: usageAdapter(),
+      registry: new ToolRegistry(),
+      systemPrompt: 'sys',
+      persist: { ...persist, saveUsage: (_runId, usage) => saved.push(structuredClone(usage)) },
+      makeToolContext: makeCtx,
+      compaction: compaction.port,
+    })
+    const events: AgentEvent[] = []
+    for await (const event of loop.run({
+      runId: run.id,
+      history: [],
+      anchor: {
+        tokens: 900_000,
+        throughMessageId: null,
+        model: 'claude-opus-5',
+        headTokens: 0,
+        envelopeFingerprint: null,
+      },
+      signal: new AbortController().signal,
+    })) {
+      events.push(event)
+    }
+
+    expect(compaction.state.runs).toBe(1)
+    const rows = listProviderRequests(store, run.id)
+    expect(rows.map((row) => [row.turnIndex, row.retryIndex, row.purpose, row.status])).toEqual([
+      [0, 0, 'summary', 'received'],
+      [1, 0, 'turn', 'received'],
+    ])
+    expect(rows[0]?.providerOutputTokens).toBe(3)
+    const firstUsage = events.find((event) => event.type === 'usage')
+    expect(firstUsage?.type === 'usage' && firstUsage.usage.inputTokens).toBe(7)
+    const last = saved.at(-1)
+    expect(last?.turns.map((turn) => [turn.turnIndex, turn.input])).toEqual([
+      [0, 7],
+      [1, 10],
+    ])
+    expect(last?.inputTokens).toBe(17)
+    store.close()
+  })
+
+  test('容量拒绝后压缩：被拒、摘要、重发各占一个唯一 turn', async () => {
+    const { store, run, persist } = storedRun()
+    const compaction = summarizingCompaction(okOutcome)
+    const { adapter, state } = rejectingAdapter(1)
+    const loop = new AgentLoop({
+      adapter,
+      registry: new ToolRegistry(),
+      systemPrompt: 'sys',
+      persist,
+      makeToolContext: makeCtx,
+      compaction: compaction.port,
+    })
+    const events = await collectWith(loop, run.id, bulkyHistory())
+    expect(events.some((event) => event.type === 'run.error')).toBe(false)
+    expect(state.attempts).toBe(2)
+    expect(
+      listProviderRequests(store, run.id).map((row) => [
+        row.turnIndex,
+        row.retryIndex,
+        row.purpose,
+        row.status,
+      ]),
+    ).toEqual([
+      [0, 0, 'turn', 'rejected'],
+      [1, 0, 'summary', 'received'],
+      [2, 0, 'turn', 'received'],
+    ])
+    store.close()
+  })
+
+  test('provider-rejected summaries retain their sent request evidence', async () => {
+    const { store, run, persist } = storedRun()
+    const compaction = summarizingCompaction(okOutcome, { status: 'rejected' })
+    const loop = new AgentLoop({
+      adapter: okAdapter(),
+      registry: new ToolRegistry(),
+      systemPrompt: 'sys',
+      persist,
+      makeToolContext: makeCtx,
+      compaction: compaction.port,
+    })
+    for await (const _ of loop.run({
+      runId: run.id,
+      history: [],
+      anchor: {
+        tokens: 900_000,
+        throughMessageId: null,
+        model: 'claude-opus-5',
+        headTokens: 0,
+        envelopeFingerprint: null,
+      },
+      signal: new AbortController().signal,
+    })) {
+      // Assert the stored request sequence after the loop has settled both requests.
+    }
+    expect(listProviderRequests(store, run.id)).toMatchObject([
+      { turnIndex: 0, purpose: 'summary', status: 'rejected' },
+      { turnIndex: 1, purpose: 'turn', status: 'received' },
+    ])
+    store.close()
   })
 })

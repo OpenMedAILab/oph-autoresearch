@@ -9,6 +9,7 @@ import {
   transcript,
 } from '../lib/store/index.ts'
 import { IconCheck, IconChevron, IconShield } from './Icons.tsx'
+import { ResearchCampaignPanel } from './ResearchCampaignPanel.tsx'
 
 type StageStatus = 'pending' | 'in_progress' | 'waiting_review' | 'completed' | 'failed'
 
@@ -187,7 +188,7 @@ function createResearchFlow() {
     const current = workflow()?.workflow?.phase
     if (current === 'failed' || activities().some((stage) => stage.status === 'failed'))
       return '执行失败'
-    if (current === 'waiting_review') return '等待人工审核'
+    if (current === 'waiting_review') return '等待主会话模型审查'
     if (isRunning() || activities().some((stage) => stage.status === 'in_progress')) return '执行中'
     if (current === 'completed') return '本轮已完成'
     if (delegated().length > 0) return '等待继续'
@@ -266,7 +267,7 @@ export function WorkflowOverview() {
 
       <div class="workflow-compact-foot">
         <IconShield size={13} />
-        审批与阶段产物在中央详情中查看
+        聊天执行视图（未核验）；科研账本在中央详情中查看
       </div>
     </div>
   )
@@ -281,6 +282,12 @@ export function ResearchStageDetail() {
 
   return (
     <div class="workspace-view research-stage-view">
+      {/* 详情是中央视图的一种，回会话只有「收起」这一条路：右侧执行链点的是换阶段，
+          不是离开。收起了还要能再点开，所以选择状态留在 `selectedResearchStage` 上，
+          下一次点同一阶段直接回到这里。 */}
+      <button class="workspace-back" type="button" onClick={() => setCenterView('chat')}>
+        <IconChevron size={12} dir="left" /> 收起详情
+      </button>
       <header class="workspace-view-head">
         <div>
           <span class="eyebrow">RESEARCH STAGE {String(index() + 1).padStart(2, '0')}</span>
@@ -292,6 +299,8 @@ export function ResearchStageDetail() {
         </span>
       </header>
 
+      <ResearchCampaignPanel />
+      <p>以下为聊天执行记录（legacy_unverified），不代表科研产物已核验或人工批准。</p>
       <section class="research-stage-card" aria-label={`${stage().name}阶段详情`}>
         <div class="research-stage-meta">
           <div>
@@ -381,8 +390,8 @@ export function ResearchStageDetail() {
       <div class="execution-checkpoint research-stage-checkpoint">
         <IconShield size={15} />
         <span>
-          <strong>人工检查点</strong>
-          训练方案、统计结论与结果发布必须由研究者确认，审批绑定对应产物版本。
+          <strong>科研审批渠道未配置</strong>
+          当前工作流检查点由主会话模型审查，不构成人类批准；研究执行与结论发布尚未接入科研审批。
         </span>
       </div>
     </div>

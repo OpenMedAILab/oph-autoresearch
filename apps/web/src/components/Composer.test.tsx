@@ -14,6 +14,9 @@ afterEach(async () => {
   const store = await import('../lib/store/index.ts')
   store.setPanelMaximized(false)
   store.setState('context', null)
+  // 草稿是 store 级状态（跨卸载存活），上一个用例敲进去的字会漏给下一个。
+  store.setComposerDraft('')
+  store.setComposerAttachments([])
   document.body.replaceChildren()
 })
 afterAll(async () => {
@@ -173,6 +176,19 @@ describe('放大面板里的输入区', () => {
       expect(wrap.classList.contains('panel-dock-ready')).toBe(true)
     } finally {
       dispose()
+    }
+  })
+
+  test('草稿长在 store 里：卸载重挂（切换中央视图）后还在', async () => {
+    const first = await mountComposer(false)
+    input(first.textarea, '切去 SSH 之前写的草稿')
+    first.dispose()
+    document.body.replaceChildren()
+    const second = await mountComposer(false)
+    try {
+      expect(second.textarea.value).toBe('切去 SSH 之前写的草稿')
+    } finally {
+      second.dispose()
     }
   })
 })

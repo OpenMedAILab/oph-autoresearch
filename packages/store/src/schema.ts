@@ -1077,6 +1077,62 @@ ALTER TABLE runs ADD COLUMN interruption_detail TEXT;
 ALTER TABLE provider_requests ADD COLUMN diagnostic TEXT;
 `,
   },
+  {
+    id: 35,
+    name: 'research_event_ledger',
+    // Research records survive conversation/workspace removal. These IDs are historical ownership references.
+    sql: `
+CREATE TABLE research_campaigns (
+  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, parent_conversation_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK(version >= 1), snapshot TEXT NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_research_campaign_workspace ON research_campaigns(workspace_id, updated_at DESC);
+CREATE INDEX idx_research_campaign_parent ON research_campaigns(parent_conversation_id, updated_at DESC);
+CREATE TABLE research_events (
+  id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES research_campaigns(id),
+  sequence INTEGER NOT NULL CHECK(sequence >= 1), event_type TEXT NOT NULL, command TEXT,
+  campaign TEXT NOT NULL, occurred_at INTEGER NOT NULL, UNIQUE(campaign_id, sequence)
+);
+CREATE TABLE research_outbox (
+  id TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE REFERENCES research_events(id),
+  topic TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL, delivered_at INTEGER
+);
+CREATE INDEX idx_research_outbox_pending ON research_outbox(delivered_at, created_at);
+CREATE TABLE research_idempotency (
+  campaign_id TEXT NOT NULL REFERENCES research_campaigns(id), idempotency_key TEXT NOT NULL,
+  payload_hash TEXT NOT NULL, event_id TEXT NOT NULL REFERENCES research_events(id),
+  result_snapshot TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(campaign_id, idempotency_key)
+);
+CREATE INDEX idx_research_idempotency_event ON research_idempotency(event_id);
+CREATE TABLE research_create_idempotency (
+  workspace_id TEXT NOT NULL, parent_conversation_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+  payload_hash TEXT NOT NULL, event_id TEXT NOT NULL REFERENCES research_events(id),
+  result_snapshot TEXT NOT NULL, created_at INTEGER NOT NULL,
+  PRIMARY KEY(workspace_id, parent_conversation_id, idempotency_key)
+);
+CREATE INDEX idx_research_create_idempotency_event ON research_create_idempotency(event_id);
+`,
+  },
+  {
+    id: 36,
+    name: 'conversation_parent_ownership',
+    sql: `
+ALTER TABLE conversations ADD COLUMN parent_conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE;
+CREATE INDEX idx_conversation_parent ON conversations(parent_conversation_id);
+`,
+  },
+  {
+    id: 37,
+    name: 'provider_request_purpose',
+    /**
+     * Summary calls share a run's request ledger but are not conversation-context turns. Legacy
+     * rows predate this distinction, so their only compatible factual value is `turn`.
+     */
+    sql: `
+ALTER TABLE provider_requests ADD COLUMN purpose TEXT NOT NULL DEFAULT 'turn'
+  CHECK (purpose IN ('turn', 'summary'));
+`,
+  },
 ]
 
 /**
@@ -1125,6 +1181,7 @@ export interface ConversationRow {
   cache_generation: number
   /** CHECK 没管这一列，但写入侧只写这两个值中的一个。 */
   source: 'workflow' | null
+  parent_conversation_id: ConversationId | null
   source_ref: string | null
   archived_at: number | null
   created_at: number
@@ -1200,6 +1257,7 @@ export interface ProviderRequestRow {
   run_id: RunId
   turn_index: number
   retry_index: number
+  purpose: 'turn' | 'summary'
   provider_name: string | null
   provider_kind: ProviderKind | null
   model: string
@@ -1266,6 +1324,7 @@ export const ROW_COLUMNS: Record<string, readonly string[]> = {
     'cache_generation',
     'source',
     'source_ref',
+    'parent_conversation_id',
     'archived_at',
     'created_at',
     'updated_at',
@@ -1322,6 +1381,7 @@ export const ROW_COLUMNS: Record<string, readonly string[]> = {
     'run_id',
     'turn_index',
     'retry_index',
+    'purpose',
     'provider_name',
     'provider_kind',
     'model',

@@ -11,6 +11,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { lookupModel, unknownModel } from '../catalog.ts'
+import { ProviderError } from '../errors.ts'
 import type { ProviderProfile, ToolSchema, WireMessage } from '../types.ts'
 import {
   createThinkingSplitter,
@@ -777,6 +778,74 @@ describe('strict 工具定义', () => {
     const tool = (body.tools as { function: Record<string, unknown> }[])[0]!.function
     expect('strict' in tool).toBe(false)
     expect(tool.parameters).toEqual(third.parameters)
+  })
+})
+
+describe('中断前已收到的 usage', () => {
+  test('SSE usage 已到但 finish 尚未到时中断，ProviderError 保留 provider token', async () => {
+    let usageFrameWritten!: () => void
+    const frameWritten = new Promise<void>((resolve) => {
+      usageFrameWritten = resolve
+    })
+    const local = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"choices":[{"delta":{},"finish_reason":null}],"usage":{"prompt_tokens":7,"completion_tokens":3}}\n\n',
+                ),
+              )
+              usageFrameWritten()
+              // Do not close: abort must interrupt a live stream after the usage frame.
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        ),
+    })
+    const abort = new AbortController()
+    const adapter = new OpenAICompatAdapter(
+      {
+        kind: 'openai_chat_completions',
+        apiKey: 'sk-x',
+        model: 'deepseek-v4-flash',
+        baseUrl: `http://127.0.0.1:${local.port}/v1`,
+      },
+      lookupModel('deepseek-v4-flash', 'openai_chat_completions'),
+    )
+    const failed = (async () => {
+      try {
+        for await (const _ of adapter.stream({
+          model: 'deepseek-v4-flash',
+          system: [],
+          messages: [{ role: 'user', content: 'hi' }],
+          tools: [],
+          maxOutputTokens: 32,
+          signal: abort.signal,
+        })) {
+          // Consume until the pending SSE stream is cancelled.
+        }
+        return null
+      } catch (error) {
+        return error
+      }
+    })()
+    try {
+      await frameWritten
+      await Bun.sleep(10)
+      abort.abort()
+      const error = await failed
+      expect(error).toBeInstanceOf(ProviderError)
+      expect((error as ProviderError).usage).toMatchObject({
+        inputTokens: 7,
+        outputTokens: 3,
+        source: 'provider',
+      })
+    } finally {
+      local.stop(true)
+    }
   })
 })
 

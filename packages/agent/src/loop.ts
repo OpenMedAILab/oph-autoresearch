@@ -42,6 +42,7 @@ import type {
   ProviderFailureCause,
   ProviderKind,
   ProviderRequestDiagnostic,
+  ProviderRequestPurpose,
   ProviderRetryDecision,
   RunId,
   RunUsage,
@@ -55,7 +56,7 @@ import {
   newBatchId,
   reconcileBreakdown,
 } from '@oph-autoresearch/core'
-import type { CompactionOutcome } from './compaction.ts'
+import type { CompactionOutcome, SummaryTrace } from './compaction.ts'
 import { stepStamp } from './compaction.ts'
 import { drainUntil, EventQueue } from './event-queue.ts'
 import { describeDrift, PrefixAudit } from './prefix-audit.ts'
@@ -132,6 +133,7 @@ export interface CompactionPort {
 }
 
 export interface CompactionRunInput {
+  trace?: SummaryTrace
   /** 中断信号。**可缺**：手动压缩不属于任何 run，没有 run 信号。 */
   signal?: AbortSignal
   /**
@@ -267,6 +269,7 @@ export interface LoopPersistence {
    * 「这一轮上下文怎么长起来的」在账本里不存在。
    */
   openRequest(input: {
+    purpose?: ProviderRequestPurpose
     runId: RunId
     turnIndex: number
     retryIndex: number
@@ -367,7 +370,20 @@ export interface RunInput {
 /** 换行。日志里用，避免转义在工具链上被折半。 */
 const NEWLINE = String.fromCharCode(10)
 
-const DEFAULT_MAX_STEPS = 120
+/**
+ * 普通会话一轮的 provider 往返上限。
+ *
+ * 诊断样本里一轮曾连续发出 115 次请求、产生 256 个 step；期间没有传输故障，
+ * 只是模型不断换一种工具继续做。120 允许一次普通对话占住二十多分钟，而且耗尽时
+ * 最后一条仍可能是工具调用，用户看不到结论。复杂的长期任务已经由目标循环跨 run
+ * 续起，不需要把单个 run 放到同样长。
+ */
+export const DEFAULT_MAX_STEPS = 48
+
+/** 最后一轮只用于交付可读结论，工具在这一轮从请求中移除。 */
+const FINALIZATION_PROMPT =
+  '本轮执行预算即将结束。停止调用工具，直接向用户给出简洁结论：说明已经完成的内容、' +
+  '尚未完成或未验证的内容，以及最重要的下一步。不得把未完成的工作描述为已完成。'
 
 /**
  * 流空闲超时。**两个事件之间**超过这个时长没有新事件就判定流卡死。
@@ -446,11 +462,11 @@ export const MAX_RESENDS = 5
  */
 const RESENDABLE: ReadonlyMap<string, number> = new Map([
   ['network_error', 0],
-  ['stream_idle_timeout', 0],
   ['provider_unavailable', UNAVAILABLE_BACKOFF_MS],
 ])
 
 function resendBackoffMs(error: ProviderError, resends: number): number | undefined {
+  if (error.timedOut) return undefined
   if (error.code === 'rate_limited') {
     if (error.retryAfterMs !== null) return Math.max(0, error.retryAfterMs)
     return Math.min(RATE_LIMIT_BACKOFF_BASE_MS * 2 ** resends, RATE_LIMIT_BACKOFF_MAX_MS)
@@ -547,6 +563,20 @@ function untilAborted<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
     // unhandledRejection，而它会把整个进程带下去。
     work.then(resolve, reject).finally(() => signal.removeEventListener('abort', fail))
   })
+}
+
+/** Once a summary request exists, its abort acknowledgement must settle usage before run finalization. */
+async function untilSummarySettled<T>(
+  signal: AbortSignal,
+  work: Promise<T>,
+  trace: { opened: boolean },
+): Promise<T> {
+  try {
+    return await untilAborted(signal, work)
+  } catch (error) {
+    if (trace.opened) await work.catch(() => undefined)
+    throw error
+  }
 }
 
 /** 单纯的等待。**它自己不认中止信号**，要能被停止就套 `untilAborted`。 */
@@ -650,6 +680,64 @@ export class AgentLoop {
    * `request_prepared`，所以这里拉到的恒是它，真正的网络往返发生在调用方的
    * `for await` 里——重发与终态判定因此必须写在那一侧，不能写在这。
    */
+  private summaryTrace(
+    persist: LoopPersistence,
+    runId: RunId,
+    adapter: LlmAdapter,
+    usage: RunUsage,
+    turnIndex: number,
+    density: TokenDensity,
+  ): SummaryTrace & { opened: boolean; merged: boolean } {
+    const settled = new Set<string>()
+    const actualAdapters = new Map<string, LlmAdapter>()
+    const trace = {
+      opened: false,
+      merged: false,
+      open: (req: ChatRequest, source?: { adapter: LlmAdapter; providerName?: string }): string => {
+        trace.opened = true
+        const payload = payloadSnapshotOf(req)
+        const actual = source?.adapter ?? adapter
+        const providerName = source?.providerName ?? this.deps.providerName
+        const requestId = persist.openRequest({
+          runId,
+          turnIndex,
+          retryIndex: 0,
+          purpose: 'summary',
+          ...(providerName ? { providerName } : {}),
+          providerKind: actual.kind,
+          model: req.model,
+          measuredInputTokens: estimateRequest(req, density),
+          sentCategories: emptyBreakdown(),
+          omittedCategories: emptyOmitted(),
+          payloadHash: payload.hash,
+          requestBytes: payload.bytes,
+          cacheRouteFingerprint: envelopeHashOf(req),
+        })
+        actualAdapters.set(requestId, actual)
+        return requestId
+      },
+      sent: (id: string) => persist.markRequestSent(id),
+      firstEvent: (id: string) => persist.markRequestFirstEvent?.(id),
+      settle: (
+        id: string,
+        status: 'received' | 'uncertain' | 'rejected',
+        u: ProviderUsage | null,
+        errorCode: string | null,
+        finishReason?: string,
+      ) => {
+        if (settled.has(id)) return
+        settled.add(id)
+        if (u) {
+          mergeUsage(usage, u, actualAdapters.get(id) ?? adapter, turnIndex)
+          persist.saveUsage(runId, usage)
+          trace.merged = true
+        }
+        persist.settleRequest(id, status, u, errorCode, finishReason)
+      },
+    }
+    return trace
+  }
+
   private async openStream(
     adapter: LlmAdapter,
     req: ChatRequest,
@@ -677,6 +765,7 @@ export class AgentLoop {
           reject(
             new ProviderError({
               code: 'stream_idle_timeout',
+              timedOut: true,
               // 只给分类短语，不带数字。「收到了多少 / 多久没动静」由 `run()` 统一补
               // （`transportReading`）——两处各拼一半的话，同一句话就有了两个作者。
               message: '模型响应中断',
@@ -931,6 +1020,7 @@ export class AgentLoop {
         let refusalNote: string | null = null
         /** 本次请求 provider 回报的 usage。null = 它没报——不要拿累计值代替。 */
         let turnUsage: ProviderUsage | null = null
+        let requestTurn = turnIndex
 
         /*
          * ── 压缩触发：主入口 ──
@@ -948,7 +1038,8 @@ export class AgentLoop {
          */
         // `signal` 不在这里合成：每次尝试要自己的 `attemptAbort`（卡死检测掐的是
         // 那一次连接），所以装配只出请求体，信号在尝试循环里逐次接上。
-        let req = this.buildRequest(input, transcript, occupancyOf)
+        const finalizing = maxSteps > 1 && step === maxSteps - 1
+        let req = this.buildRequest(input, transcript, occupancyOf, finalizing)
         /*
          * 分组明细。**在信封判定之前算**——头部修正要用本轮的头部占用，而只有
          * 装配完才知道这一次的信封长什么样。`req` 每次重新装配都要跟着重算。
@@ -997,10 +1088,19 @@ export class AgentLoop {
             yield { type: 'compaction', runId: input.runId, phase: 'started' }
             // 同工具波次：压缩可能要调一次模型，卡住的话整轮停在这里，而且它不写
             // `provider_requests`，账本上连「卡在哪」都看不出来。
-            const outcome = await untilAborted(
+            const trace = this.summaryTrace(
+              persist,
+              input.runId,
+              adapter,
+              usage,
+              requestTurn,
+              density,
+            )
+            const outcome = await untilSummarySettled(
               input.signal,
               this.compaction.run({
                 signal: input.signal,
+                trace,
                 trigger: 'automatic',
                 model: adapter.spec.id,
                 occupancy,
@@ -1008,7 +1108,14 @@ export class AgentLoop {
                 contextWindow: adapter.spec.contextWindow,
                 density,
               }),
+              trace,
             )
+            if (trace.opened) {
+              requestTurn++
+              turnIndex++
+              if (trace.merged)
+                yield { type: 'usage', runId: input.runId, usage: structuredClone(usage) }
+            }
             if (outcome.status === 'aborted') {
               /*
                * 中断的压缩什么都没落库，所以这里什么都不发、什么都不记：
@@ -1046,7 +1153,7 @@ export class AgentLoop {
                */
               anchor = null
               // 压缩改的是投影，必须重新装配——拿旧请求发出去等于这次压缩白花。
-              req = this.buildRequest(input, transcript, occupancyOf)
+              req = this.buildRequest(input, transcript, occupancyOf, finalizing)
               breakdown = breakdownOf(req, density)
             } else {
               // 压不动不是致命错：照常发出去，让 provider 来判。
@@ -1122,7 +1229,8 @@ export class AgentLoop {
           const payload = payloadSnapshotOf(req)
           requestId = persist.openRequest({
             runId: input.runId,
-            turnIndex: step,
+            turnIndex: requestTurn,
+            purpose: 'turn',
             retryIndex,
             ...(this.deps.providerName ? { providerName: this.deps.providerName } : {}),
             providerKind: adapter.kind,
@@ -1347,10 +1455,19 @@ export class AgentLoop {
               // 收纳段可能落了库却一个 token 没省。
               const sizeBefore = estimateRequest(req, density)
               yield { type: 'compaction', runId: input.runId, phase: 'started' }
-              const outcome = await untilAborted(
+              const trace = this.summaryTrace(
+                persist,
+                input.runId,
+                adapter,
+                usage,
+                requestTurn + 1,
+                density,
+              )
+              const outcome = await untilSummarySettled(
                 input.signal,
                 this.compaction.run({
                   signal: input.signal,
+                  trace,
                   trigger: 'automatic',
                   model: adapter.spec.id,
                   occupancy: cap.reportedInputTokens ?? occupancyOf(req),
@@ -1359,14 +1476,22 @@ export class AgentLoop {
                   contextWindow: adapter.spec.contextWindow,
                   density,
                 }),
+                trace,
               )
+              if (trace.opened) {
+                requestTurn += 2
+                turnIndex += 2
+                sendIndex = 0
+                if (trace.merged)
+                  yield { type: 'usage', runId: input.runId, usage: structuredClone(usage) }
+              }
               if (outcome.status === 'aborted') {
                 stopReason = 'user_interrupt'
                 recordDecision('interrupted')
                 throw err
               }
               if (outcome.status === 'compacted') {
-                const rebuilt = this.buildRequest(input, transcript, occupancyOf)
+                const rebuilt = this.buildRequest(input, transcript, occupancyOf, finalizing)
                 if (estimateRequest(rebuilt, density) < sizeBefore) {
                   persist.recordCompaction(input.runId, nextSeq(), {
                     phase: 'done',
@@ -1414,7 +1539,7 @@ export class AgentLoop {
               throw err
             }
             const backoffMs = resendBackoffMs(pe, resends)
-            if (backoffMs === undefined) {
+            if (backoffMs === undefined && !pe.timedOut) {
               recordDecision('not_retryable')
               throw err
             }
@@ -1443,7 +1568,12 @@ export class AgentLoop {
              * **额度是整轮的，不按码各记一份。** 一轮里先断流再被拒的话，前面用掉的
              * 次数照算——那一轮已经真的发出去过那么多次，换个码不该把账清零。
              */
-            if (resends < MAX_RESENDS && assistantText === '' && calls.length === 0) {
+            if (
+              backoffMs !== undefined &&
+              resends < MAX_RESENDS &&
+              assistantText === '' &&
+              calls.length === 0
+            ) {
               recordDecision('resend', resends + 1, backoffMs)
               resends++
               /*
@@ -1490,6 +1620,7 @@ export class AgentLoop {
              */
             throw new ProviderError({
               code: pe.code,
+              timedOut: pe.timedOut,
               message: [
                 pe.message,
                 ...(pe.status !== undefined ? [] : [transportReading(providerEvents, silentMs)]),
@@ -1956,11 +2087,15 @@ export class AgentLoop {
     input: RunInput,
     transcript: WireMessage[],
     occupancyOf: (req: ChatRequest) => number,
+    finalizing = false,
   ): ChatRequest {
     const { adapter, registry, systemPrompt } = this.deps
 
     // 冻结前缀。缓存断点打在这里的末尾——它之后的所有内容都是易变的。
-    const system: ChatRequest['system'] = [{ text: systemPrompt, cacheBreakpoint: true }]
+    const system: ChatRequest['system'] = [
+      { text: systemPrompt, cacheBreakpoint: true },
+      ...(finalizing ? [{ text: FINALIZATION_PROMPT }] : []),
+    ]
 
     // 历史已经带着每个 run 的不可变上下文快照；run 内 transcript 只追加。
     // 整串一起走压缩投影，工具结果才不会留在投影之外。
@@ -2019,7 +2154,7 @@ export class AgentLoop {
       model: adapter.spec.id,
       system,
       messages,
-      tools: registry.schemas(),
+      tools: finalizing ? [] : registry.schemas(),
       maxOutputTokens: adapter.spec.maxOutputTokens,
       ...(input.effort ? { effort: input.effort } : {}),
       ...(input.cacheKey ? { cacheKey: input.cacheKey } : {}),

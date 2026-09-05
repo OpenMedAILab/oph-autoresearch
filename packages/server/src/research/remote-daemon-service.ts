@@ -1,0 +1,163 @@
+import { timingSafeEqual } from 'node:crypto'
+import { type DurableJob, JobDaemon } from './job-daemon.ts'
+import type { RunnerTrackingConfig } from './runner-tracking.ts'
+
+interface RemoteServiceConfig {
+  authorityId: string
+  token: string
+  port: number
+  dbPath: string
+  outputRoot: string
+  workerArgv?: readonly string[]
+  tracking?: RunnerTrackingConfig
+}
+function projection(job: DurableJob | null) {
+  return job ? { ...job, outputPath: null, error: job.error ? 'worker-failure' : null } : null
+}
+/** Long-lived remote authority: SSH only transports this bounded protocol; disconnect does not own the job. */
+export function createRemoteDaemonService(config: RemoteServiceConfig) {
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(config.authorityId) ||
+    !/^[A-Za-z0-9_-]{32,256}$/.test(config.token) ||
+    !Number.isSafeInteger(config.port) ||
+    config.port < 0 ||
+    config.port > 65535
+  )
+    throw new Error('Invalid remote daemon startup configuration')
+  const authorityId = config.authorityId,
+    token = config.token
+  const daemon = new JobDaemon({
+    dbPath: config.dbPath,
+    outputRoot: config.outputRoot,
+    ...(config.tracking ? { tracking: config.tracking } : {}),
+  })
+  const workerArgv = config.workerArgv ? [...config.workerArgv] : undefined
+  let pumping = false
+  const pump = async () => {
+    if (pumping) return
+    pumping = true
+    try {
+      daemon.reconcileInterrupted()
+      for (const job of daemon.pendingJobs()) {
+        if (job.status !== 'queued' || !daemon.hasAvailableSlot()) continue
+        const worker = await daemon.launchWorker(
+          job.spec.dispatchKey,
+          workerArgv ? { workerArgv } : {},
+        )
+        await worker.exited
+        daemon.reconcileInterrupted()
+      }
+    } finally {
+      pumping = false
+    }
+  }
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: config.port,
+    async fetch(request) {
+      const authorization = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+      if (
+        authorization.length !== token.length ||
+        !timingSafeEqual(Buffer.from(authorization), Buffer.from(token))
+      )
+        return new Response('unauthorized', { status: 401 })
+      const url = new URL(request.url)
+      const respond = (job: DurableJob | null, status = 200) =>
+        Response.json({ authorityId, job: projection(job) }, { status })
+      if (request.method === 'GET' && url.pathname === '/health')
+        return Response.json({
+          authorityId,
+          trackingPolicyHash: daemon.trackingPolicyHash ?? null,
+          availableSlots: daemon.hasAvailableSlot() ? 1 : 0,
+        })
+      if (request.method === 'POST' && url.pathname === '/submit') {
+        const length = Number(request.headers.get('content-length') ?? 0)
+        if (length > 65536) return new Response('too large', { status: 413 })
+        let text = ''
+        const reader = request.body?.getReader()
+        if (!reader) return new Response('invalid request', { status: 400 })
+        let bytes = 0
+        const chunks: Uint8Array[] = []
+        while (true) {
+          const result = await reader.read()
+          if (result.done) break
+          bytes += result.value.length
+          if (bytes > 65536) {
+            await reader.cancel()
+            return new Response('too large', { status: 413 })
+          }
+          chunks.push(result.value)
+        }
+        text = Buffer.concat(chunks).toString('utf8')
+        try {
+          const job = daemon.submit(JSON.parse(text))
+          void pump().catch(() => {})
+          return respond(job)
+        } catch {
+          return respond(null, 409)
+        }
+      }
+      const match = /^\/(status|cancel|receipt)\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(
+        url.pathname,
+      )
+      if (!match) return new Response('not found', { status: 404 })
+      const [, operation, key] = match
+      daemon.reconcileInterrupted()
+      if (request.method === 'GET' && operation === 'status') return respond(daemon.query(key!))
+      if (request.method === 'POST' && operation === 'cancel') return respond(daemon.cancel(key!))
+      if (request.method === 'GET' && operation === 'receipt') {
+        try {
+          return new Response(daemon.receipt(key!), {
+            headers: { 'content-type': 'application/json', 'x-oph-authority-id': authorityId },
+          })
+        } catch {
+          return respond(null, 409)
+        }
+      }
+      return new Response('method not allowed', { status: 405 })
+    },
+  })
+  const timer = setInterval(() => {
+    for (const job of daemon.pendingJobs()) {
+      if (job.spec.lease.expiresAt <= Date.now()) daemon.cancel(job.spec.dispatchKey)
+    }
+    void pump().catch(() => {})
+  }, 100)
+  void pump().catch(() => {})
+  return {
+    port: server.port!,
+    daemon,
+    close() {
+      clearInterval(timer)
+      server.stop(true)
+      daemon.close()
+    },
+  }
+}
+
+export async function runRemoteDaemonService(
+  args: readonly string[],
+  workerArgv: readonly string[],
+) {
+  if (args.length !== 2 || args[0] !== '--config') return 2
+  const raw = await Bun.file(args[1]!).json()
+  if (
+    !raw ||
+    typeof raw !== 'object' ||
+    Array.isArray(raw) ||
+    Object.keys(raw).some(
+      (key) => !['authorityId', 'token', 'port', 'dbPath', 'outputRoot', 'tracking'].includes(key),
+    )
+  )
+    throw new Error('Invalid remote daemon administrator configuration')
+  const service = createRemoteDaemonService({ ...raw, workerArgv })
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      service.close()
+      resolve()
+    }
+    process.once('SIGINT', stop)
+    process.once('SIGTERM', stop)
+  })
+  return 0
+}

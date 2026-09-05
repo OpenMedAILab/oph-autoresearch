@@ -1,3 +1,7 @@
+import type { ResearchDaemonBackend } from '../research/daemon-execution.ts'
+import type { ResearchDevice } from '../research/execution-devices.ts'
+import type { HumanAuthVerifier } from '../research/human-auth.ts'
+import type { createLiteratureCollector } from '../research/literature-evidence.ts'
 /**
  * HTTP API 各域共用的依赖与出参。
  *
@@ -18,6 +22,12 @@ import type { Pairing } from '../pairing.ts'
 import type { RunManager } from '../runs.ts'
 
 export interface ApiDeps {
+  researchExecutionDevices?: readonly ResearchDevice[]
+  researchLiteratureCollector?: ReturnType<typeof createLiteratureCollector>
+  researchDaemonBackend?: ResearchDaemonBackend
+  researchReviewCli?: { workerArgv?: readonly string[] }
+  researchHumanAuth?: HumanAuthVerifier
+  researchRequireApproval?: boolean
   store: Store
   config: OphConfig
   bus: EventBus

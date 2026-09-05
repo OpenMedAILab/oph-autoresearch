@@ -249,4 +249,61 @@ describe('预览分类', () => {
     expect(result.mime).toBe('application/pdf')
     expect(result.dataUri).toBe(`data:application/pdf;base64,${bytes.toString('base64')}`)
   })
+
+  test('html 归入独立种类，内容按文本读取', async () => {
+    expect(classify('page.html')).toEqual({ kind: 'html', mime: 'text/html', language: 'html' })
+    const dir = await workspace()
+    await writeFile(join(dir, 'page.html'), '<h1>报告</h1>', 'utf8')
+    const result = await preview(dir, 'page.html')
+    expect(result.kind).toBe('html')
+    expect(result.content).toBe('<h1>报告</h1>')
+  })
+
+  test('docx 表格里的段落不会截断表格块', async () => {
+    const dir = await workspace()
+    const docx = new JSZip()
+    // 单元格里的 <w:p>…</w:p> 比 </w:tbl> 先结束，会把表格块截在第一个单元格里。
+    docx.file(
+      'word/document.xml',
+      '<w:document><w:body>' +
+        '<w:tbl><w:tr>' +
+        '<w:tc><w:p><w:r><w:t>左列</w:t></w:r></w:p></w:tc>' +
+        '<w:tc><w:p><w:r><w:t>右列</w:t></w:r></w:p></w:tc>' +
+        '</w:tr></w:tbl>' +
+        '<w:p><w:r><w:t>表格之后的段落</w:t></w:r></w:p>' +
+        '</w:body></w:document>',
+    )
+    await writeFile(join(dir, 'table.docx'), await docx.generateAsync({ type: 'nodebuffer' }))
+    const content = (await preview(dir, 'table.docx')).content ?? ''
+    expect(content).toContain('<td>左列</td>')
+    expect(content).toContain('<td>右列</td>')
+    expect(content).toContain('表格之后的段落')
+    // 表格块没被截断时，格内文字不会漏成孤段。
+    expect(content).not.toContain('<p>右列</p>')
+  })
+
+  test('docx 图片经 rels 嵌回正文', async () => {
+    const dir = await workspace()
+    const png = Buffer.from('89504e470d0a1a0a', 'hex')
+    const docx = new JSZip()
+    docx.file(
+      'word/_rels/document.xml.rels',
+      '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>' +
+        '</Relationships>',
+    )
+    docx.file('word/media/image1.png', png)
+    docx.file(
+      'word/document.xml',
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ' +
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
+        '<w:p><w:r><w:t>附图</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:drawing><a:blip r:embed="rId4"/></w:drawing></w:r></w:p>' +
+        '</w:body></w:document>',
+    )
+    await writeFile(join(dir, 'figure.docx'), await docx.generateAsync({ type: 'nodebuffer' }))
+    const content = (await preview(dir, 'figure.docx')).content ?? ''
+    expect(content).toContain('<img src="data:image/png;base64,iVBORw0KGgo=')
+  })
 })

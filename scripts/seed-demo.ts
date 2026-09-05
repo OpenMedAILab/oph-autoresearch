@@ -54,6 +54,40 @@ const conv = createConversation(store, {
   title: '修复工具上传发布归属',
 })
 
+/**
+ * 编排产生的机器会话（source='workflow'）：进度卡上子会话节点点开的那一页。
+ * 会话列表按 `source IS NULL` 过滤，这里补齐真实引用后不会污染「研究对话」。
+ */
+function childConversation(id: string, title: string, sourceRef: string, lines: string[]) {
+  const child = createConversation(store, {
+    id,
+    workspaceId: ws.id,
+    ...REF,
+    title,
+    source: 'workflow',
+    sourceRef,
+  })
+  for (const [i, line] of lines.entries()) {
+    appendMessage(store, {
+      conversationId: child.id,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: line,
+    })
+  }
+}
+childConversation('cv_demo_child', '清理空作者记录', '临时子 agent', [
+  '清掉夹具三条空作者记录，方式是在 fixtures 里把 author_id 补回测试管理员。',
+  '已清理：夹具里三条空作者记录已补回测试管理员，market 与 admin 两组用例都不依赖它们。',
+])
+childConversation('cv_demo_api', '核接口层', '临时子 agent', [
+  '发布接口只剩一个写入点，确认归属字段来自当前登录管理员。',
+  '接口层没有第二处写入；归属字段在中间件里由当前登录管理员设置，历史空作者不再覆盖。',
+])
+childConversation('cv_demo_review', '复核两份结论', 'reviewer', [
+  '对照接口层与前台两边的改动记录复核归属迁移是否一致。',
+  '两份结论一致：写入点唯一、归属性来源正确；回归用例补了一条断言。',
+])
+
 const user = appendMessage(store, {
   conversationId: conv.id,
   role: 'user',

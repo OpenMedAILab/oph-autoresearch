@@ -11,20 +11,8 @@ import type { ModelSpec, SpecOverride } from './catalog.ts'
 
 // ─────────────────────────────── 配置 ───────────────────────────────
 
-/**
- * 三个适配器构造 SDK 客户端时共用的传输参数。**一份，不许各写各的。**
- *
- * 两个 SDK 的出厂值都是 `timeout: 600_000` + `maxRetries: 2`，在网络断掉时
- * 表现为「界面挂着『正在执行』五分钟，然后才报网络不可达」（实测：一次
- * 381.9s 的 run，最后一次模型回包之后空等了 301s）。
- *
- * - `timeout` 只覆盖到**响应头到达为止**（两个 SDK 都在 fetch 的 finally 里
- *   `clearTimeout`），所以 60 秒不会掐断一次长生成——它只掐「连不上」。
- *   **不要因为「怕打断长回答」把它调大**，那是在给一个它管不到的场景让路。
- * - `maxRetries: 0`：连不上时 SDK 自己重试两次，用户看到的就是三倍的等待，
- *   而这里从来不做自动重试——重发由人决定。
- */
-export const PROVIDER_HTTP = { timeout: 60_000, maxRetries: 0 } as const
+/** SDK is a 10-minute backstop; the loop idle watchdog owns silence deadlines. Retries remain disabled. */
+export const PROVIDER_HTTP = { timeout: 600_000, maxRetries: 0 } as const
 
 /**
  * 具体接口路线的传输能力。模型有哪些档位由官方目录回答；这里仅回答当前端点
@@ -73,6 +61,8 @@ export interface ChatRequest {
    * 所以它回答的是「这一轮还装得下多少输出」（`agent` 的 `declaredMaxOutput`）。
    */
   maxOutputTokens: number | null
+  /** An approved hard ceiling: adapters must not raise it for default thinking budgets. */
+  hardOutputLimit?: boolean
   effort?: EffortLevel
   /** 缓存路由亲和键；同一会话稳定。 */
   cacheKey?: string

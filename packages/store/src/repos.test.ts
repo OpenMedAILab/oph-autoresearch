@@ -13,6 +13,8 @@ import {
   finishRun,
   getConversation,
   getRun,
+  latestAnchoredProviderRequest,
+  latestSentProviderRequest,
   listConversationHistoryPage,
   listConversations,
   listMessages,
@@ -80,6 +82,62 @@ describe('逐请求传输证据', () => {
     expect(found.firstEventAt).toBeNumber()
     expect(found.firstContentAt).toBeNumber()
     expect(found.completedAt).toBeNumber()
+    store.close()
+  })
+})
+
+describe('摘要请求与主请求分开看', () => {
+  test('旧调用默认 turn，摘要不成为会话上下文锚点', () => {
+    const { store, ws } = fresh()
+    const conversation = createConversation(store, {
+      workspaceId: ws.id,
+      provider: 'p',
+      model: 'm',
+    })
+    const run = createRun(store, {
+      conversationId: conversation.id,
+      workspaceId: ws.id,
+      model: 'm',
+      clientRequestId: 'anchor-vs-summary',
+      userMessageId: null,
+      messageIdUpperBound: null,
+      contextSnapshot: [],
+    })
+    const open = (turnIndex: number, purpose?: 'turn' | 'summary') =>
+      openProviderRequest(store, {
+        runId: run.id,
+        turnIndex,
+        retryIndex: 0,
+        ...(purpose ? { purpose } : {}),
+        model: 'm',
+        measuredInputTokens: 1,
+        sentCategories: {} as never,
+        omittedCategories: {} as never,
+        payloadHash: `h${turnIndex}`,
+      })
+    const turn = open(0)
+    markProviderRequestSent(store, turn.id)
+    settleProviderRequest(store, turn.id, 'received', {
+      inputTokens: 90,
+      outputTokens: 5,
+      cachedTokens: null,
+      cacheWriteTokens: null,
+    })
+    const summary = open(1, 'summary')
+    markProviderRequestSent(store, summary.id)
+    settleProviderRequest(store, summary.id, 'received', {
+      inputTokens: 9000,
+      outputTokens: 300,
+      cachedTokens: null,
+      cacheWriteTokens: null,
+    })
+
+    expect(listProviderRequests(store, run.id).map((request) => request.purpose)).toEqual([
+      'turn',
+      'summary',
+    ])
+    expect(latestSentProviderRequest(store, conversation.id)?.id).toBe(turn.id)
+    expect(latestAnchoredProviderRequest(store, conversation.id)?.id).toBe(turn.id)
     store.close()
   })
 })

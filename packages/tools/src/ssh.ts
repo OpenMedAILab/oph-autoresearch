@@ -1,14 +1,16 @@
 /**
  * 受控 SSH 数据访问。
  *
- * 系统密钥交给 OpenSSH（ssh config / ssh-agent）；用户显式提供的密码或私钥仅留在当前
- * 进程内存中。界面与 Agent 共用同一份 profile、临时凭证和路径边界，避免“界面看得到，
+ * 系统密钥交给 OpenSSH（ssh config / ssh-agent）；用户显式提供的密码或私钥默认只留在当前
+ * 进程内存中，**经用户确认保存后**进入 `ssh.json` 的 `credentials` 段（文件权限 0600），
+ * 供下次连接自动使用；认证失败时该条会被清除、要求重新输入。
+ * 界面与 Agent 共用同一份 profile、临时凭证和路径边界，避免“界面看得到，
  * 模型却用另一条命令绕开”的双轨实现。私钥落地只发生在单次 ssh 子进程的临时文件中，
  * 子进程结束后立即删除。
  */
 
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import type { ToolSpec } from '@oph-autoresearch/agent'
@@ -50,7 +52,8 @@ export type SshAuthMode = 'system-key' | 'private-key' | 'password'
 
 /**
  * 最近成功连接过的主机。这里只保存重新连接所需的非敏感元数据；密码、私钥和口令
- * 永远不会进入磁盘。`lastPath` 是用户最近确认为数据工作区的目录。
+ * 存在文档里单独的 `credentials` 段（见 `saveSshCredential`），不进这一条。
+ * `lastPath` 是用户最近确认为数据工作区的目录。
  */
 export interface SshRecentConnection extends SshCommandTarget {
   authMode: SshAuthMode
@@ -73,9 +76,13 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i
 const MAX_RECENT_CONNECTIONS = 12
 const sessionCredentials = new Map<string, SshConnectionAuth>()
 
+/** 保存的凭证按「用户@主机:端口」记，与内存凭证表同一个键。 */
+export type SshCredentialKey = string
+
 interface SshConfigDocument {
   profiles: SshProfile[]
   recentConnections: SshRecentConnection[]
+  credentials: Record<SshCredentialKey, SshConnectionAuth>
 }
 
 type SshExecResult = {
@@ -214,8 +221,15 @@ export function sshConfigPath(): string {
 
 async function loadSshConfigDocument(): Promise<SshConfigDocument> {
   const parsed = await readFile(sshConfigPath(), 'utf8')
-    .then((raw) => JSON.parse(raw) as { profiles?: unknown; recentConnections?: unknown })
-    .catch(() => ({ profiles: [], recentConnections: [] }))
+    .then(
+      (raw) =>
+        JSON.parse(raw) as {
+          profiles?: unknown
+          recentConnections?: unknown
+          credentials?: unknown
+        },
+    )
+    .catch(() => ({ profiles: [], recentConnections: [], credentials: {} }))
   return {
     profiles: Array.isArray(parsed.profiles)
       ? parsed.profiles.map(normalizeProfile).filter((p): p is SshProfile => p !== null)
@@ -227,13 +241,46 @@ async function loadSshConfigDocument(): Promise<SshConfigDocument> {
           .sort((a, b) => b.lastConnectedAt - a.lastConnectedAt)
           .slice(0, MAX_RECENT_CONNECTIONS)
       : [],
+    credentials: normalizeCredentials(parsed.credentials),
   }
+}
+
+/** 凭证段整体校验：坏条目直接丢——某条被手工改坏不该让整份配置读不出来。 */
+function normalizeCredentials(raw: unknown): Record<string, SshConnectionAuth> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, SshConnectionAuth> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key.trim() || !value || typeof value !== 'object') continue
+    const v = value as Record<string, unknown>
+    if (v.mode === 'password' && typeof v.password === 'string' && validSecret(v.password, 4096)) {
+      out[key] = { mode: 'password', password: v.password }
+    } else if (
+      v.mode === 'private-key' &&
+      typeof v.privateKey === 'string' &&
+      validSecret(v.privateKey, 1024 * 1024) &&
+      (v.passphrase === undefined ||
+        (typeof v.passphrase === 'string' && validSecret(v.passphrase, 4096)))
+    ) {
+      out[key] = {
+        mode: 'private-key',
+        privateKey: v.privateKey,
+        ...(typeof v.passphrase === 'string' ? { passphrase: v.passphrase } : {}),
+      }
+    }
+  }
+  return out
+}
+
+function validSecret(value: string, max: number): boolean {
+  return value.length > 0 && value.length <= max && !value.includes('\0')
 }
 
 async function saveSshConfigDocument(document: SshConfigDocument): Promise<void> {
   const file = sshConfigPath()
   await mkdir(dirname(file), { recursive: true })
   await writeFile(file, `${JSON.stringify(document, null, 2)}\n`, 'utf8')
+  // 凭证段在文件里，权限必须收住；Windows 上 chmod 是空操作，靠用户目录 ACL。
+  await chmod(file, 0o600).catch(() => undefined)
 }
 
 export async function loadSshProfiles(): Promise<SshProfile[]> {
@@ -308,6 +355,67 @@ export async function recordSshConnection(
     .slice(0, MAX_RECENT_CONNECTIONS)
   await saveSshConfigDocument({ ...current, recentConnections })
   return recentConnections
+}
+
+/** 凭证段的键：用户@主机:端口。与内存凭证表 `credentialKey` 同一形状。 */
+export function sshCredentialKey(target: SshCommandTarget): SshCredentialKey {
+  return `${target.username ?? ''}@${target.host}:${target.port}`
+}
+
+/**
+ * 保存一条连接凭证，覆盖同键旧值。
+ *
+ * **只在连接成功之后调用**：错的密码不该落盘。这里是明文存储，文件权限已收成
+ * 0600；认证失败时由连接流程调用 `clearSshCredential` 清除。
+ */
+export async function saveSshCredential(
+  target: SshCommandTarget,
+  auth: SshConnectionAuth,
+): Promise<void> {
+  const key = sshCredentialKey(target)
+  const current = await loadSshConfigDocument()
+  await saveSshConfigDocument({ ...current, credentials: { ...current.credentials, [key]: auth } })
+}
+
+export async function loadSshCredential(
+  target: SshCommandTarget,
+): Promise<SshConnectionAuth | undefined> {
+  const credentials = await loadSshCredentials()
+  return credentials[sshCredentialKey(target)]
+}
+
+export async function clearSshCredential(target: SshCommandTarget): Promise<void> {
+  const key = sshCredentialKey(target)
+  const current = await loadSshConfigDocument()
+  if (!(key in current.credentials)) return
+  const credentials = { ...current.credentials }
+  delete credentials[key]
+  await saveSshConfigDocument({ ...current, credentials })
+}
+
+/**
+ * 忘掉一条最近连接：从 `recentConnections` 移除同键条目，并按同一键清除
+ * 已保存的凭证（若有）。用户删除连接记录通常就是为了清理这一个目标，
+ * 凭证留着会让「下次自动使用」变成猜不透的行为。
+ */
+export async function forgetSshRecentConnection(
+  target: SshCommandTarget,
+): Promise<SshRecentConnection[]> {
+  const key = sshCredentialKey(target)
+  const current = await loadSshConfigDocument()
+  const sameTarget = (candidate: SshRecentConnection) =>
+    candidate.host.toLowerCase() === target.host.toLowerCase() &&
+    candidate.username === target.username &&
+    candidate.port === target.port
+  const recentConnections = current.recentConnections.filter((item) => !sameTarget(item))
+  const credentials = { ...current.credentials }
+  delete credentials[key]
+  await saveSshConfigDocument({ ...current, recentConnections, credentials })
+  return recentConnections
+}
+
+export async function loadSshCredentials(): Promise<Record<SshCredentialKey, SshConnectionAuth>> {
+  return (await loadSshConfigDocument()).credentials
 }
 
 function normalizeProfile(raw: unknown): SshProfile | null {
@@ -588,6 +696,25 @@ export async function inspectSshDirectory(profile: SshProfile, requested: string
   return resolved
 }
 
+/**
+ * 删除远程条目（目录连同内容）。**拒绝删除允许根目录本身**——其余一切交给远端
+ * realpath 守卫（`remotePathGuard`），删除的是真实路径、越界的符号链接会先被拒。
+ * 这是界面上的显式破坏性操作，不在 Agent 工具面里提供。
+ */
+export async function deleteSshEntry(profile: SshProfile, requested: string): Promise<string> {
+  const path = resolveSshPath(profile, requested)
+  if (path === profile.root) throw new Error('不能删除连接根目录')
+  const result = await sshExec(
+    profile,
+    `${remotePathGuard(profile, path)}rm -rf -- "$path" && printf '__OPH_REMOVED__'`,
+    { timeoutMs: 120_000 },
+  )
+  if (result.exitCode !== 0 || !result.stdout.includes('__OPH_REMOVED__')) {
+    throw new Error(sshError(result))
+  }
+  return path
+}
+
 /** 只为界面内联预览读取有限字节，不创建本地文件，也不提供保存入口。 */
 export async function readSshBinary(
   profile: SshProfile,
@@ -595,7 +722,7 @@ export async function readSshBinary(
   maxBytes = 8 * 1024 * 1024,
 ): Promise<{ path: string; base64: string; size: number }> {
   const path = resolveSshPath(profile, requested)
-  const cap = Math.min(16 * 1024 * 1024, Math.max(1, Math.trunc(maxBytes)))
+  const cap = Math.min(32 * 1024 * 1024, Math.max(1, Math.trunc(maxBytes)))
   const command =
     remotePathGuard(profile, path) +
     `size=$(wc -c < "$path") || exit $?; ` +
@@ -610,52 +737,6 @@ export async function readSshBinary(
     throw new Error('远程文件预览响应无效')
   }
   return { path, size, base64: result.stdout.slice(newline + 1).trim() }
-}
-
-const OFFICE_PREVIEW_SCRIPT = String.raw`
-import sys, zipfile, xml.etree.ElementTree as ET
-p = sys.argv[1]
-cap = 500000
-with zipfile.ZipFile(p) as z:
-    names = z.namelist()
-    if p.lower().endswith('.docx'):
-        picks = [n for n in names if n == 'word/document.xml']
-    elif p.lower().endswith('.pptx'):
-        picks = sorted(n for n in names if n.startswith('ppt/slides/slide') and n.endswith('.xml'))
-    else:
-        picks = sorted(n for n in names if n == 'xl/sharedStrings.xml' or (n.startswith('xl/worksheets/sheet') and n.endswith('.xml')))
-    out = []
-    for name in picks:
-        if p.lower().endswith('.pptx'):
-            out.append('\n--- ' + name.rsplit('/', 1)[-1].replace('.xml', '') + ' ---\n')
-        root = ET.fromstring(z.read(name))
-        values = []
-        for node in root.iter():
-            tag = node.tag.rsplit('}', 1)[-1]
-            if tag in ('t', 'v') and node.text:
-                values.append(node.text)
-        out.append(('\t' if 'worksheet' in name else '\n').join(values))
-        if sum(map(len, out)) >= cap:
-            break
-    text = '\n'.join(out)
-    sys.stdout.write(text[:cap])
-`
-
-/** 对 OOXML 文档做只读文本化预览；不在远端或本地生成中间文件。 */
-export async function readSshOfficeText(
-  profile: SshProfile,
-  requested: string,
-): Promise<{ path: string; content: string; truncated: boolean }> {
-  const path = resolveSshPath(profile, requested)
-  if (!/\.(docx|xlsx|pptx)$/i.test(path)) throw new Error('只支持 docx、xlsx、pptx 预览')
-  const script = Buffer.from(OFFICE_PREVIEW_SCRIPT, 'utf8').toString('base64')
-  const command =
-    remotePathGuard(profile, path) +
-    `command -v python3 >/dev/null || { echo "远端缺少 python3，无法预览 Office 文档" >&2; exit 69; }; ` +
-    `python3 -c "$(printf %s ${quote(script)} | base64 -d)" ${quote(path)}`
-  const result = await sshExec(profile, command, { timeoutMs: 45_000 })
-  if (result.exitCode !== 0) throw new Error(sshError(result))
-  return { path, content: result.stdout, truncated: result.stdout.length >= 500_000 }
 }
 
 function sshError(result: SshExecResult): string {
@@ -751,6 +832,37 @@ export async function readSshText(
   const lines = result.stdout.replace(/\r\n/g, '\n').split('\n')
   const truncated = lines.length > count
   return { path, content: lines.slice(0, count).join('\n'), truncated }
+}
+
+/**
+ * 整读文本文件（HTML / Markdown / 源码等预览用）：不按行截断，只按字节上限。
+ *
+ * 预览族里按行截断只适合「大日志」这类数据；HTML 和 Markdown 是**一份完整文档**，
+ * 截前 5000 行等于渲染一个坏掉的页面——「预览不全」就是这么来的。
+ */
+export async function readSshWholeText(
+  profile: SshProfile,
+  requested: string,
+): Promise<{ path: string; content: string; size: number; truncated: boolean }> {
+  const path = resolveSshPath(profile, requested)
+  const command =
+    remotePathGuard(profile, path) +
+    `size=$(wc -c < "$path") || exit $?; ` +
+    `printf '__OPH_SIZE__:%s\\\\n' "$size"; head -c ${MAX_TEXT_BYTES} "$path"`
+  const result = await sshExec(profile, command, { timeoutMs: 60_000 })
+  if (result.exitCode !== 0) throw new Error(sshError(result))
+  const newline = result.stdout.indexOf('\n')
+  const marker = newline >= 0 ? result.stdout.slice(0, newline) : ''
+  const size = Number(marker.replace('__OPH_SIZE__:', ''))
+  if (!marker.startsWith('__OPH_SIZE__:') || !Number.isFinite(size)) {
+    throw new Error('远程文件预览响应无效')
+  }
+  return {
+    path,
+    size,
+    content: result.stdout.slice(newline + 1),
+    truncated: size > MAX_TEXT_BYTES,
+  }
 }
 
 async function findProfile(id: string): Promise<SshProfile> {

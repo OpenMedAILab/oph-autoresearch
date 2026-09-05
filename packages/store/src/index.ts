@@ -20,6 +20,7 @@ export {
   appendTextToStep,
   archiveConversation,
   archiveWorkspaceConversations,
+  conversationTreeIds,
   countConversations,
   createConversation,
   createRun,
@@ -69,6 +70,19 @@ export {
   upsertWorkspace,
   workspaceOf,
 } from './repos.ts'
+export {
+  createResearchCampaign,
+  findRunningSyntheticAttempts,
+  getResearchCampaign,
+  listResearchCampaigns,
+  listResearchEvents,
+  mutateResearchCampaign,
+  type RecoverSyntheticAttemptsOptions,
+  type ResearchRunningAttempt,
+  rebuildResearchCampaignProjection,
+  recoverRunningSyntheticAttempts,
+} from './research.ts'
+export { deliverResearchOutbox } from './research-outbox.ts'
 // 中间资源：runtime 的 sink 落盘与回读
 export {
   getResource,
@@ -86,6 +100,10 @@ export {
   recordUsage,
   summaryOutputPercentile,
   usageBy,
+  usageDaily,
+  usageDailyByModel,
   usageEntries,
+  usageLongestRunMs,
+  usageStreaks,
   usageTotals,
 } from './usage.ts'

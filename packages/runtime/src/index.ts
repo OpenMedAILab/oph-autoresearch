@@ -54,6 +54,7 @@ export {
 export { makeMcpConfigPort, mergeMcpServers, type WritableMcpScope } from './mcp-config-store.ts'
 // 提示词装配：agent 的前缀审计测试要拿真实的那一份来审（走动态 import）
 export { buildSystemPrompt, buildTailNotes } from './prompt.ts'
+export { makeResearchRequestGuard, type ResearchRequestGuard } from './research-request-guard.ts'
 // 会话：装配的最终产物，CLI 与 server 的唯一入口。
 // `makeSummarizer` 一并转出：server 的手动压缩与会话内的自动压缩共用同一份摘要装配。
 export { makeSummarizer, Session } from './session.ts'

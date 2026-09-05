@@ -47,6 +47,7 @@ export interface EventEnvelope<T extends AgentEvent = AgentEvent> {
 }
 
 export type AgentEvent =
+  | ResearchChangedEvent
   // ── 会话 ──
   | ConversationUpdatedEvent
   | ConversationBusyEvent
@@ -77,6 +78,16 @@ export type AgentEvent =
   // ── 跟进消息 ──
   | QueueChangedEvent
   | MessageInjectedEvent
+
+/** Notification only; authoritative snapshots and gaps are fetched from ResearchEvent REST. */
+export interface ResearchChangedEvent {
+  type: 'research.changed'
+  eventId: string
+  campaignId: string
+  campaignSeq: number
+  workspaceId: string
+  parentConversationId: string
+}
 
 // ─────────────────────────────── 会话 ───────────────────────────────
 

@@ -25,6 +25,7 @@ import { createEffect, createRoot } from 'solid-js'
 import { produce } from 'solid-js/store'
 import { OphClient } from '../client.ts'
 import { createFramer, createPacer } from '../stream-pace.ts'
+import { acceptResearchChanged, refreshResearchSnapshots } from './research.ts'
 import {
   dropView,
   markBusy,
@@ -42,6 +43,7 @@ export const client = new OphClient({
   // 握手带的忙闲快照直接整表替换：它是服务端此刻的全部，不是一条增量。
   onBusy: (ids) => setState('busyConversations', [...ids]),
   onResync: () => {
+    refreshResearchSnapshots()
     // 缺口补不上：清空本地投影重新拉，而不是带着一个不完整的 transcript 继续。
     void reloadActiveConversation()
   },
@@ -202,6 +204,10 @@ export function discardPace(): void {
  */
 export function applyEvent(frame: EventEnvelope<AgentEvent>): void {
   const ev = frame.event
+  if (ev.type === 'research.changed') {
+    acceptResearchChanged(ev)
+    return
+  }
 
   // 会话属性变更先处理：它按自己的 id 找列表项，和「当前是哪条」无关。
   if (ev.type === 'conversation.updated') {
@@ -279,8 +285,9 @@ export function applyEvent(frame: EventEnvelope<AgentEvent>): void {
 function foldContent(cid: string, ev: AgentEvent): void {
   switch (ev.type) {
     case 'todos':
-      // 每条会话各收自己的整表。父会话另投影到 `state.todos` 给全局面板消费；
-      // 子会话只读这里这一份，不能把它的事件写进父面板。
+      // 每条会话各收自己的整表。父会话另投影到 `state.todos` 给读数条的
+      // Todo Chain（收集 `Transcript.tsx`）与子会话页消费；子会话只读
+      // `views[cid]` 这一份，不能把它的事件写进父会话的投影。
       setState('views', cid, 'todos', ev.todos)
       return
 

@@ -51,6 +51,8 @@ import { deliver } from './sink.ts'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
+/** 无输出的长命令也要给界面活性证据，避免正常构建看起来像进程卡死。 */
+const COMMAND_HEARTBEAT_MS = 15_000
 
 /**
  * 命令退出了，但它留下的后代进程还握着输出管道。
@@ -77,6 +79,15 @@ const BACKGROUND_HELD =
  */
 export function resolveCommandTimeout(timeoutMs: unknown): number {
   return Math.min(MAX_TIMEOUT_MS, Math.max(1000, Number(timeoutMs ?? DEFAULT_TIMEOUT_MS)))
+}
+
+/**
+ * 兼容部分 OpenAI 协议模型把可选字段的空值序列化成字符串。
+ * 这些值与字段缺席同义，不应让模型因为一个无意义的探测地址反复重试。
+ */
+export function normalizeProbeUrl(raw: unknown): string {
+  const value = typeof raw === 'string' ? raw.trim() : ''
+  return /^(null|undefined)$/i.test(value) ? '' : value
 }
 
 /**
@@ -155,7 +166,7 @@ export function makeShellTool(shell: CommandShell): ToolSpec {
        * 这里方向相反、边界也相反：**只有回环允许**，别的一律拒。
        * 放宽一点点，它就成了绕开那道 SSRF 闸的第二条出网通道。
        */
-      const probeRaw = typeof args.probe_url === 'string' ? args.probe_url.trim() : ''
+      const probeRaw = normalizeProbeUrl(args.probe_url)
       let probeUrl: URL | null = null
       if (probeRaw) {
         const checked = loopbackTarget(probeRaw)
@@ -220,43 +231,55 @@ export function makeShellTool(shell: CommandShell): ToolSpec {
         // 不 flush 会静默吞掉输出末尾——那比泄露更难发现，因为没人会去数字节。
         onEnd: (channel) => emit(channel, redactors[channel].flush()),
       })
+      const startedAt = Date.now()
+      // progress 通道只给实时界面，不进入最终工具结果；回车符让连续心跳覆盖同一行。
+      ctx.emit('progress', '命令已启动，等待输出…\r')
+      const heartbeat = setInterval(() => {
+        const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000))
+        ctx.emit('progress', `命令仍在执行 · ${seconds}s\r`)
+      }, COMMAND_HEARTBEAT_MS)
+      heartbeat.unref?.()
 
-      if (probeUrl !== null) {
-        const probe = await probeThenKill(probeUrl, proc, timeout, ctx.signal)
+      try {
+        if (probeUrl !== null) {
+          const probe = await probeThenKill(probeUrl, proc, timeout, ctx.signal)
+          const got = await collecting
+          const delivered = deliverStreams(ctx, command, got.stdout, got.stderr)
+          return {
+            status: probe.ok ? 'success' : 'failure',
+            message: probe.message + (got.backgroundHeld ? BACKGROUND_HELD : ''),
+            data: { ...probe.data, ...delivered.data },
+            ...(delivered.resources.length ? { resources: delivered.resources } : {}),
+            ...(probe.ok ? {} : { errorKind: 'probe_failed' as const }),
+          }
+        }
+
         const got = await collecting
         const delivered = deliverStreams(ctx, command, got.stdout, got.stderr)
-        return {
-          status: probe.ok ? 'success' : 'failure',
-          message: probe.message + (got.backgroundHeld ? BACKGROUND_HELD : ''),
-          data: { ...probe.data, ...delivered.data },
-          ...(delivered.resources.length ? { resources: delivered.resources } : {}),
-          ...(probe.ok ? {} : { errorKind: 'probe_failed' as const }),
+
+        if (got.timedOut) {
+          return {
+            status: 'failure',
+            message: `命令超时（${timeout}ms）已终止${got.backgroundHeld ? BACKGROUND_HELD : ''}`,
+            data: { ...delivered.data, timedOut: true },
+            ...(delivered.resources.length ? { resources: delivered.resources } : {}),
+            errorKind: 'timeout',
+          }
         }
-      }
 
-      const got = await collecting
-      const delivered = deliverStreams(ctx, command, got.stdout, got.stderr)
-
-      if (got.timedOut) {
         return {
-          status: 'failure',
-          message: `命令超时（${timeout}ms）已终止${got.backgroundHeld ? BACKGROUND_HELD : ''}`,
-          data: { ...delivered.data, timedOut: true },
+          // 非零退出码是**事实**不是异常：模型需要看到失败输出才能修。
+          status: got.exitCode === 0 ? 'success' : 'failure',
+          message:
+            (got.exitCode === 0
+              ? '命令执行成功'
+              : `命令退出码 ${got.exitCode}${sandboxHint(sandbox.active, got.stderr)}`) +
+            (got.backgroundHeld ? BACKGROUND_HELD : ''),
+          data: { exitCode: got.exitCode, ...delivered.data },
           ...(delivered.resources.length ? { resources: delivered.resources } : {}),
-          errorKind: 'timeout',
         }
-      }
-
-      return {
-        // 非零退出码是**事实**不是异常：模型需要看到失败输出才能修。
-        status: got.exitCode === 0 ? 'success' : 'failure',
-        message:
-          (got.exitCode === 0
-            ? '命令执行成功'
-            : `命令退出码 ${got.exitCode}${sandboxHint(sandbox.active, got.stderr)}`) +
-          (got.backgroundHeld ? BACKGROUND_HELD : ''),
-        data: { exitCode: got.exitCode, ...delivered.data },
-        ...(delivered.resources.length ? { resources: delivered.resources } : {}),
+      } finally {
+        clearInterval(heartbeat)
       }
     },
   }

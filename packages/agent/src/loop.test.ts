@@ -634,13 +634,17 @@ describe('权限拒绝', () => {
  */
 describe('流卡死要有终态，不能无限期挂着', () => {
   /** 吐第一个事件之后就沉默，直到被 abort。 */
-  function stallingAdapter(opts: { stallAfterFirst: boolean }): LlmAdapter & { aborted: boolean } {
+  function stallingAdapter(opts: {
+    stallAfterFirst: boolean
+  }): LlmAdapter & { aborted: boolean; calls: number } {
     const self = {
       kind: 'anthropic_messages' as const,
       transmits: { effort: true },
       spec: lookupModel('claude-opus-5', 'anthropic_messages'),
       aborted: false,
+      calls: 0,
       async *stream(req: ChatRequest): AsyncGenerator<ProviderEvent, void, unknown> {
+        self.calls++
         if (opts.stallAfterFirst) {
           yield { type: 'request_prepared', measuredInputTokens: 10 }
         }
@@ -670,15 +674,23 @@ describe('流卡死要有终态，不能无限期挂着', () => {
   test('首个事件就迟迟不来 —— 报 stream_idle_timeout 并收尾', async () => {
     const events: string[] = []
     let code: string | undefined
-    for await (const ev of loopWith(stallingAdapter({ stallAfterFirst: false })).run({
+    let message = ''
+    const adapter = stallingAdapter({ stallAfterFirst: false })
+    for await (const ev of loopWith(adapter).run({
       runId: 'rn_1' as never,
       history: [],
       signal: new AbortController().signal,
     })) {
       events.push(ev.type)
-      if (ev.type === 'run.error') code = ev.code
+      if (ev.type === 'run.error') {
+        code = ev.code
+        message = ev.message
+      }
     }
     expect(code).toBe('stream_idle_timeout')
+    expect(adapter.calls).toBe(1)
+    expect(message).toMatch(/\d+ 秒未收到响应/)
+    expect(events).not.toContain('run.retrying')
     // 关键：必须有终态。没有 run.finished 的话账本里躺着一条永远 running 的记录。
     expect(events).toContain('run.finished')
   }, 10_000)
@@ -718,6 +730,32 @@ describe('流卡死要有终态，不能无限期挂着', () => {
     }
     expect(events).not.toContain('run.error')
     expect(events).toContain('run.finished')
+  })
+  test('SDK timeout classification cannot automatically resend an unanswered request', async () => {
+    let calls = 0
+    const adapter: LlmAdapter = {
+      ...stallingAdapter({ stallAfterFirst: false }),
+      async *stream() {
+        calls++
+        yield { type: 'request_prepared', measuredInputTokens: 10 } as const
+        throw classifyProviderError(
+          'anthropic_messages',
+          Object.assign(new Error('Request timed out.'), { code: 'ETIMEDOUT' }),
+        )
+      },
+    }
+    const events: AgentEvent[] = []
+    for await (const event of loopWith(adapter).run({
+      runId: 'rn_timeout' as never,
+      history: [],
+      signal: new AbortController().signal,
+    }))
+      events.push(event)
+    expect(calls).toBe(1)
+    expect(events.some((event) => event.type === 'run.retrying')).toBe(false)
+    expect(
+      events.some((event) => event.type === 'run.error' && event.code === 'network_error'),
+    ).toBe(true)
   })
 })
 
@@ -993,6 +1031,65 @@ describe('上下文分组占用', () => {
     // 信封与正文各占一部分——两个桶都不许是零。
     expect(b!.executionRecords).toBeGreaterThan(0)
     expect(b!.intermediateContent).toBeGreaterThan(0)
+  })
+})
+
+describe('步数预算收尾', () => {
+  test('最后一次请求移除工具并要求交付结论', async () => {
+    const registry = new ToolRegistry()
+    registry.register({
+      name: 'work',
+      description: '执行一小步工作。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      actionKind: 'run',
+      objectLabel: '任务',
+      category: 'session',
+      facet: '测试',
+      summary: '测试夹具',
+      permissionEffect: 'internal_control',
+      fn: async () => ({ status: 'success', message: '完成一小步' }),
+    })
+
+    const requests: ChatRequest[] = []
+    const inner = fakeAdapter([[call('work')], null])
+    const adapter: LlmAdapter = {
+      ...inner,
+      async *stream(req: ChatRequest) {
+        requests.push(req)
+        yield* inner.stream(req)
+      },
+    }
+    const loop = new AgentLoop({
+      adapter,
+      registry,
+      systemPrompt: 'sys',
+      persist: noopPersistence(),
+      makeToolContext: (runId) => ({
+        ...baseCtx(runId),
+        todos: {
+          read: () => [{ id: 'todo-1', content: '仍未完成', status: 'in_progress' }],
+        },
+      }),
+    })
+
+    let text = ''
+    let stopReason = ''
+    for await (const event of loop.run({
+      runId: 'rn_finalization' as never,
+      history: [],
+      maxSteps: 2,
+      signal: new AbortController().signal,
+    })) {
+      if (event.type === 'text.delta') text += event.delta
+      if (event.type === 'run.finished') stopReason = event.stopReason
+    }
+
+    expect(requests).toHaveLength(2)
+    expect(requests[0]!.tools.length).toBe(1)
+    expect(requests[1]!.tools).toEqual([])
+    expect(requests[1]!.system.at(-1)?.text).toContain('停止调用工具')
+    expect(text).toContain('完成')
+    expect(stopReason).toBe('max_steps')
   })
 })
 

@@ -1,7 +1,18 @@
-import { createResource, createSignal, For, Match, Show, Switch } from 'solid-js'
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  lazy,
+  Match,
+  Show,
+  Suspense,
+  Switch,
+} from 'solid-js'
 import { renderMarkdown } from '../lib/markdown.ts'
 import { client, explainApiError, openSettings } from '../lib/store/index.ts'
-import { CodeView } from './FileView.tsx'
+import { ConfirmDialog } from './ConfirmDialog.tsx'
+import { CodeView, sanitizeOfficeHtml } from './FileView.tsx'
 import {
   IconCheck,
   IconChevron,
@@ -11,9 +22,13 @@ import {
   IconRefresh,
   IconSettings,
   IconTerminal,
+  IconTrash,
   IconX,
 } from './Icons.tsx'
 import type { SshProfileRow } from './settings/SshSettings.tsx'
+
+// 懒加载：pdf.js 及其 worker 只跟着远程 PDF 预览走。
+const PdfPreview = lazy(() => import('./PdfPreview.tsx').then((m) => ({ default: m.PdfPreview })))
 
 interface RemoteEntry {
   name: string
@@ -39,6 +54,8 @@ interface SshRecentConnectionRow {
   home: string
   lastPath?: string
   lastConnectedAt: number
+  /** 服务端按凭证段算出来的：这条最近连接有没有保存过密码/私钥。 */
+  hasSavedCredential?: boolean
 }
 
 interface SshProfilesPayload {
@@ -54,7 +71,7 @@ interface SshTargetDraft {
 
 interface RemotePreviewResult {
   path: string
-  kind: 'text' | 'markdown' | 'office' | 'image' | 'pdf' | 'audio' | 'video' | 'binary'
+  kind: 'text' | 'markdown' | 'html' | 'office' | 'image' | 'pdf' | 'audio' | 'video' | 'binary'
   mime: string
   size: number
   content?: string
@@ -70,7 +87,10 @@ export default function RemoteSshBrowser() {
   )
   const [username, setUsername] = createSignal('')
   const [host, setHost] = createSignal('')
-  const [port, setPort] = createSignal('22')
+  // 端口不预填：22 是 OpenSSH 默认值，但预填一个「默认端口」会让表单看起来
+  // 已经填好了——命令预览里写着 -p 22，实际上用户并不打算连 22（本例是 12572）。
+  // 端口必须显式填写才算数。
+  const [port, setPort] = createSignal('')
   const [authMode, setAuthMode] = createSignal<'system-key' | 'private-key' | 'password'>(
     'system-key',
   )
@@ -88,6 +108,16 @@ export default function RemoteSshBrowser() {
   const [opening, setOpening] = createSignal(false)
   const [notice, setNotice] = createSignal<{ text: string; bad?: boolean } | null>(null)
   const [openedWorkspace, setOpenedWorkspace] = createSignal<SshProfileRow | null>(null)
+  /** 待删除的远程条目；非空时弹确认框。 */
+  const [deleteTarget, setDeleteTarget] = createSignal<RemoteEntry | null>(null)
+  const [deleting, setDeleting] = createSignal(false)
+  /** 待删除的最近连接（连带其凭证）；非空时弹确认框。 */
+  const [recentDeleteTarget, setRecentDeleteTarget] = createSignal<SshRecentConnectionRow | null>(
+    null,
+  )
+  const [recentDeleting, setRecentDeleting] = createSignal(false)
+  /** 连接失败时自增一档，让认证字段拿回焦点等用户重输。 */
+  const [credentialFocusTick, setCredentialFocusTick] = createSignal(0)
 
   const connect = async (
     target: SshTargetDraft = { username: username(), host: host(), port: port() },
@@ -134,6 +164,13 @@ export default function RemoteSshBrowser() {
     } catch (error) {
       const text = explainApiError(error, 'SSH 连接失败')
       setNotice({ text, bad: true })
+      // 连接没成，刚输过的凭证作废：清掉并让认证字段接住焦点等重输。
+      setPassword('')
+      setPrivateKey('')
+      setPrivateKeyPassphrase('')
+      setPrivateKeyFile('')
+      setPrivateKeyError('')
+      setCredentialFocusTick((n) => n + 1)
     } finally {
       setConnecting(false)
     }
@@ -146,6 +183,32 @@ export default function RemoteSshBrowser() {
     setSelected(null)
     setOpenedWorkspace(null)
     setNotice(null)
+  }
+
+  /** 最近连接删除后：移除条目 + 清凭证，然后刷新列表。 */
+  const forgetRecent = async () => {
+    const target = recentDeleteTarget()
+    if (!target) return
+    setRecentDeleting(true)
+    try {
+      await client.api<{ ok: boolean }>('/api/ssh/recent/delete', {
+        method: 'POST',
+        body: JSON.stringify({
+          host: target.host,
+          ...(target.username ? { username: target.username } : {}),
+          port: target.port,
+        }),
+      })
+      setNotice({
+        text: `已删除连接记录 ${target.username ? `${target.username}@` : ''}${target.host}`,
+      })
+      await refetchProfiles()
+    } catch (error) {
+      setNotice({ text: explainApiError(error, '删除失败'), bad: true })
+    } finally {
+      setRecentDeleting(false)
+      setRecentDeleteTarget(null)
+    }
   }
 
   const listingKey = () => {
@@ -228,12 +291,32 @@ export default function RemoteSshBrowser() {
       void connect(recent, startPath)
       return
     }
-    setNotice({
-      text:
-        recent.authMode === 'password'
-          ? '已载入连接记录。为保护凭证，请重新输入密码后连接。'
-          : '已载入连接记录。为保护凭证，请重新选择或粘贴私钥后连接。',
-    })
+    // 密码/私钥先试已保存的凭证：没保存过或认证失败时，服务端会回一句
+    // 「请输入/请重输」，界面留在表单上等用户填。
+    setNotice({ text: '正在使用已保存的凭证连接…' })
+    void connect(recent, startPath)
+  }
+
+  const confirmDelete = async () => {
+    const entry = deleteTarget()
+    const active = session()
+    if (!entry || !active || deleting()) return
+    setDeleting(true)
+    try {
+      await client.api<{ ok: boolean }>('/api/ssh/session/delete', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId: active.sessionId, path: entry.path }),
+      })
+      setNotice({ text: `已删除 ${entry.path}` })
+      if (selected()?.path === entry.path) setSelected(null)
+      setDeleteTarget(null)
+      await refetchListing()
+    } catch (error) {
+      setNotice({ text: explainApiError(error, '删除失败'), bad: true })
+      setDeleteTarget(null)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   return (
@@ -280,8 +363,13 @@ export default function RemoteSshBrowser() {
             connecting={connecting()}
             connect={connect}
             useRecent={useRecent}
+            recentDeleteTarget={recentDeleteTarget()}
+            setRecentDeleteTarget={setRecentDeleteTarget}
+            recentDeleting={recentDeleting()}
+            forgetRecent={forgetRecent}
             openSettings={() => openSettings('ssh')}
             notice={notice()}
+            credentialFocusTick={credentialFocusTick()}
           />
         }
       >
@@ -415,18 +503,33 @@ export default function RemoteSshBrowser() {
                     </button>
                     <For each={listing()?.entries ?? []}>
                       {(entry) => (
-                        <button
+                        <div
                           class="remote-row"
                           classList={{ active: selected()?.path === entry.path }}
-                          type="button"
-                          onClick={() => go(entry)}
                         >
-                          {entry.kind === 'dir' ? <IconFolder size={15} /> : <IconFile size={15} />}
-                          <span class="truncate">{entry.name}</span>
-                          <Show when={entry.kind === 'file'}>
-                            <span class="remote-size">{bytes(entry.size)}</span>
-                          </Show>
-                        </button>
+                          <button class="remote-row-main" type="button" onClick={() => go(entry)}>
+                            {entry.kind === 'dir' ? (
+                              <IconFolder size={15} />
+                            ) : (
+                              <IconFile size={15} />
+                            )}
+                            <span class="truncate">{entry.name}</span>
+                            <Show when={entry.kind === 'file'}>
+                              <span class="remote-size">{bytes(entry.size)}</span>
+                            </Show>
+                          </button>
+                          {/* 破坏性操作收在悬停才露面的按钮里，且必须过确认框——
+                              远端删除不可恢复，不能和「点开看看」同一条路。 */}
+                          <button
+                            class="remote-row-del"
+                            type="button"
+                            aria-label={`删除 ${entry.name}`}
+                            data-tip={`删除 ${entry.name}`}
+                            onClick={() => setDeleteTarget(entry)}
+                          >
+                            <IconTrash size={13} />
+                          </button>
+                        </div>
                       )}
                     </For>
                     <Show when={!listing.loading && (listing()?.entries.length ?? 0) === 0}>
@@ -481,6 +584,15 @@ export default function RemoteSshBrowser() {
                 </p>
               )}
             </Show>
+            <ConfirmDialog
+              open={deleteTarget() !== null}
+              title="删除远程条目"
+              message={`将永久删除 ${deleteTarget()?.name ?? ''}（${deleteTarget()?.path ?? ''}）。目录内的全部内容一并删除，无法恢复。`}
+              confirmLabel={deleting() ? '删除中…' : '删除'}
+              danger
+              onConfirm={() => void confirmDelete()}
+              onCancel={() => setDeleteTarget(null)}
+            />
           </>
         )}
       </Show>
@@ -514,9 +626,46 @@ function ConnectionStart(props: {
   connecting: boolean
   connect(target?: SshTargetDraft, startPath?: string): Promise<void>
   useRecent(recent: SshRecentConnectionRow): void
+  recentDeleteTarget: SshRecentConnectionRow | null
+  setRecentDeleteTarget(value: SshRecentConnectionRow | null): void
+  recentDeleting: boolean
+  forgetRecent(): Promise<void>
   openSettings(): void
   notice: { text: string; bad?: boolean } | null
+  /** 连接失败时自增；认证字段跟着它把焦点接回来。 */
+  credentialFocusTick: number
 }) {
+  let passwordInput!: HTMLInputElement
+  let keyArea!: HTMLTextAreaElement
+
+  // 失败后焦点落回认证字段：用户接下来要做的就是重输，别让他再点一下。
+  createEffect(() => {
+    props.credentialFocusTick
+    queueMicrotask(() => {
+      if (props.authMode === 'password') passwordInput?.focus()
+      else if (props.authMode === 'private-key') keyArea?.focus()
+    })
+  })
+
+  /** 当前填的主机有没有保存过凭证：决定提示语是「自动使用」还是「成功后保存」。 */
+  const savedHere = () =>
+    props.recentConnections.some(
+      (recent) =>
+        recent.host.toLowerCase() === props.host.trim().toLowerCase() &&
+        recent.username === props.username.trim() &&
+        recent.port === Number(props.port) &&
+        recent.hasSavedCredential,
+    )
+
+  const authNote = () => {
+    if (props.authMode === 'system-key') {
+      return '使用系统 ssh-agent、默认私钥和 ~/.ssh/config。'
+    }
+    return savedHere()
+      ? '已保存凭证，连接时将自动使用；认证失败会清除并要求重新输入。'
+      : '连接成功后凭证会保存到本机，之后自动使用；认证失败会清除并要求重新输入。'
+  }
+
   return (
     <div class="remote-connect-start">
       <div class="remote-command-card">
@@ -543,7 +692,7 @@ function ConnectionStart(props: {
                 autocomplete="username"
                 spellcheck={false}
                 value={props.username}
-                placeholder="root"
+                placeholder="必填"
                 onInput={(event) => props.setUsername(event.currentTarget.value)}
               />
             </label>
@@ -555,7 +704,7 @@ function ConnectionStart(props: {
                 autocomplete="url"
                 spellcheck={false}
                 value={props.host}
-                placeholder="49.233.190.200"
+                placeholder="例如 101.35.218.231"
                 onInput={(event) => props.setHost(event.currentTarget.value)}
               />
             </label>
@@ -577,10 +726,10 @@ function ConnectionStart(props: {
             <div class="remote-command-preview" aria-live="polite">
               <span>将执行</span>
               <code>
-                {commandFor({
+                {commandForPreview({
                   ...(props.username.trim() ? { username: props.username.trim() } : {}),
                   host: props.host.trim() || '主机地址',
-                  port: validPort(props.port) ? Number(props.port) : 22,
+                  port: props.port,
                 })}
               </code>
             </div>
@@ -628,10 +777,11 @@ function ConnectionStart(props: {
             <label class="remote-password-field">
               <span>密码</span>
               <input
+                ref={passwordInput}
                 type="password"
                 autocomplete="current-password"
                 value={props.password}
-                placeholder="仅本次运行使用，不保存"
+                placeholder="首次连接需输入，成功后会保存"
                 onInput={(event) => props.setPassword(event.currentTarget.value)}
               />
             </label>
@@ -650,10 +800,11 @@ function ConnectionStart(props: {
                 <span>{props.privateKeyFile || '未选择文件，也可以在下方粘贴'}</span>
               </div>
               <textarea
+                ref={keyArea}
                 aria-label="SSH 私钥内容"
                 spellcheck={false}
                 value={props.privateKey}
-                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                placeholder="首次连接需粘贴，成功后会保存"
                 onInput={(event) => {
                   props.setPrivateKey(event.currentTarget.value)
                   props.setPrivateKeyFile('')
@@ -675,11 +826,7 @@ function ConnectionStart(props: {
               </Show>
             </div>
           </Show>
-          <span class="remote-auth-note">
-            {props.authMode === 'system-key'
-              ? '使用系统 ssh-agent、默认私钥和 ~/.ssh/config。'
-              : '凭证仅保存在当前应用进程内，关闭应用后清除；连接时的临时私钥文件用完即删。'}
-          </span>
+          <span class="remote-auth-note">{authNote()}</span>
         </div>
         <label class="remote-host-policy">
           <input
@@ -717,30 +864,49 @@ function ConnectionStart(props: {
           <Show
             when={props.recentConnections.length > 0}
             fallback={
-              <p class="remote-history-empty">成功连接后会自动保存在这里，不保存密码和私钥。</p>
+              <p class="remote-history-empty">
+                成功连接后会记录在这里；密码和私钥经确认后保存在本机配置，认证失败会自动清除。
+              </p>
             }
           >
             <For each={props.recentConnections}>
               {(recent) => (
-                <button
-                  class="remote-recent-row"
-                  type="button"
-                  onClick={() => props.useRecent(recent)}
-                >
-                  <IconTerminal size={14} />
-                  <span>
-                    <strong>
-                      {recent.username ? `${recent.username}@` : ''}
-                      {recent.host}
-                    </strong>
-                    <code>{commandFor(recent)}</code>
-                  </span>
-                  <em>{recent.lastPath || recent.home}</em>
-                  <span class="remote-history-action">
-                    {authModeLabel(recent.authMode)}
-                    <IconChevron size={11} dir="right" />
-                  </span>
-                </button>
+                <div class="remote-recent-row">
+                  <button
+                    class="remote-recent-main"
+                    type="button"
+                    onClick={() => props.useRecent(recent)}
+                  >
+                    <IconTerminal size={14} />
+                    <span>
+                      <strong>
+                        {recent.username ? `${recent.username}@` : ''}
+                        {recent.host}
+                      </strong>
+                      <code>{commandFor(recent)}</code>
+                    </span>
+                    <em>{recent.lastPath || recent.home}</em>
+                    <span class="remote-history-action">
+                      {recent.hasSavedCredential
+                        ? recent.authMode === 'password'
+                          ? '已记住密码'
+                          : '已记住密钥'
+                        : authModeLabel(recent.authMode)}
+                      <IconChevron size={11} dir="right" />
+                    </span>
+                  </button>
+                  {/* 删除是破坏性动作，但必须看得见入口：悬停才露面的按钮此前
+                      被用户当成「没有删除」。点它只是确认，不会真删。 */}
+                  <button
+                    class="remote-recent-del"
+                    type="button"
+                    aria-label={`删除连接记录 ${recent.host}`}
+                    data-tip="删除此连接记录"
+                    onClick={() => props.setRecentDeleteTarget(recent)}
+                  >
+                    <IconTrash size={13} />
+                  </button>
+                </div>
               )}
             </For>
           </Show>
@@ -783,6 +949,17 @@ function ConnectionStart(props: {
           </section>
         </Show>
       </div>
+
+      <ConfirmDialog
+        open={props.recentDeleteTarget !== null}
+        title="删除连接记录"
+        message={`将删除连接记录 ${props.recentDeleteTarget ? `${props.recentDeleteTarget.username ? `${props.recentDeleteTarget.username}@` : ''}${props.recentDeleteTarget.host}:${props.recentDeleteTarget.port}` : ''}。${
+          props.recentDeleteTarget?.hasSavedCredential ? ' 已保存的密码或私钥也会一并清除。' : ''
+        }`}
+        confirmLabel={props.recentDeleting ? '删除中…' : '删除'}
+        onConfirm={() => void props.forgetRecent()}
+        onCancel={() => props.setRecentDeleteTarget(null)}
+      />
     </div>
   )
 }
@@ -846,14 +1023,32 @@ function RemotePreview(props: {
                 innerHTML={renderMarkdown(result().content ?? '')}
               />
             </Match>
-            <Match when={result().kind === 'text' || result().kind === 'office'}>
+            <Match when={result().kind === 'html'}>
+              {/* 与本地 HTML 预览同口径：无脚本沙箱 iframe。 */}
+              <iframe
+                class="preview-frame html-preview-frame"
+                sandbox=""
+                srcdoc={result().content ?? ''}
+                title={result().path}
+              />
+            </Match>
+            <Match when={result().kind === 'text'}>
               <CodeView content={result().content ?? ''} path={result().path} />
+            </Match>
+            <Match when={result().kind === 'office'}>
+              {/* 与本地文件预览同一套渲染（docx/xlsx/pptx → HTML），同一份白名单。 */}
+              <article
+                class="office-preview"
+                innerHTML={sanitizeOfficeHtml(result().content ?? '')}
+              />
             </Match>
             <Match when={result().kind === 'image'}>
               <img class="preview-media" src={result().dataUri} alt={result().path} />
             </Match>
             <Match when={result().kind === 'pdf'}>
-              <iframe class="preview-frame" src={result().dataUri} title={result().path} />
+              <Suspense fallback={<div class="preview-loading" />}>
+                <PdfPreview dataUri={result().dataUri ?? ''} title={result().path} />
+              </Suspense>
             </Match>
             <Match when={result().kind === 'video'}>
               <video class="preview-media" src={result().dataUri} controls />
@@ -863,6 +1058,9 @@ function RemotePreview(props: {
             </Match>
           </Switch>
         )}
+      </Show>
+      <Show when={props.result?.truncated}>
+        <footer class="preview-foot">内容已截断</footer>
       </Show>
     </Show>
   )
@@ -876,6 +1074,12 @@ function bytes(size: number): string {
 
 function commandFor(target: { host: string; username?: string; port: number }): string {
   return `ssh ${target.username ? `${target.username}@` : ''}${target.host} -p ${target.port}`
+}
+
+/** 连接表单里的预览：端口还没填时不能假装是 22——按 OpenSSH 默认值显示会骗人。 */
+function commandForPreview(target: { host: string; username?: string; port: string }): string {
+  const port = validPort(target.port) ? String(Number(target.port)) : '端口'
+  return `ssh ${target.username ? `${target.username}@` : ''}${target.host} -p ${port}`
 }
 
 function validPort(value: string): boolean {

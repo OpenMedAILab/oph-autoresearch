@@ -262,7 +262,7 @@ export class AnthropicAdapter implements LlmAdapter {
     const ceiling = this.spec.maxOutputTokens ?? UNDECLARED_MAX_TOKENS
     let want = outputCap(req.maxOutputTokens, this.spec.maxOutputTokens) ?? ceiling
     const willThink = thinking !== undefined || this.spec.thinksByDefault
-    if (willThink) {
+    if (willThink && !req.hardOutputLimit) {
       want = Math.max(want, Math.min(MIN_TOKENS_WHEN_THINKING, ceiling))
     }
     return want

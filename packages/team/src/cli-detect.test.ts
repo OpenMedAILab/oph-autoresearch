@@ -9,7 +9,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { detectClis, findCli } from './cli-detect.ts'
+import { cliCandidateDirs, codexDesktopCandidatePaths, detectClis, findCli } from './cli-detect.ts'
 
 /** 造一个假的 claude 可执行文件。两种后缀都写，POSIX 与 Windows 各认一个。 */
 async function fakeBin(name: string): Promise<string> {
@@ -68,5 +68,21 @@ describe('外部 CLI 识别', () => {
     const dir = await fakeBin('claude')
     const [found] = await detectClis({ PATH: `"${dir}"`, PATHEXT: '.CMD' })
     expect(found?.id).toBe('claude')
+  })
+
+  test('PATH 之外的标准用户级目录也在候选里', () => {
+    // 各家的原生安装不进 PATH：codex 在 `.codex/bin` 与 `.codex/.sandbox-bin`，
+    // claude 在 `.claude/local`。漏掉的表现是设置页「本机没有识别到外部 CLI」。
+    const dirs = cliCandidateDirs('home', {})
+    expect(dirs).toContain(join('home', '.codex', 'bin'))
+    expect(dirs).toContain(join('home', '.codex', '.sandbox-bin'))
+    expect(dirs).toContain(join('home', '.claude', 'local'))
+  })
+
+  test('Codex 桌面版的版本目录按新到旧生成候选路径', () => {
+    expect(codexDesktopCandidatePaths('local', ['9ba7', 'aa10'])).toEqual([
+      join('local', 'OpenAI', 'Codex', 'bin', 'aa10', 'codex.exe'),
+      join('local', 'OpenAI', 'Codex', 'bin', '9ba7', 'codex.exe'),
+    ])
   })
 })

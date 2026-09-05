@@ -303,6 +303,97 @@ export function pruneUsage(store: Store, before: number): number {
 }
 
 /**
+ * 逐日总量（本地日）。**token 口径 = 输入 + 输出 + 缓存命中**：三者都是模型真实
+ * 吞吐的 token，缓存命中那部分不是免费，只是折扣。
+ */
+export function usageDaily(store: Store, q: UsageQuery = {}): { date: string; tokens: number }[] {
+  const w = where(q)
+  return store.db
+    .query<{ date: string; tokens: number | null }, (string | number)[]>(
+      `SELECT ${GROUP_EXPR.day} AS date,
+              SUM(input_tokens + output_tokens + COALESCE(cached_tokens, 0)) AS tokens
+         FROM usage_ledger ${w.sql}
+        GROUP BY date ORDER BY date ASC`,
+    )
+    .all(...w.args)
+    .map((r) => ({ date: r.date, tokens: r.tokens ?? 0 }))
+}
+
+/** 逐日分模型总量（本地日），热力图与趋势图共用这一份。 */
+export function usageDailyByModel(
+  store: Store,
+  q: UsageQuery = {},
+): { date: string; model: string; tokens: number }[] {
+  const w = where(q)
+  return store.db
+    .query<{ date: string; model: string; tokens: number | null }, (string | number)[]>(
+      `SELECT ${GROUP_EXPR.day} AS date, model,
+              SUM(input_tokens + output_tokens + COALESCE(cached_tokens, 0)) AS tokens
+         FROM usage_ledger ${w.sql}
+        GROUP BY date, model ORDER BY date ASC, model ASC`,
+    )
+    .all(...w.args)
+    .map((r) => ({ date: r.date, model: r.model, tokens: r.tokens ?? 0 }))
+}
+
+/** 最长单轮时长（毫秒）。`finished_at` 为 null 的是还没跑完的，不计入。 */
+export function usageLongestRunMs(store: Store): number | null {
+  const row = store.db
+    .query<{ ms: number | null }, []>(
+      'SELECT MAX(finished_at - created_at) AS ms FROM runs WHERE finished_at IS NOT NULL',
+    )
+    .get()
+  return row?.ms && row.ms > 0 ? row.ms : null
+}
+
+/** 把一个 Local date 键解析成 UTC 零点毫秒：连续判定只看日期差，不受时区与夏令时影响。 */
+function dayKeyMs(date: string): number {
+  const [y, m, d] = date.split('-').map(Number)
+  return Date.UTC(y!, m! - 1, d!)
+}
+
+/** JS 进程里的本地日。生产进程（sidecar）与系统时区一致；bun test 例外（见 usageStreaks）。 */
+function jsLocalDate(ts: number): string {
+  const d = new Date(ts)
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+/**
+ * 连续活跃天数。`dates` 是**有 token 的本地日**，顺序与去重都不要求。
+ *
+ * - `current`：以今天为锚——今天有记录从今天数，没有则看昨天；昨天也没有就是 0。
+ * - `longest`：任意位置的最长连续段。
+ *
+ * `today` 按本地日传（`YYYY-MM-DD`）：**权威在 SQL 的 localtime**——bun test 这类
+ * 进程里 JS 的 Date 走 UTC，`new Date()` 自己算今天在东八区 0–8 点会差一天。
+ * 缺省时退回 JS 本地日期（生产进程里两者的本地日一致）。
+ */
+export function usageStreaks(
+  dates: string[],
+  today: string = jsLocalDate(Date.now()),
+): { current: number; longest: number } {
+  const DAY = 86_400_000
+  const keys = Array.from(new Set(dates.map(dayKeyMs))).sort((a, b) => a - b)
+  if (keys.length === 0) return { current: 0, longest: 0 }
+  let longest = 0
+  let run = 0
+  let prev = 0
+  for (const ms of keys) {
+    run = prev && ms - prev === DAY ? run + 1 : 1
+    longest = Math.max(longest, run)
+    prev = ms
+  }
+  const set = new Set(keys)
+  const todayMs = dayKeyMs(today)
+  const anchor = set.has(todayMs) ? todayMs : todayMs - DAY
+  let current = 0
+  for (let cursor = anchor; set.has(cursor); cursor -= DAY) current += 1
+  return { current, longest }
+}
+
+/**
  * 摘要调用**实际写了多长**的分位数（输出 token）。
  *
  * 压缩的摘要预算取「装得下多少」与「实际需要多少」的较小者，这个函数回答后半句：
@@ -317,13 +408,24 @@ export function summaryOutputPercentile(
   workspaceId: string,
   percentile: number,
 ): number | null {
+  // In-run summaries are provider requests; manually initiated summaries have no run and remain
+  // ledger entries. They are distinct sources, so both belong in the observed output distribution.
   const rows = store.db
-    .query<{ output_tokens: number }, [string]>(
-      `SELECT output_tokens FROM usage_ledger
-        WHERE kind = 'summary' AND workspace_id = ? AND output_tokens > 0
+    .query<{ output_tokens: number }, [string, string]>(
+      `SELECT output_tokens FROM (
+         SELECT pr.provider_output_tokens AS output_tokens
+           FROM provider_requests pr
+           JOIN runs r ON r.id = pr.run_id
+          WHERE pr.purpose = 'summary'
+            AND r.workspace_id = ?
+            AND pr.provider_output_tokens > 0
+         UNION ALL
+         SELECT output_tokens FROM usage_ledger
+          WHERE kind = 'summary' AND workspace_id = ? AND output_tokens > 0
+       )
         ORDER BY output_tokens ASC`,
     )
-    .all(workspaceId)
+    .all(workspaceId, workspaceId)
   if (rows.length === 0) return null
   const index = Math.min(rows.length - 1, Math.floor(rows.length * percentile))
   return rows[index]!.output_tokens

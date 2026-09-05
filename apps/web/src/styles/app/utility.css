@@ -257,9 +257,13 @@
 /*
  * 空会话：输入区上浮居中，会话区收成 0 高。
  * 不加任何引导文案（需求 5、14）——输入框本身已经说明了该做什么。
+ * 外壳与滚动容器都要收：因为输入区居中的余量来自 .main 这一列，外壳还占着
+ * flex: 1 的话余量归它，composer 的 auto 外边距就没有空间可分。
  */
+.main.empty .transcript-host,
 .main.empty .transcript {
   flex: 0 1 auto;
+  min-height: 0;
 }
 .main.empty .composer-wrap {
   margin-top: auto;

@@ -16,7 +16,6 @@ import type {
   ConversationUsageResponse,
   EffortLevel,
   MessageId,
-  RunId,
 } from '@oph-autoresearch/core'
 import {
   catalogKey,
@@ -28,6 +27,7 @@ import {
 } from '@oph-autoresearch/runtime'
 import {
   archiveConversation,
+  conversationTreeIds,
   createConversation,
   currentGoal,
   deleteConversation,
@@ -35,9 +35,7 @@ import {
   listConversationHistoryPage,
   listConversations,
   listMessages,
-  listProviderRequests,
   listRuns,
-  listSteps,
   setConversationTitle,
   usageEntries,
   usageTotals,
@@ -340,7 +338,9 @@ export const handleConversationsApi: ApiHandler = async (url, req, d) => {
      */
     if (req.method === 'DELETE') {
       if (!getConversation(d.store, id)) return json({ error: 'conversation not found' }, 404)
-      if (d.runs.isBusy(id)) return json({ error: '该会话正在执行，请先中断再删除' }, 409)
+      if (conversationTreeIds(d.store, id).some((descendant) => d.runs.isBusy(descendant))) {
+        return json({ error: '该会话或子会话正在执行，请先中断再删除' }, 409)
+      }
       deleteConversation(d.store, id)
       /*
        * 附件目录跟着会话一起走。**只删这一个目录，不按 `Attachment.path` 逐条删**
@@ -438,23 +438,6 @@ export const handleConversationsApi: ApiHandler = async (url, req, d) => {
     if (!getConversation(d.store, id)) return json({ error: 'conversation not found' }, 404)
     // 没立过目标就是 null，不是 404——「这条会话没有目标」是正常状态。
     return json({ goal: currentGoal(d.store, id) })
-  }
-
-  const stepMatch = /^\/api\/runs\/([^/]+)\/steps$/.exec(p)
-  if (stepMatch) {
-    return json({ steps: listSteps(d.store, stepMatch[1] as RunId) })
-  }
-
-  /*
-   * 逐请求账本。
-   *
-   * `usage.turns` 回答不了「这一轮发了几次」——它只在拿到 usage 回报时
-   * 才 push 一条，连接层失败后重发的那一次在它里面不存在。而这张表是**发出之前**
-   * 就落行的，重发是独立一行（`retry_index`），所以它才是请求次数的真源。
-   */
-  const requestMatch = /^\/api\/runs\/([^/]+)\/requests$/.exec(p)
-  if (requestMatch) {
-    return json({ requests: listProviderRequests(d.store, requestMatch[1] as RunId) })
   }
 
   if (p === '/api/runs/active') {

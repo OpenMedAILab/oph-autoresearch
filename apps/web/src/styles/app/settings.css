@@ -1684,3 +1684,222 @@ textarea.code-area::placeholder {
 .usage-table tbody tr + tr td {
   border-top: 1px solid var(--border-subtle);
 }
+
+/* ── 用量总览：统计卡 / Token 活动 / 每日趋势 ── */
+/* 五张统计卡并排，窄了自动折行。卡与卡之间分隔不止靠边线，还有底色差。 */
+.usage-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--s-2);
+}
+@media (max-width: 900px) {
+  .usage-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.usage-stat {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-height: 84px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-inset);
+}
+.usage-stat strong {
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.usage-stat span {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+.usage-stat small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* 面板：卡 + 头一行（标题在左、选项在右）。 */
+.usage-panel {
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  padding: 14px 16px 16px;
+}
+.usage-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-bottom: 12px;
+}
+.usage-panel-head h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.usage-seg {
+  display: flex;
+  gap: 2px;
+  margin: 0;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+.usage-seg legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.usage-seg button {
+  padding: 3px 10px;
+  border-radius: var(--r-xs);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+.usage-seg button.active {
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-primary);
+}
+
+/* 热力图：格子在 viewBox 里等距，宽度撑满面板按比例缩放。 */
+.usage-heatmap-grid {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.usage-heat-dow {
+  fill: var(--text-tertiary);
+  font-size: 8px;
+}
+.usage-heat-month {
+  fill: var(--text-tertiary);
+  font-size: 8px;
+}
+.usage-heat-cell {
+  fill: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+/* 四级紫色阶：淡紫 → 深紫，和趋势图的紫色系渐变同一族。 */
+.usage-heat-cell.l1 {
+  fill: #ddd6fe;
+}
+.usage-heat-cell.l2 {
+  fill: #a78bfa;
+}
+.usage-heat-cell.l3 {
+  fill: #8b5cf6;
+}
+.usage-heat-cell.l4 {
+  fill: #6d28d9;
+}
+
+/* 趋势图：图例一行，图下面占满；空态居中一句。 */
+.usage-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 8px;
+}
+.usage-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.usage-legend-item i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+.usage-trend-canvas svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.usage-trend-gridline {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+.usage-trend-ylabel {
+  fill: var(--text-tertiary);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-trend-xlabel {
+  fill: var(--text-tertiary);
+  font-size: 9px;
+}
+.usage-trend-line {
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.usage-trend-area {
+  stroke: none;
+}
+.usage-trend-guide {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.usage-trend-dot {
+  stroke: var(--bg-raised);
+  stroke-width: 1;
+}
+.usage-trend-hit {
+  fill: transparent;
+}
+.usage-trend-tip {
+  position: absolute;
+  top: 6px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 2px;
+  min-width: 148px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-md);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 2;
+}
+.usage-trend-tip strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.usage-trend-tip-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.usage-trend-tip-row i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.usage-empty {
+  padding: 34px 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.usage-ledger-title {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}

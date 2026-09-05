@@ -108,10 +108,11 @@ const ok =
 /** 挂住这一轮，直到用例主动放行。用来制造「会话正在跑」。 */
 function gate(payload: string): { turn: Turn; release: () => void } {
   let release = (): void => {}
-  const turn: Turn = () =>
-    new Promise<Response>((resolve) => {
-      release = () => resolve(new Response(payload, { headers: SSE_HEADERS }))
-    })
+  // run.started precedes the provider request; an early release must not be lost.
+  const response = new Promise<Response>((resolve) => {
+    release = () => resolve(new Response(payload, { headers: SSE_HEADERS }))
+  })
+  const turn: Turn = () => response
   return { turn, release: () => release() }
 }
 

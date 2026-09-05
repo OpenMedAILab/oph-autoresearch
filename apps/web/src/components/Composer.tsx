@@ -1,4 +1,4 @@
-import type { Attachment, ContextGroup, FollowUp, Goal } from '@oph-autoresearch/core'
+import type { ContextGroup, FollowUp, Goal } from '@oph-autoresearch/core'
 import {
   attachmentTypeOf,
   baseNameOf,
@@ -14,6 +14,8 @@ import { slashDispatch } from '../lib/slash.ts'
 import {
   activeModelRow,
   type CliAgentRow,
+  composerAttachments,
+  composerDraft,
   composerSeed,
   dropFollowUp,
   followUpMode,
@@ -29,6 +31,8 @@ import {
   resumeGoal,
   type SkillMeta,
   sendMessage,
+  setComposerAttachments,
+  setComposerDraft,
   setComposerSeed,
   setPermissionMode,
   setState,
@@ -382,6 +386,16 @@ function toolOption(tool: ToolMeta): MentionOption {
 }
 
 /**
+ * 粘贴进来的那一份的本地预览地址，按落盘路径存。
+ *
+ * 只增不减：一次会话里粘几张图是有限的，而按 chip 的生命周期撤销会与
+ * 「发送后 Transcript 仍要显示」冲突。放模块级而不是组件里：中央视图切换会把
+ * Composer 整个卸载，blob URL 一旦随组件销毁，切回来时缩略图就只剩一次回读
+ * ——而那份字节本来就握在手里，没必要重取。
+ */
+const localThumbs = new Map<string, string>()
+
+/**
  * 输入区。
  *
  * 三条交互决定：
@@ -390,11 +404,16 @@ function toolOption(tool: ToolMeta): MentionOption {
  * - 会话在跑时照样发得出去：这一条排进队列，去向由默认档决定，
  *   `Ctrl+Enter` 对单条走相反那一档。默认档在设置页，不常驻这里。
  * - 自适应高度，封顶后转内部滚动，不把会话区挤没。
+ *
+ * 正文与待发附件存在 store 的 `composerDraft` / `composerAttachments` 里，不在这里：
+ * 这个组件会随中央视图切换被卸载（见 `ui.ts` 里的说明），草稿跟着组件走就会丢。
  */
 export function Composer() {
-  const [text, setText] = createSignal('')
+  const text = composerDraft
+  const setText = setComposerDraft
+  const pending = composerAttachments
+  const setPending = setComposerAttachments
   const [menuCursor, setMenuCursor] = createSignal(0)
-  const [pending, setPending] = createSignal<Attachment[]>([])
   const [uploading, setUploading] = createSignal(0)
   const [dragOver, setDragOver] = createSignal(false)
   const [panelDockOpen, setPanelDockOpen] = createSignal(false)
@@ -406,13 +425,6 @@ export function Composer() {
   const [targetLoad, setTargetLoad] = createSignal<'idle' | 'loading' | 'ready'>('idle')
   const [skillLoadNote, setSkillLoadNote] = createSignal<string | null>(null)
   const [targetLoadNote, setTargetLoadNote] = createSignal<string | null>(null)
-  /**
-   * 粘贴进来的那一份的本地预览地址，按落盘路径存。
-   *
-   * 只增不减：一次会话里粘几张图是有限的，而按 chip 的生命周期撤销会与
-   * 「发送后 Transcript 仍要显示」冲突。
-   */
-  const localThumbs = new Map<string, string>()
   /** 输入框里有没有可发的内容。主按钮的四态与 `submit()` 共用这一条判据。 */
   const hasInput = () => text().trim().length > 0 || pending().length > 0
   /**
@@ -661,6 +673,12 @@ export function Composer() {
     onCleanup(() => {
       dropSink = null
     })
+  })
+
+  // 草稿在 store 里活过了上一次卸载；重挂时把高度撑到内容那么高，不然多行草稿
+  // 会以一行的样子出现，要等下一次输入才展开。
+  onMount(() => {
+    queueMicrotask(() => autosize())
   })
 
   /**

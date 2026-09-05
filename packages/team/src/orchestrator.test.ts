@@ -245,6 +245,60 @@ describe('编排执行', () => {
     expect(results.filter((r) => r.status === 'done')).toHaveLength(4)
     expect(peak).toBeLessThanOrEqual(2)
   })
+
+  test('中断时等待已启动的并发节点收尾，不再派发新就绪节点', async () => {
+    const controller = new AbortController()
+    let releaseA!: () => void
+    let releaseB!: () => void
+    let started!: () => void
+    const a = new Promise<void>((resolve) => {
+      releaseA = resolve
+    })
+    const b = new Promise<void>((resolve) => {
+      releaseB = resolve
+    })
+    const bothStarted = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const calls: string[] = []
+    const result = new TeamOrchestrator(
+      {
+        name: 'cancel',
+        rules: { maxConcurrent: 2 },
+        roles: [role('a'), role('b'), role('c')],
+        plan: [
+          { id: 'a', agent: 'a', task: 'A' },
+          { id: 'b', agent: 'b', task: 'B' },
+          { id: 'c', agent: 'c', task: 'C', needs: ['a'] },
+        ],
+      },
+      {
+        workspaceRoot: '/tmp',
+        signal: controller.signal,
+        runId: 'rn_cancel' as never,
+        emit: () => {},
+        resolveCli: () => undefined,
+        runBuiltin: async ({ role: r }: { role: Role }) => {
+          calls.push(r.id)
+          if (calls.length === 2) started()
+          if (r.id === 'a') await a
+          if (r.id === 'b') await b
+          return { ok: true, output: `${r.id} 完成` }
+        },
+      } as never,
+    ).run('目标')
+
+    await bothStarted
+    controller.abort()
+    releaseA()
+    await Bun.sleep(0)
+    expect(calls).toEqual(['a', 'b'])
+    releaseB()
+
+    const finished = await result
+    expect(finished.phase).toBe('failed')
+    expect(finished.receipts.map((receipt) => receipt.nodeId).sort()).toEqual(['a', 'b'])
+  })
 })
 
 describe('主会话检查点', () => {

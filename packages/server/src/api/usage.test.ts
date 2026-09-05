@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { UsageResponse } from '@oph-autoresearch/core'
+import type { UsageOverviewResponse, UsageResponse } from '@oph-autoresearch/core'
 import { recordUsage, Store } from '@oph-autoresearch/store'
 import type { ApiRequestDeps } from './types.ts'
 import { handleUsageApi } from './usage.ts'
@@ -162,5 +162,39 @@ describe('参数校验', () => {
 
   test('by 不在词表里回 400', async () => {
     expect((await call('?by=provider'))!.status).toBe(400)
+  })
+})
+
+describe('使用统计总览', () => {
+  test('累计、峰值、逐日与逐模型序列同源', async () => {
+    const store = new Store({ path: ':memory:' })
+    seed(store)
+    const res = await handleUsageApi(
+      new URL('http://127.0.0.1/api/usage/overview'),
+      new Request('http://127.0.0.1/api/usage/overview'),
+      deps(store),
+    )
+    const j = (await res!.json()) as UsageOverviewResponse
+    // 100+50+10 与 10+5：cached 计入 token 口径。
+    expect(j.totalTokens).toBe(175)
+    expect(j.entries).toBe(2)
+    expect(j.peakDay?.tokens).toBe(175)
+    expect(j.days).toHaveLength(1)
+    expect(j.dailyByModel).toHaveLength(2)
+    expect(j.longestRunMs).toBeNull()
+    store.close()
+  })
+
+  test('空账本也能出总览，峰值与最长为 null', async () => {
+    const res = await handleUsageApi(
+      new URL('http://127.0.0.1/api/usage/overview'),
+      new Request('http://127.0.0.1/api/usage/overview'),
+      deps(new Store({ path: ':memory:' })),
+    )
+    const j = (await res!.json()) as UsageOverviewResponse
+    expect(j.totalTokens).toBe(0)
+    expect(j.peakDay).toBeNull()
+    expect(j.days).toEqual([])
+    expect(j.longestStreak).toBe(0)
   })
 })

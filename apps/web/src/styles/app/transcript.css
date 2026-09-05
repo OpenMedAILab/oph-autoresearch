@@ -2,6 +2,17 @@
  *
  * 由 `../app.css` 按固定顺序引入——**顺序即层叠**，不要单独 import 这个文件。 */
 
+/* 会话流外壳：滚动容器之外还挂着一颗「回到最新」的悬浮按钮。按钮不能放进
+   `.transcript`——absolute 定位会跟着滚动内容一起走（containing block 是滚动盒的
+   padding box），sticky 会占掉流里一截；外壳不滚，按钮钉在它上面位置才恒定。 */
+.transcript-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── 会话流 ── */
 .transcript {
   flex: 1;
@@ -26,6 +37,27 @@
   scrollbar-gutter: stable both-edges;
   /* 滚动锚定：新内容插入时不让浏览器把视口往回跳 */
   overflow-anchor: none;
+}
+
+/* 回到最新：往上翻过才出现（pinned 为假），点一下滚回末尾并恢复贴底跟随。
+   圆形浮钮，悬停不再放大——尺寸本来就够点，放大是给鼠标路径添乱。 */
+.transcript-jump {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-md);
+  color: var(--text-secondary);
+}
+.transcript-jump:hover {
+  color: var(--accent);
 }
 
 /* 条目间距 8px。
@@ -589,7 +621,9 @@
   overflow-wrap: anywhere;
 }
 
-/* 展开体里的三种块，形状统一：等宽、11px、灰底、可滚。 */
+/* 展开体里的三种块，形状统一：等宽、11px、灰底、可滚。
+   用 --font-code 而不是 --font-mono：这里显示的是模型与命令产出的任意文本，
+   中文必须能回退到带 CJK 字形的等宽字体（见 tokens.css 对 --font-code 的说明）。 */
 .fold-code,
 .fold-out {
   margin: 0;
@@ -599,7 +633,7 @@
   border-radius: var(--r-sm);
   background: var(--bg-inset);
   color: var(--text-secondary);
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: var(--fs-xs);
   line-height: 1.5;
   white-space: pre-wrap;
@@ -659,7 +693,7 @@
   overflow: auto;
   border-radius: var(--r-sm);
   background: var(--bg-inset);
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: var(--fs-xs);
   line-height: 1.5;
   white-space: pre-wrap;
@@ -675,12 +709,14 @@
   color: var(--success);
   background: var(--diff-add-bg);
 }
+/* 思考链。`--font-code` 而非 `--font-mono`：思考内容任意语言混排，
+   中文要能回退到带 CJK 字形的等宽字体（见 tokens.css）。 */
 .fold-pre {
   margin: 0;
   max-height: 200px;
   overflow-y: auto;
   color: var(--text-tertiary);
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: var(--fs-xs);
   line-height: 1.5;
   white-space: pre-wrap;
@@ -700,7 +736,7 @@
   height: calc(8 * 1.5 * var(--fs-xs));
   overflow-y: auto;
   color: var(--text-tertiary);
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: var(--fs-xs);
   line-height: 1.5;
   white-space: pre-wrap;

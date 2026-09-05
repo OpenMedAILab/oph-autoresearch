@@ -1,79 +1,75 @@
 #!/usr/bin/env bun
-/**
- * 把本地打出来的安装包收进 `.tmp/installer/`。
- *
- * Tauri 把产物写在 `.tmp/cargo-target/` 下，那是构建中间物、不是交付物。本地打包的
- * 落点统一是 `.tmp/installer/`，复制和校验成功后删除 release 中间物。
- *
- * **这条路只管本地测试包。** 正式发布走 `.github/workflows/release-windows.yml`：
- * 产物直接进 GitHub 草稿 Release，不经过这里。
- *
- *   bun run scripts/collect-installer.ts
- */
-
+/** Collect only the target just built, preserving earlier local installers and build caches. */
 import { createHash } from 'node:crypto'
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { constants } from 'node:fs'
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  writeFile,
+} from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
-const ROOT = join(import.meta.dir, '..')
-const OUT_DIR = join(ROOT, '.tmp', 'installer')
-const TAURI = join(ROOT, '.tmp', 'cargo-target')
-
-/**
- * 带 `--target` 与不带，产物路径不是同一条：CI 用
- * `--target x86_64-pc-windows-msvc`，落 `.tmp/cargo-target/<三元组>/release/…`；
- * 本地 `bun run tauri:build` 不带，落 `.tmp/cargo-target/release/…`。两条都找。
- */
-async function bundleDirs(): Promise<string[]> {
-  const dirs = [join(TAURI, 'release/bundle/nsis')]
-  const entries = await readdir(TAURI, { withFileTypes: true }).catch(() => [])
-  for (const e of entries) {
-    if (e.isDirectory() && e.name !== 'release' && e.name !== 'debug') {
-      dirs.push(join(TAURI, e.name, 'release/bundle/nsis'))
-    }
-  }
-  return dirs
+function assertWithin(root: string, path: string): void {
+  const rel = relative(root, path)
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+    throw new Error('安装包路径不在预期构建目录中')
 }
 
-async function main(): Promise<number> {
-  const found: { dir: string; name: string }[] = []
-  for (const dir of await bundleDirs()) {
-    for (const name of await readdir(dir).catch(() => [])) {
-      if (name.endsWith('.exe')) found.push({ dir, name })
-    }
+/** Source selection is exact: a stale installer from another target cannot enter this delivery. */
+export async function collectInstaller(root: string, target: string): Promise<string> {
+  if (!/^(x86_64|aarch64)-pc-windows-(gnu|msvc)$/.test(target))
+    throw new Error('需要明确的 Windows Rust target')
+  const workspace = await realpath(resolve(root))
+  const version = (await readFile(join(workspace, 'VERSION'), 'utf8')).trim()
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('版本无效')
+  const buildRoot = await realpath(join(workspace, '.tmp', 'cargo-target'))
+  assertWithin(workspace, buildRoot)
+  let sourceDir = buildRoot
+  for (const segment of [target, 'release', 'bundle', 'nsis']) {
+    sourceDir = join(sourceDir, segment)
+    const entry = await lstat(sourceDir)
+    if (entry.isSymbolicLink() || !entry.isDirectory())
+      throw new Error('安装包目标路径不能包含链接或非目录')
   }
-
-  if (found.length === 0) {
-    process.stderr.write('没有找到安装包，先跑 bun run tauri:build\n')
-    return 1
-  }
-
-  await mkdir(OUT_DIR, { recursive: true })
-  const delivered = new Set<string>()
-  for (const f of found) {
-    const dest = join(OUT_DIR, f.name)
-    await copyFile(join(f.dir, f.name), dest)
-    delivered.add(f.name)
-    const size = (await Bun.file(dest).stat()).size
-    process.stdout.write(`${dest}　${(size / 1024 / 1024).toFixed(1)} MB\n`)
-  }
-
-  for (const name of await readdir(OUT_DIR)) {
-    if (name.endsWith('.exe') && !delivered.has(name)) {
-      await rm(join(OUT_DIR, name), { force: true })
-    }
-  }
-
-  const sums: string[] = []
-  for (const name of [...delivered].sort()) {
-    const bytes = await readFile(join(OUT_DIR, name))
-    sums.push(`${createHash('sha256').update(bytes).digest('hex')}  ${name}`)
-  }
-  await writeFile(join(OUT_DIR, 'SHA256SUMS.txt'), `${sums.join('\n')}\n`, 'ascii')
-
-  const releases = new Set(found.map((f) => dirname(dirname(f.dir))))
-  for (const release of releases) await rm(release, { recursive: true, force: true })
-  return 0
+  const installers = (await readdir(sourceDir)).filter((name) => name.endsWith('.exe'))
+  const architecture = target.startsWith('x86_64-') ? 'x64' : 'arm64'
+  if (
+    installers.length !== 1 ||
+    installers[0] !== `oph-autoresearch_${version}_${architecture}-setup.exe`
+  )
+    throw new Error('当前目标必须只有一个与 VERSION 一致的安装包')
+  const name = installers[0]!
+  const sourceEntry = await lstat(join(sourceDir, name))
+  if (sourceEntry.isSymbolicLink() || !sourceEntry.isFile()) throw new Error('安装包必须为普通文件')
+  const source = await realpath(join(sourceDir, name))
+  assertWithin(sourceDir, source)
+  const outputRoot = join(workspace, '.tmp', 'installer')
+  await mkdir(outputRoot, { recursive: true })
+  assertWithin(workspace, await realpath(outputRoot))
+  const output = await mkdtemp(join(outputRoot, `v${version}-${target}-`))
+  const destination = join(output, name)
+  await copyFile(source, destination, constants.COPYFILE_EXCL)
+  const sourceBytes = await readFile(source)
+  const bytes = await readFile(destination)
+  const digest = (value: Uint8Array) => createHash('sha256').update(value).digest('hex')
+  const hash = digest(bytes)
+  if (hash !== digest(sourceBytes)) throw new Error('安装包复制校验失败')
+  await writeFile(join(output, 'SHA256SUMS.txt'), `${hash}  ${name}\n`, { flag: 'wx' })
+  await writeFile(
+    join(output, 'package.json'),
+    `${JSON.stringify({ version, target, file: name, byteLength: bytes.length, sha256: hash }, null, 2)}\n`,
+    { flag: 'wx' },
+  )
+  return output
 }
 
-process.exit(await main())
+if (import.meta.main) {
+  const target = Bun.argv[2]
+  if (!target) throw new Error('用法：bun run scripts/collect-installer.ts <Rust target>')
+  process.stdout.write(`${await collectInstaller(join(import.meta.dir, '..'), target)}\n`)
+}

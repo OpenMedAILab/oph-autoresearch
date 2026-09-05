@@ -577,3 +577,28 @@ describe('行类型与 DDL 对齐', () => {
     db.close()
   })
 })
+
+describe('迁移 37：provider request purpose', () => {
+  test('旧请求仅以默认 turn 补列，不根据时间或 run 猜测摘要', () => {
+    const db = dbBefore(37)
+    db.query(
+      `INSERT INTO provider_requests
+       (id, run_id, turn_index, retry_index, model, status, measured_input_tokens,
+        sent_categories, payload_hash, created_at)
+       VALUES ('pr_old', 'rn_old', 0, 0, 'm', 'received', 12, '{}', 'payload', 1)`,
+    ).run()
+
+    applyOne(db, 37)
+    expect(
+      db
+        .query<{ purpose: string }, [string]>('SELECT purpose FROM provider_requests WHERE id = ?')
+        .get('pr_old'),
+    ).toEqual({ purpose: 'turn' })
+    expect(() =>
+      db
+        .query("UPDATE provider_requests SET purpose = 'guessed-summary' WHERE id = 'pr_old'")
+        .run(),
+    ).toThrow()
+    db.close()
+  })
+})

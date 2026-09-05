@@ -25,6 +25,7 @@ import type {
   WorkflowCall,
   WorkflowTransition,
 } from '@oph-autoresearch/core'
+import { decideResearchCapability } from '@oph-autoresearch/core'
 
 // ─────────────────────────────── 执行上下文 ───────────────────────────────
 
@@ -402,6 +403,10 @@ export interface ToolContext {
   conversationId: string
   runId: string
   model: string
+  /** Trusted serve-time boundary. Campaign text and model arguments never set this field. */
+  researchBoundary?: import('@oph-autoresearch/core').ResearchExecutionBoundary
+  /** Trusted research assembly provides a locked content reader; never supplied by tool arguments. */
+  researchSkills?: { read(name: string): Promise<string> }
   /**
    * 这一轮那个模型的上下文窗口。
    *
@@ -817,6 +822,15 @@ export class ToolRegistry {
     args: Record<string, unknown>,
     ctx: ToolContext,
   ): Promise<ToolOutcomeWire> {
+    const research = decideResearchCapability(ctx.researchBoundary ?? 'standard', 'tool-execution')
+    if (!research.allowed) {
+      return {
+        status: 'failure',
+        executed: false,
+        message: research.message,
+        errorKind: 'research_boundary_denied',
+      }
+    }
     const spec = this.tools.get(name)
     if (!spec) {
       return {

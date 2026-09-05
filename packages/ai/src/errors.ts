@@ -19,6 +19,7 @@ import { type CapacityRejection, classifyCapacityRejection } from './capacity.ts
 import type { ProviderUsage } from './types.ts'
 
 export class ProviderError extends Error {
+  readonly timedOut: boolean
   readonly code: ErrorCode
   readonly provider: ProviderKind
   readonly status: number | undefined
@@ -43,6 +44,7 @@ export class ProviderError extends Error {
   readonly retryAfterMs: number | null
 
   constructor(opts: {
+    timedOut?: boolean
     code: ErrorCode
     message: string
     provider: ProviderKind
@@ -55,6 +57,7 @@ export class ProviderError extends Error {
   }) {
     super(opts.message, opts.cause !== undefined ? { cause: opts.cause } : undefined)
     this.name = 'ProviderError'
+    this.timedOut = opts.timedOut ?? false
     this.code = opts.code
     this.provider = opts.provider
     this.status = opts.status
@@ -168,8 +171,9 @@ export function classifyProviderError(provider: ProviderKind, err: unknown): Pro
     ...(retryAfterMs !== null ? { retryAfterMs } : {}),
   }
 
-  const build = (code: ErrorCode, msg?: string) =>
+  const build = (code: ErrorCode, msg?: string, timedOut = false) =>
     new ProviderError({
+      timedOut,
       code,
       message: msg ?? message,
       provider,
@@ -248,7 +252,7 @@ export function classifyProviderError(provider: ProviderKind, err: unknown): Pro
   }
 
   const transport = classifyTransport(err, message)
-  if (transport) return build('network_error', transport)
+  if (transport) return build('network_error', transport.text, transport.timedOut)
 
   return build('internal_error')
 }
@@ -300,7 +304,7 @@ function looksRetryableRejection(status: number, message: string): boolean {
  * 用）。判成可重试的代价是多打几次白工，判成不可重试的代价是一次抖动打断用户的任务。后者贵得多，
  * 所以选前者——但文案要**同时点出**这两种可能，别让一个配错代理的人对着「连不上」长时间排查网络。
  */
-const TRANSPORT_SHAPES: { code: RegExp; message: RegExp; text: string }[] = [
+const TRANSPORT_SHAPES: { code: RegExp; message: RegExp; text: string; timedOut?: boolean }[] = [
   {
     code: /CERT|SSL|TLS|SELF_SIGNED|LEAF_SIGNATURE/,
     message: /certificate|ssl|tls handshake/i,
@@ -316,6 +320,7 @@ const TRANSPORT_SHAPES: { code: RegExp; message: RegExp; text: string }[] = [
     code: /^(ETIMEDOUT|ERR_TIMEOUT|TIMEOUT|CONNECTIONTIMEOUT|UND_ERR_(HEADERS|BODY)_TIMEOUT)/,
     message: /timed out|timeout|\bETIMEDOUT\b/i,
     text: '请求超时',
+    timedOut: true,
   },
   {
     code: /^(ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ENETDOWN|EAI_AGAIN|ERR_NETWORK|UND_ERR_|CONNECTION)/,
@@ -325,10 +330,14 @@ const TRANSPORT_SHAPES: { code: RegExp; message: RegExp; text: string }[] = [
   },
 ]
 
-function classifyTransport(err: unknown, message: string): string | null {
+function classifyTransport(
+  err: unknown,
+  message: string,
+): { text: string; timedOut: boolean } | null {
   const code = String((err as { code?: unknown })?.code ?? '').toUpperCase()
   for (const shape of TRANSPORT_SHAPES) {
-    if (shape.code.test(code) || shape.message.test(message)) return shape.text
+    if (shape.code.test(code) || shape.message.test(message))
+      return { text: shape.text, timedOut: shape.timedOut ?? false }
   }
   return null
 }
