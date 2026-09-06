@@ -16,6 +16,7 @@ import {
   mutateResearchCampaign,
   rebuildResearchCampaignProjection,
   recoverRunningSyntheticAttempts,
+  researchCostSummary,
   scientificContextHash,
 } from './research.ts'
 
@@ -1587,6 +1588,10 @@ describe('CLI preparation authorization ledger', () => {
           },
         ],
       })
+      expect(researchCostSummary(campaign).subjects[0]).toMatchObject({
+        knownActualCost: null,
+        knownActualSource: null,
+      })
       const wrongCurrency = mutateResearchCampaign(store, campaign.id, {
         idempotencyKey: 'cost-eur',
         expectedVersion: campaign.version,
@@ -1621,6 +1626,10 @@ describe('CLI preparation authorization ledger', () => {
         },
       })
       if (!recorded.ok) throw new Error(recorded.message)
+      expect(researchCostSummary(recorded.campaign).subjects[0]).toMatchObject({
+        knownActualCost: 20,
+        knownActualSource: 'provider-receipt',
+      })
       const lowerBudget = mutateResearchCampaign(store, campaign.id, {
         idempotencyKey: 'cost-overrun-budget',
         expectedVersion: recorded.campaign.version,
@@ -1689,6 +1698,16 @@ describe('CLI preparation authorization ledger', () => {
         },
       })
       if (!secondEvidence.ok) throw new Error(secondEvidence.message)
+      expect(researchCostSummary(secondEvidence.campaign)).toMatchObject({
+        settledCost: 20,
+        committedCost: 21,
+      })
+      const lateOverrun = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'late-settled-overrun',
+        expectedVersion: secondEvidence.campaign.version,
+        command: { kind: 'setBudget', budget: { currency: 'USD', limit: 20 } },
+      })
+      expect(lateOverrun).toMatchObject({ ok: false, code: 'reserved_budget' })
       const duplicateSubjectApproval = mutateResearchCampaign(store, campaign.id, {
         idempotencyKey: 'approve-second-cost',
         expectedVersion: secondEvidence.campaign.version,
@@ -1776,6 +1795,74 @@ describe('CLI preparation authorization ledger', () => {
       })
       expect(changed).toMatchObject({ ok: true })
       if (changed.ok) expect(changed.campaign.taskRevisions[0]).toMatchObject({ status: 'stale' })
+    } finally {
+      store.close()
+    }
+  })
+
+  test('cost settlement retains reservations until the bound execution has a terminal fact', () => {
+    const store = fresh()
+    try {
+      const initial = created(store).campaign
+      const running = replaceCampaignSnapshot(store, {
+        ...initial,
+        modelReviews: [
+          {
+            id: 'rmr_running_cost',
+            dispatchKey: 'running-cost-review',
+            approvalId: 'hap-running-review',
+            evidencePackHash: `sha256:${'d'.repeat(64)}`,
+            configHash: `sha256:${'e'.repeat(64)}`,
+            artifactVersionIds: [],
+            currency: 'USD',
+            reservedCost: 10,
+            maxRequests: 2,
+            maxOutputTokens: 1024,
+            requestCount: 1,
+            status: 'running',
+            ownerPid: process.pid,
+          },
+        ],
+      })
+      const evidence = mutateResearchCampaign(store, running.id, {
+        idempotencyKey: 'record-running-cost',
+        expectedVersion: running.version,
+        command: {
+          kind: 'recordCostEvidence',
+          evidence: {
+            id: 'rce-running',
+            subject: { kind: 'model_review', id: 'rmr_running_cost' },
+            currency: 'USD',
+            amount: 10,
+            description: 'A partial provider receipt while the review remains active.',
+            sourceHash: CONTENT_HASH,
+            source: 'provider-receipt',
+          },
+        },
+      })
+      if (!evidence.ok) throw new Error(evidence.message)
+      const scope = costEvidenceApprovalScope(evidence.campaign, 'rce-running', Date.now() + 60_000)
+      const approved = mutateResearchCampaign(store, running.id, {
+        idempotencyKey: 'approve-running-cost',
+        expectedVersion: evidence.campaign.version,
+        command: {
+          kind: 'approve',
+          bundleHash: evidence.campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'running-cost-proof', verifiedAt: Date.now() },
+          scope,
+        },
+      })
+      if (!approved.ok) throw new Error(approved.message)
+      const denied = mutateResearchCampaign(store, running.id, {
+        idempotencyKey: 'settle-running-cost',
+        expectedVersion: approved.campaign.version,
+        command: {
+          kind: 'settleCostEvidence',
+          evidenceId: 'rce-running',
+          approvalId: approved.campaign.approvals[0]!.id,
+        },
+      })
+      expect(denied).toMatchObject({ ok: false, code: 'cost_settlement_approval_required' })
     } finally {
       store.close()
     }

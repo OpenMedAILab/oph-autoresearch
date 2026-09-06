@@ -244,22 +244,47 @@ function reservationForSubject(
   return review ? review.reservedCost : null
 }
 
-function knownActualCost(campaign: ResearchCampaign, subject: ResearchCostSubject): number {
-  const reviewAmount =
+function knownActualCost(campaign: ResearchCampaign, subject: ResearchCostSubject): number | null {
+  const amounts: number[] = []
+  const review =
     subject.kind === 'model_review'
-      ? ((campaign.modelReviews ?? []).find((item) => item.id === subject.id)?.actualCost ?? 0)
-      : 0
-  const evidenceAmount = (campaign.costEvidence ?? [])
-    .filter((evidence) => costSubjectKey(evidence.subject) === costSubjectKey(subject))
-    .reduce((maximum, evidence) => Math.max(maximum, evidence.amount), 0)
-  return Math.max(reviewAmount, evidenceAmount)
+      ? (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
+      : undefined
+  if (review?.actualCost !== null && review?.actualCost !== undefined)
+    amounts.push(review.actualCost)
+  for (const evidence of campaign.costEvidence ?? []) {
+    if (costSubjectKey(evidence.subject) === costSubjectKey(subject)) amounts.push(evidence.amount)
+  }
+  return amounts.length === 0 ? null : Math.max(...amounts)
+}
+
+function knownActualSource(
+  campaign: ResearchCampaign,
+  subject: ResearchCostSubject,
+): 'provider-receipt' | 'human-attestation' | 'review-reported' | null {
+  const amount = knownActualCost(campaign, subject)
+  if (amount === null) return null
+  const evidence = (campaign.costEvidence ?? []).find(
+    (item) => costSubjectKey(item.subject) === costSubjectKey(subject) && item.amount === amount,
+  )
+  if (evidence) return evidence.source
+  return subject.kind === 'model_review' ? 'review-reported' : null
+}
+
+function saturatedCostSum(values: readonly number[]): number {
+  let total = 0
+  for (const value of values) {
+    if (!Number.isFinite(value) || value < 0 || total > Number.MAX_VALUE - value)
+      return Number.MAX_VALUE
+    total += value
+  }
+  return total
 }
 
 /** Settled spend plus the conservative outstanding cost for each un-settled subject. */
 function committedCost(campaign: ResearchCampaign): number {
   const settled = campaign.costSettlements ?? []
-  const settledSubjects = new Set(settled.map((settlement) => costSubjectKey(settlement.subject)))
-  const outstanding: ResearchCostSubject[] = [
+  const subjects: ResearchCostSubject[] = [
     ...(campaign.cliPreparations ?? [])
       .filter(
         (preparation) => preparation.status === 'claimed' || preparation.status === 'candidate',
@@ -269,20 +294,21 @@ function committedCost(campaign: ResearchCampaign): number {
       kind: 'model_review' as const,
       id: review.id,
     })),
+    ...settled.map((settlement) => settlement.subject),
   ]
-  return (
-    settled.reduce((sum, settlement) => sum + settlement.amount, 0) +
-    outstanding
-      .filter((subject) => !settledSubjects.has(costSubjectKey(subject)))
-      .reduce(
-        (sum, subject) =>
-          sum +
-          Math.max(
-            reservationForSubject(campaign, subject) ?? 0,
-            knownActualCost(campaign, subject),
-          ),
-        0,
+  const unique = [
+    ...new Map(subjects.map((subject) => [costSubjectKey(subject), subject])).values(),
+  ]
+  return saturatedCostSum(
+    unique.map((subject) => {
+      const settlement = settled.find(
+        (item) => costSubjectKey(item.subject) === costSubjectKey(subject),
       )
+      const known = knownActualCost(campaign, subject) ?? 0
+      return settlement
+        ? Math.max(settlement.amount, known)
+        : Math.max(reservationForSubject(campaign, subject) ?? 0, known)
+    }),
   )
 }
 
@@ -315,14 +341,15 @@ export function researchCostSummary(campaign: ResearchCampaign) {
       subject,
       reservation: reservationForSubject(campaign, subject) ?? 0,
       knownActualCost: knownActualCost(campaign, subject),
+      knownActualSource: knownActualSource(campaign, subject),
       settled: settlement !== undefined,
       settledAmount: settlement?.amount ?? null,
     }
   })
-  const settledCost = settlements.reduce((sum, settlement) => sum + settlement.amount, 0)
+  const settledCost = saturatedCostSum(settlements.map((settlement) => settlement.amount))
   const reservedCost = rows
     .filter((row) => !row.settled)
-    .reduce((sum, row) => sum + row.reservation, 0)
+    .reduce((sum, row) => saturatedCostSum([sum, row.reservation]), 0)
   const committed = committedCost(campaign)
   return {
     currency: campaign.budget.currency,
@@ -360,6 +387,26 @@ function costSubjectLabel(campaign: ResearchCampaign, subject: ResearchCostSubje
   const index = entries.findIndex((entry) => entry.id === subject.id)
   if (index < 0) return null
   return `第 ${index + 1} 次${subject.kind === 'cli_preparation' ? '代码准备' : '独立复核'}`
+}
+
+function subjectExecutionIsTerminal(
+  campaign: ResearchCampaign,
+  subject: ResearchCostSubject,
+): boolean {
+  if (subject.kind === 'cli_preparation') {
+    const preparation = (campaign.cliPreparations ?? []).find((item) => item.id === subject.id)
+    const attempt = campaign.attempts.find((item) => item.id === preparation?.attemptId)
+    return Boolean(
+      attempt && ['completed', 'failed', 'cancelled', 'interrupted'].includes(attempt.status),
+    )
+  }
+  const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
+  return Boolean(
+    review &&
+      (review.executionOutcome === 'completed' ||
+        review.executionOutcome === 'failed' ||
+        (!review.executionOutcome && (review.status === 'done' || review.status === 'failed'))),
+  )
 }
 
 export function costEvidenceApprovalScope(
@@ -705,6 +752,7 @@ function nextCampaign(
       const scope = approval?.scope
       if (
         !evidence ||
+        !subjectExecutionIsTerminal(campaign, evidence.subject) ||
         !approval ||
         approval.status !== 'active' ||
         approval.consumedBy ||
@@ -840,7 +888,7 @@ function nextCampaign(
           (id) => !campaign.artifactVersions.some((a) => a.id === id && a.validation),
         ) ||
         (campaign.modelReviews ?? []).some((r) => r.dispatchKey === spec.dispatchKey) ||
-        committedCost(campaign) + spec.reservedCost > campaign.budget.limit
+        saturatedCostSum([committedCost(campaign), spec.reservedCost]) > campaign.budget.limit
       )
         return invalid(
           'review_approval_required',
@@ -922,6 +970,11 @@ function nextCampaign(
             ? {
                 ...r,
                 status,
+                ...(command.status === 'done'
+                  ? { executionOutcome: 'completed' as const }
+                  : command.status === 'failed'
+                    ? { executionOutcome: 'failed' as const }
+                    : {}),
                 runId: command.runId,
                 conversationId: command.conversationId,
                 text: command.text,
@@ -1114,7 +1167,7 @@ function nextCampaign(
         approval.scope.preparationLimits?.memoryMb !== 256 ||
         approval.scope.preparationLimits?.adapterConfigHash !== preparation.adapterConfigHash ||
         approval.scope.preparationLimits?.acknowledgeUnknownCost !== true ||
-        committedCost(campaign) + preparation.maxCost > campaign.budget.limit ||
+        saturatedCostSum([committedCost(campaign), preparation.maxCost]) > campaign.budget.limit ||
         campaign.attempts.some((attempt) => attempt.dispatchKey === preparation.dispatchKey)
       )
         return invalid('cli_preparation_approval_required', '准备任务需要精确且未消费的人类审批')
