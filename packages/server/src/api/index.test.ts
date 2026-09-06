@@ -25,6 +25,7 @@ import {
   appendMessage,
   appendStep,
   createConversation,
+  createResearchCampaign,
   createRun,
   finishRun,
   getConversation,
@@ -32,12 +33,14 @@ import {
   getWorkspaceByPath,
   listConversations,
   listWorkspaces,
+  mutateResearchCampaign,
   openProviderRequest,
   Store,
   setConversationTitle,
   settleProviderRequest,
   upsertWorkspace,
 } from '@oph-autoresearch/store'
+import { canonicalJson, sha256 } from '../research/skill-lock.ts'
 import type { ModelsResponse } from './conversations.ts'
 import { type ApiDeps, handleApi } from './index.ts'
 
@@ -79,6 +82,90 @@ const call = (path: string, init?: RequestInit, d: ApiDeps = deps()) =>
   handleApi(new URL(`http://127.0.0.1${path}`), new Request(`http://127.0.0.1${path}`, init), d)
 
 describe('派发', () => {
+  test('documents route is reachable through the API dispatcher and records an immutable document', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oph-document-route-'))
+    const d = deps(root)
+    try {
+      const parent = createConversation(d.store, {
+        workspaceId: d.wsId,
+        provider: 'test',
+        model: 'test',
+      })
+      const campaign = createResearchCampaign(d.store, {
+        workspaceId: d.wsId,
+        parentConversationId: parent.id,
+        goal: 'fixed only',
+        idempotencyKey: 'document-route-campaign',
+        policy: {},
+        inputs: {},
+        budget: { currency: 'USD', limit: 0 },
+      })
+      if (!campaign.ok) throw new Error(campaign.message)
+      const source = {
+        id: 'citation-route',
+        url: 'https://example.test/citation-route',
+        title: 'Public metadata',
+        publishedAt: null,
+        sourceKind: 'public-metadata' as const,
+        retrievedAt: 1,
+        contentHash: sha256('citation'),
+        locator: {
+          schema: 'crossref-work-v1' as const,
+          pointer: 'citation-route',
+          endpoint: 'https://example.test',
+        },
+      }
+      const citation = mutateResearchCampaign(d.store, campaign.campaign.id, {
+        expectedVersion: campaign.campaign.version,
+        idempotencyKey: 'citation-route',
+        command: {
+          kind: 'recordLiteratureCitation',
+          citation: {
+            ...source,
+            projectionHash: sha256(canonicalJson(source)),
+            verification: 'retrieved-public-metadata',
+            fullText: false,
+          },
+        },
+      })
+      if (!citation.ok) throw new Error(citation.message)
+      const path = `/api/research/campaigns/${campaign.campaign.id}/documents?ws=${d.wsId}`
+      const created = await call(
+        path,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            expectedVersion: citation.campaign.version,
+            idempotencyKey: 'document-route-write',
+            kind: 'study',
+            document: {
+              question: 'Does the synthetic endpoint remain stable?',
+              PICO: { population: 'synthetic', intervention: 'fixed' },
+              evidenceCitations: ['citation-route'],
+              counterEvidence: ['Synthetic evidence cannot establish clinical utility.'],
+              protocol: { version: 1 },
+              endpoints: ['aggregate endpoint'],
+              splitPlan: { unit: 'patient' },
+              codeVersion: 'test',
+              previousVersion: null,
+            },
+          }),
+        },
+        d,
+      )
+      expect(created?.status).toBe(201)
+      const listed = await call(path, undefined, d)
+      expect(listed?.status).toBe(200)
+      expect(await listed?.json()).toMatchObject({
+        documents: [{ kind: 'study', verified: true, stale: false }],
+      })
+    } finally {
+      d.store.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test('没有项目时保持空状态，允许浏览文件夹，拒绝创建对话', async () => {
     const d = deps()
     d.store.close()

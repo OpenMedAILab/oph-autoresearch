@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createConversation,
@@ -13,8 +15,9 @@ import { createNativeResearchControlBridge } from './native-research-control.ts'
 test('native CLI receives only a scoped bridge and cannot approve or cross campaigns', async () => {
   const store = new Store({ path: ':memory:' })
   const abort = new AbortController()
+  const root = await mkdtemp(join(tmpdir(), 'oph-native-control-'))
   try {
-    const workspace = upsertWorkspace(store, '/tmp/native-control', 'native control')
+    const workspace = upsertWorkspace(store, root, 'native control')
     const parent = createConversation(store, {
       workspaceId: workspace.id,
       provider: 'cli:codex',
@@ -34,7 +37,7 @@ test('native CLI receives only a scoped bridge and cannot approve or cross campa
       {
         store,
         workspaceId: workspace.id,
-        workspaceRoot: '/tmp/native-control',
+        workspaceRoot: root,
         bus: new EventBus(),
       } as unknown as ApiRequestDeps,
       [campaign.campaign.id],
@@ -45,7 +48,7 @@ test('native CLI receives only a scoped bridge and cannot approve or cross campa
       const code = `
 const client = await import(process.env.OPH_RESEARCH_CONTROL_CLIENT_ENTRY)
 const call = (operation, campaign) => client.runResearchControl([operation, '--campaign', campaign])
-console.log(JSON.stringify([await call('status', process.env.CAMPAIGN), await call('approve', process.env.CAMPAIGN), await call('status', 'another-campaign')]))
+console.log(JSON.stringify([await call('status', process.env.CAMPAIGN), await call('documents/read', process.env.CAMPAIGN), await call('approve', process.env.CAMPAIGN), await call('status', 'another-campaign')]))
 `
       const child = Bun.spawn([process.execPath, '--eval', code], {
         stdout: 'pipe',
@@ -59,7 +62,7 @@ console.log(JSON.stringify([await call('status', process.env.CAMPAIGN), await ca
           CAMPAIGN: campaign.campaign.id,
         },
       })
-      expect(await new Response(child.stdout).text()).toContain('[0,2,2]')
+      expect(await new Response(child.stdout).text()).toContain('[0,0,2,2]')
       expect(await child.exited).toBe(0)
     } finally {
       bridge.close()
@@ -68,7 +71,7 @@ console.log(JSON.stringify([await call('status', process.env.CAMPAIGN), await ca
       {
         store,
         workspaceId: workspace.id,
-        workspaceRoot: '/tmp/native-control',
+        workspaceRoot: root,
         bus: new EventBus(),
       } as unknown as ApiRequestDeps,
       [campaign.campaign.id],
@@ -88,5 +91,6 @@ console.log(JSON.stringify([await call('status', process.env.CAMPAIGN), await ca
   } finally {
     abort.abort()
     store.close()
+    await rm(root, { recursive: true, force: true })
   }
 })

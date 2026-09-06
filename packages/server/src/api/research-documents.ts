@@ -64,7 +64,7 @@ export const handleResearchDocumentsApi: ApiHandler = async (url, req, d) => {
       kind: body.kind,
       document: body.document,
     })
-    publishResearchEvents(d.store, d.bus)
+    publishResearchEvents(d.store, d.bus, d.researchNotifications)
     return json(result, result.replayed ? 200 : 201)
   } catch (error) {
     const status = error instanceof ResearchDocumentError ? error.status : 409

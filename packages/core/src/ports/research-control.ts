@@ -8,6 +8,8 @@ export type ResearchControlOperation =
   | 'reconcile'
   | 'receipt'
   | 'request_review'
+  | 'documents/read'
+  | 'record_document/write'
 
 /** Model-facing capability: it deliberately contains no approval, signing, or release action. */
 export interface ResearchControlPort {

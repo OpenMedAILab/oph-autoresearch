@@ -5,7 +5,9 @@
  * campaign mutation.  The ledger is where optimistic versions, idempotency,
  * exact approval scopes and execution-device binding are enforced.
  */
+
 import { handleResearchApi } from '../api/research.ts'
+import { handleResearchDocumentsApi } from '../api/research-documents.ts'
 import type { ApiRequestDeps } from '../api/types.ts'
 
 export type ResearchControlOperation =
@@ -18,6 +20,8 @@ export type ResearchControlOperation =
   | 'reconcile'
   | 'receipt'
   | 'request_review'
+  | 'documents/read'
+  | 'record_document/write'
 
 export interface ResearchControlRequest {
   operation: ResearchControlOperation
@@ -36,6 +40,8 @@ export const RESEARCH_CONTROL_OPERATIONS = new Set<ResearchControlOperation>([
   'reconcile',
   'receipt',
   'request_review',
+  'documents/read',
+  'record_document/write',
 ])
 
 const paths: Record<Exclude<ResearchControlOperation, 'prepare'>, string> = {
@@ -47,6 +53,8 @@ const paths: Record<Exclude<ResearchControlOperation, 'prepare'>, string> = {
   reconcile: 'synthetic/reconcile',
   receipt: 'synthetic/receipt',
   request_review: 'review',
+  'documents/read': 'documents',
+  'record_document/write': 'documents',
 }
 
 /**
@@ -75,7 +83,9 @@ export class ResearchControlApiAdapter {
       }
     } else {
       const suffix = paths[request.operation]
-      method = ['status', 'events', 'receipt'].includes(request.operation) ? 'GET' : 'POST'
+      method = ['status', 'events', 'receipt', 'documents/read'].includes(request.operation)
+        ? 'GET'
+        : 'POST'
       path += `/${encodeURIComponent(campaignId!)}${suffix ? `/${suffix}` : ''}`
     }
     const url = new URL(`http://research-control.invalid${path}`)
@@ -95,7 +105,9 @@ export class ResearchControlApiAdapter {
         : {}),
     })
     return (
-      (await handleResearchApi(url, req, this.deps)) ?? jsonError('research_route_unavailable', 404)
+      (await handleResearchDocumentsApi(url, req, this.deps)) ??
+      (await handleResearchApi(url, req, this.deps)) ??
+      jsonError('research_route_unavailable', 404)
     )
   }
 }

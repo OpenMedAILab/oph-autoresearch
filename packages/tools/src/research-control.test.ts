@@ -31,10 +31,16 @@ test('research_control is registered only with a scoped port and cannot request 
   )
   expect(accepted.status).toBe('success')
   expect(calls).toHaveLength(1)
+  const documents = await researchControlTool.fn(
+    { operation: 'documents/read', campaign_id: 'campaign' },
+    ctx,
+  )
+  expect(documents.status).toBe('success')
+  expect(calls).toHaveLength(2)
   const rejected = await researchControlTool.fn(
     { operation: 'approve', campaign_id: 'campaign' },
     ctx,
   )
   expect(rejected.status).toBe('failure')
-  expect(calls).toHaveLength(1)
+  expect(calls).toHaveLength(2)
 })
