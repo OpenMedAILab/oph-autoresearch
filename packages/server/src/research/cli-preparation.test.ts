@@ -14,7 +14,7 @@ test('runs an admitted local CLI in empty staging and returns immutable review-o
       bin,
       `#!/bin/sh
 cat <<'EOF'
-{"type":"item.completed","item":{"type":"agent_message","text":"{\\"code\\":\\"export const candidate = 1\\",\\"patch\\":\\"diff --git a/a b/a\\"}"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"{\\"code\\":\\"export const candidate = 1\\",\\"patch\\":null}"}}
 EOF
 `,
     )
@@ -57,6 +57,7 @@ EOF
       usage: null,
       humanApprovalRequired: true,
       code: 'export const candidate = 1',
+      patch: null,
     })
   } finally {
     await rm(root, { recursive: true, force: true })

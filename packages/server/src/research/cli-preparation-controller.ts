@@ -170,10 +170,10 @@ export class CliPreparationController {
         expiresAt: Date.now() + 15 * 60_000,
         preparationLimits: {
           maxRuntimeMs: preparation.maxRuntimeMs,
-          cpu: 1,
-          memoryMb: 256,
+          cpu: 1 as const,
+          memoryMb: 256 as const,
           adapterConfigHash: preparation.adapterConfigHash,
-          acknowledgeUnknownCost: true,
+          acknowledgeUnknownCost: true as const,
         },
       },
     }
