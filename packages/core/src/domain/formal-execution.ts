@@ -51,7 +51,9 @@ export interface FormalCodeReviewResult {
   workspaceBindingHash: string
   ociImageDigest: string
   dataManifestHash: string
+  labelSetContentHash: string
   trustedEvaluatorId: string
+  trustedEvaluatorHash: string
   decision: FormalReviewDecision
   findings: Array<{ severity: 'info' | 'warning' | 'error'; code: string; message: string }>
   reviewedAt: number
@@ -145,8 +147,8 @@ export function validFormalCodeReviewResult(value: unknown): value is FormalCode
   const review = value as Record<string, unknown>
   const hasRunnerReceipt = Object.hasOwn(review, 'runnerReceiptHash')
   const expected = hasRunnerReceipt
-    ? ['candidateArtifactId', 'candidateReceiptHash', 'codeHash', 'dataManifestHash', 'decision', 'findings', 'ociImageDigest', 'reviewId', 'reviewKind', 'reviewedAt', 'reviewerId', 'runnerReceiptHash', 'schema', 'taskRevisionId', 'trustedEvaluatorId', 'workspaceBindingHash']
-    : ['candidateArtifactId', 'candidateReceiptHash', 'codeHash', 'dataManifestHash', 'decision', 'findings', 'ociImageDigest', 'reviewId', 'reviewKind', 'reviewedAt', 'reviewerId', 'schema', 'taskRevisionId', 'trustedEvaluatorId', 'workspaceBindingHash']
+    ? ['candidateArtifactId', 'candidateReceiptHash', 'codeHash', 'dataManifestHash', 'decision', 'findings', 'labelSetContentHash', 'ociImageDigest', 'reviewId', 'reviewKind', 'reviewedAt', 'reviewerId', 'runnerReceiptHash', 'schema', 'taskRevisionId', 'trustedEvaluatorId', 'trustedEvaluatorHash', 'workspaceBindingHash']
+    : ['candidateArtifactId', 'candidateReceiptHash', 'codeHash', 'dataManifestHash', 'decision', 'findings', 'labelSetContentHash', 'ociImageDigest', 'reviewId', 'reviewKind', 'reviewedAt', 'reviewerId', 'schema', 'taskRevisionId', 'trustedEvaluatorId', 'trustedEvaluatorHash', 'workspaceBindingHash']
   if (
     Object.keys(review).sort().join(',') !== expected.join(',') ||
     review.schema !== 'research-formal-code-review-v1' ||
@@ -161,7 +163,7 @@ export function validFormalCodeReviewResult(value: unknown): value is FormalCode
     review.reviewId, review.candidateArtifactId, review.taskRevisionId, review.trustedEvaluatorId, review.reviewerId,
   ]
   const hashes = [
-    review.codeHash, review.candidateReceiptHash, review.workspaceBindingHash, review.ociImageDigest, review.dataManifestHash,
+    review.codeHash, review.candidateReceiptHash, review.workspaceBindingHash, review.ociImageDigest, review.dataManifestHash, review.labelSetContentHash, review.trustedEvaluatorHash,
   ]
   return ids.every((item) => typeof item === 'string' && ID.test(item)) &&
     hashes.every((item) => typeof item === 'string' && SHA256.test(item)) &&
