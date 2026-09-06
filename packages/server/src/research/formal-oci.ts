@@ -10,6 +10,7 @@ import {
   readSync,
   realpathSync,
 } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import type { FormalExecutionPlan } from '@oph-autoresearch/core'
 import { cliPreparationExecutableHash } from './cli-preparation-job.ts'
@@ -25,6 +26,8 @@ export interface FormalOciAdministratorConfig {
   podmanExecutable: string
   podmanBinaryHash: string
   candidates: readonly { candidateArtifactId: string; mainPy: string; candidateReceipt: string }[]
+  /** Administrator-owned local root for exact candidate bytes staged by the authenticated authority. */
+  candidateStagingRoot?: string
   /** The manifest bytes are frozen by dataManifestHash; root is only its readonly mount. */
   datasets: readonly { dataManifestHash: string; manifest: string; root: string }[]
   labels: readonly { labelSetContentHash: string; path: string }[]
@@ -259,7 +262,7 @@ function rootlessEnvironment() {
 }
 
 export class FormalOciAdapter {
-  private readonly config: FormalOciAdministratorConfig
+  private config: FormalOciAdministratorConfig
   private readonly command: PodmanCommand
   constructor(
     config: FormalOciAdministratorConfig,
@@ -286,6 +289,7 @@ export class FormalOciAdapter {
       safeFile(item.mainPy)
       safeFile(item.candidateReceipt)
     }
+    if (config.candidateStagingRoot !== undefined) safeDirectory(config.candidateStagingRoot)
     for (const item of config.datasets) {
       if (!SHA256.test(item.dataManifestHash)) throw new Error('invalid formal dataset registry')
       verifyDatasetSnapshot(item)
@@ -301,6 +305,54 @@ export class FormalOciAdapter {
     this.config = { ...config, podmanExecutable: executable }
     this.command = command
     probeRootlessPodman(command, platform)
+  }
+  snapshotConfig() {
+    return this.config
+  }
+  async registerCandidate(input: {
+    candidateArtifactId: string
+    code: Uint8Array
+    codeHash: string
+    candidateReceipt: Uint8Array
+    candidateReceiptHash: string
+  }) {
+    if (
+      !ID.test(input.candidateArtifactId) ||
+      !SHA256.test(input.codeHash) ||
+      !SHA256.test(input.candidateReceiptHash) ||
+      input.code.byteLength > 1_000_000 ||
+      input.candidateReceipt.byteLength > 1_000_000 ||
+      bytesHash(input.code) !== input.codeHash ||
+      bytesHash(input.candidateReceipt) !== input.candidateReceiptHash ||
+      !this.config.candidateStagingRoot
+    )
+      throw new Error('formal candidate staging is not admitted')
+    const root = safeDirectory(this.config.candidateStagingRoot)
+    const directory = mountedPath(root, input.candidateArtifactId)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const stagedRoot = safeDirectory(directory)
+    const mainPy = mountedPath(stagedRoot, 'main.py')
+    const candidateReceipt = mountedPath(stagedRoot, 'candidate-receipt.json')
+    for (const [path, bytes, hash] of [
+      [mainPy, input.code, input.codeHash],
+      [candidateReceipt, input.candidateReceipt, input.candidateReceiptHash],
+    ] as const) {
+      try {
+        await writeFile(path, bytes, { flag: 'wx', mode: 0o600 })
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'EEXIST') throw error
+        if (bytesHash(readBoundedRegular(path, 1_000_000)) !== hash)
+          throw new Error('formal candidate staging replay does not match')
+      }
+      if (fileHash(path, 1_000_000) !== hash) throw new Error('formal candidate staging changed')
+    }
+    const candidate = { candidateArtifactId: input.candidateArtifactId, mainPy, candidateReceipt }
+    const prior = this.config.candidates.find(
+      (item) => item.candidateArtifactId === input.candidateArtifactId,
+    )
+    if (prior && (prior.mainPy !== mainPy || prior.candidateReceipt !== candidateReceipt))
+      throw new Error('formal candidate registry conflict')
+    if (!prior) this.config = { ...this.config, candidates: [...this.config.candidates, candidate] }
   }
   private bindings(plan: FormalExecutionPlan) {
     const candidate = this.config.candidates.find(

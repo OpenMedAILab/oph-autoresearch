@@ -401,8 +401,8 @@ export class JobDaemon implements JobDaemonPort {
   private readonly trackingConfigJson: string | undefined
   private readonly cliPreparationConfigJson: string | undefined
   private readonly cliPreparationConfig: CliPreparationAdministratorConfig | undefined
-  private readonly formalOciConfigJson: string | undefined
-  private readonly formalOci: FormalOciAdapter | undefined
+  private formalOciConfigJson: string | undefined
+  private formalOci: FormalOciAdapter | undefined
   private readonly db: Database
   private server: ReturnType<typeof Bun.serve> | null = null
   private endpointToken: string | null = null
@@ -508,6 +508,18 @@ export class JobDaemon implements JobDaemonPort {
       }
     }, 250)
   }
+  async registerFormalCandidate(input: {
+    candidateArtifactId: string
+    code: Uint8Array
+    codeHash: string
+    candidateReceipt: Uint8Array
+    candidateReceiptHash: string
+  }) {
+    if (!this.formalOci) throw new Error('formal OCI is not admitted')
+    await this.formalOci.registerCandidate(input)
+    this.formalOciConfigJson = JSON.stringify(this.formalOci.snapshotConfig())
+  }
+
   submit(input: unknown, expectedEpoch?: string): DurableJob {
     const spec = parse(input)
     if ((spec.version === 3 || isFormalOciJob(spec)) && expectedEpoch === undefined)
