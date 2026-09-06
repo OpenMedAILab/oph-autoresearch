@@ -315,10 +315,7 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       code: built.code,
       plan: built.plan,
     })
-    if (
-      reviewed.reviewerId !== built.plan.trustedEvaluatorId ||
-      !SHA256.test(reviewed.runnerReceiptHash)
-    )
+    if (!SHA256.test(reviewed.runnerReceiptHash))
       return json({ error: 'untrusted_isolated_reviewer' }, 409)
     const formal: FormalCodeReviewResult = {
       schema: 'research-formal-code-review-v1',

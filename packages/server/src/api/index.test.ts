@@ -87,6 +87,32 @@ const call = (path: string, init?: RequestInit, d: ApiDeps = deps()) =>
   handleApi(new URL(`http://127.0.0.1${path}`), new Request(`http://127.0.0.1${path}`, init), d)
 
 describe('派发', () => {
+  test('formal execution submit is explicitly unavailable without an admitted backend', async () => {
+    const d = deps()
+    const parent = createConversation(d.store, {
+      workspaceId: d.wsId,
+      provider: 'test',
+      model: 'test',
+    })
+    const created = createResearchCampaign(d.store, {
+      workspaceId: d.wsId,
+      parentConversationId: parent.id,
+      goal: 'formal submit remains unavailable',
+      idempotencyKey: 'formal-submit-unavailable',
+      policy: {},
+      inputs: {},
+      budget: { currency: 'USD', limit: 10 },
+    })
+    if (!created.ok) throw new Error(created.message)
+    const response = await call(
+      `/api/research/campaigns/${created.campaign.id}/formal-execution/submit?ws=${d.wsId}`,
+      { method: 'POST', body: '{}' },
+      d,
+    )
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toBe('formal_execution_backend_unavailable')
+  })
+
   test('documents route is reachable through the API dispatcher and records an immutable document', async () => {
     const root = await mkdtemp(join(tmpdir(), 'oph-document-route-'))
     const d = deps(root)

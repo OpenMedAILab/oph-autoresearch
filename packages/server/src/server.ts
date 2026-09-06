@@ -6,6 +6,7 @@ import {
 } from './research/cli-preparation-controller.ts'
 import { captureResearchDeployment } from './research/deployment-governance.ts'
 import { createResearchDevices, quoteResearchDevice } from './research/execution-devices.ts'
+import { createConfiguredIsolatedFormalCodeReviewer } from './research/formal-review-runner.ts'
 import { createHumanAuthVerifier, type HumanAuthVerifierConfig } from './research/human-auth.ts'
 import { JobDaemon } from './research/job-daemon.ts'
 import { createLiteratureCollector } from './research/literature-evidence.ts'
@@ -90,6 +91,11 @@ export interface ServeOptions {
   researchControllerOnly?: boolean
   researchHumanAuth?: HumanAuthVerifierConfig
   researchRequireApproval?: boolean
+  /** Administrator-owned evaluator identities; clients can only bind one of these implementation digests. */
+  researchFormalEvaluators?: readonly {
+    id: 'binary-classification-v1'
+    implementationHash: string
+  }[]
   /** Trusted, immutable launch setting; never sourced from workspace or HTTP config. */
   researchBoundary?: ResearchExecutionBoundary
   store: Store
@@ -154,6 +160,9 @@ export function serve(opts: ServeOptions) {
   const researchControllerOnly = opts.researchControllerOnly === true
   const researchBoundary = opts.researchBoundary ?? 'standard'
   const restricted = researchBoundary !== 'standard'
+  const researchFormalCodeReviewer = restricted
+    ? undefined
+    : createConfiguredIsolatedFormalCodeReviewer(opts.config)
   const researchDeployment =
     opts.researchDeployment === undefined
       ? undefined
@@ -600,6 +609,10 @@ export function serve(opts: ServeOptions) {
             },
             watchGit: () => gitWatch.retarget(),
             ...(researchHumanAuth ? { researchHumanAuth } : {}),
+            ...(researchFormalCodeReviewer ? { researchFormalCodeReviewer } : {}),
+            ...(opts.researchFormalEvaluators
+              ? { researchFormalEvaluators: opts.researchFormalEvaluators }
+              : {}),
             ...(opts.researchHumanAuth?.approvalUrl
               ? { researchApprovalUrl: opts.researchHumanAuth.approvalUrl }
               : {}),
