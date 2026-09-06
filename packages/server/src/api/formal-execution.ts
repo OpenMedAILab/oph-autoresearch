@@ -79,8 +79,8 @@ function planInput(body: Record<string, unknown>): PlanInput | null {
     'pidsLimit',
     'planId',
     'preparationId',
-    'trustedEvaluatorId',
     'trustedEvaluatorHash',
+    'trustedEvaluatorId',
   ]
   if (Object.keys(body).sort().join(',') !== keys.join(',')) return null
   const strings = [
