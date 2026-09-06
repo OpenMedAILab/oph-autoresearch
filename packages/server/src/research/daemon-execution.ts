@@ -89,14 +89,26 @@ export async function executeDaemonAttempt(input: {
   if (!bound.ok) throw new Error(bound.message)
   input.onChange?.(bound.campaign)
   const daemon = input.backend.daemon
-  const cancel = () => {
-    void Promise.resolve(daemon.cancel(spec.dispatchKey)).catch(() => {})
+  // An AbortSignal alone may mean a tab/process observer disappeared. Only a durable
+  // cancellation command is allowed to reach the execution authority.
+  const cancellationIsPersisted = () => {
+    const latest = getResearchCampaign(input.store, input.campaignId)
+    const persisted = latest?.attempts.find((candidate) => candidate.id === input.attempt.id)
+    return persisted?.cancelRequestedAt !== null && persisted?.cancelRequestedAt !== undefined
   }
-  input.signal.addEventListener('abort', cancel)
+  const cancelIfPersisted = () => {
+    if (cancellationIsPersisted())
+      void Promise.resolve(daemon.cancel(spec.dispatchKey)).catch(() => {})
+  }
+  input.signal.addEventListener('abort', cancelIfPersisted)
   try {
     await daemon.submit(spec)
-    if (input.signal.aborted) cancel()
-    while (Date.now() < spec.lease.expiresAt) {
+    // Losing a local observer is not a cancellation command. The remote authority owns the job.
+    if (input.signal.aborted && !cancellationIsPersisted())
+      return { status: 'unknown', reason: 'Local observer stopped before a terminal authority observation' }
+    while (true) {
+      if (input.signal.aborted && !cancellationIsPersisted())
+        return { status: 'unknown', reason: 'Local observer stopped before a terminal authority observation' }
       const job = await daemon.query(spec.dispatchKey)
       if (!job)
         return { status: 'unknown', reason: 'Execution authority has no confirmed job observation' }
@@ -122,24 +134,17 @@ export async function executeDaemonAttempt(input: {
           spec.dispatchKey,
           input.backend.workerArgv ? { workerArgv: input.backend.workerArgv } : {},
         )
+        const deadline = job.executionDeadlineAt ?? spec.lease.expiresAt
         let timer: ReturnType<typeof setTimeout> | undefined
         const outcome = await Promise.race([
           worker.exited.then(() => 'exited' as const),
-          new Promise<'expired'>((resolve) => {
-            timer = setTimeout(
-              () => resolve('expired'),
-              Math.max(1, spec.lease.expiresAt - Date.now()),
-            )
+          new Promise<'deadline'>(resolve => {
+            timer = setTimeout(() => resolve('deadline'), Math.max(1, deadline - Date.now()))
           }),
         ])
         if (timer) clearTimeout(timer)
-        if (outcome === 'expired') {
-          await daemon.cancel(spec.dispatchKey)
-          return {
-            status: 'unknown',
-            reason: 'Worker exceeded lease; cancellation requested, terminal confirmation pending',
-          }
-        }
+        if (outcome === 'deadline')
+          return { status: 'unknown', reason: 'Execution deadline elapsed; terminal authority observation pending' }
         await daemon.reconcileInterrupted()
       } else if (job.status === 'running') {
         // This attempt owns the newly submitted job; only observation follows a lost worker acknowledgement.
@@ -147,14 +152,8 @@ export async function executeDaemonAttempt(input: {
       }
       await Bun.sleep(25)
     }
-    await daemon.cancel(spec.dispatchKey)
-    return {
-      status: 'unknown',
-      reason:
-        'Lease elapsed before a confirmed terminal observation; explicit reconciliation required',
-    }
   } finally {
-    input.signal.removeEventListener('abort', cancel)
+    input.signal.removeEventListener('abort', cancelIfPersisted)
   }
 }
 

@@ -10,6 +10,8 @@ interface RemoteServiceConfig {
   outputRoot: string
   workerArgv?: readonly string[]
   tracking?: RunnerTrackingConfig
+  executionRuntimeMs?: number
+  renewalMs?: number
 }
 function projection(job: DurableJob | null) {
   return job ? { ...job, outputPath: null, error: job.error ? 'worker-failure' : null } : null
@@ -30,6 +32,8 @@ export function createRemoteDaemonService(config: RemoteServiceConfig) {
     dbPath: config.dbPath,
     outputRoot: config.outputRoot,
     ...(config.tracking ? { tracking: config.tracking } : {}),
+    ...(config.executionRuntimeMs ? { executionRuntimeMs: config.executionRuntimeMs } : {}),
+    ...(config.renewalMs ? { renewalMs: config.renewalMs } : {}),
   })
   const workerArgv = config.workerArgv ? [...config.workerArgv] : undefined
   let pumping = false
@@ -38,6 +42,7 @@ export function createRemoteDaemonService(config: RemoteServiceConfig) {
     pumping = true
     try {
       daemon.reconcileInterrupted()
+      daemon.enforceRuntimeLimits()
       for (const job of daemon.pendingJobs()) {
         if (job.status !== 'queued' || !daemon.hasAvailableSlot()) continue
         const worker = await daemon.launchWorker(
@@ -118,9 +123,7 @@ export function createRemoteDaemonService(config: RemoteServiceConfig) {
     },
   })
   const timer = setInterval(() => {
-    for (const job of daemon.pendingJobs()) {
-      if (job.spec.lease.expiresAt <= Date.now()) daemon.cancel(job.spec.dispatchKey)
-    }
+    daemon.enforceRuntimeLimits()
     void pump().catch(() => {})
   }, 100)
   void pump().catch(() => {})
@@ -145,8 +148,8 @@ export async function runRemoteDaemonService(
     !raw ||
     typeof raw !== 'object' ||
     Array.isArray(raw) ||
-    Object.keys(raw).some(
-      (key) => !['authorityId', 'token', 'port', 'dbPath', 'outputRoot', 'tracking'].includes(key),
+      Object.keys(raw).some(
+      (key) => !['authorityId', 'token', 'port', 'dbPath', 'outputRoot', 'tracking', 'executionRuntimeMs', 'renewalMs'].includes(key),
     )
   )
     throw new Error('Invalid remote daemon administrator configuration')

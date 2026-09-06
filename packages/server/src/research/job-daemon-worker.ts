@@ -18,6 +18,7 @@ type WorkerJob = {
     trackingPolicyHash?: string
   }
   status: string
+  runtimeLease?: { ownerId: string; token: string; fence: number; expiresAt: number }
 }
 
 function hashBytes(value: Uint8Array) {
@@ -63,6 +64,28 @@ export async function runResearchJobWorker(args: readonly string[]) {
     body: JSON.stringify({ lease: job.spec.lease, workerPid: process.pid }),
   })
   if (!claimed.ok) return 4
+  const claimedJob = (await claimed.json()) as WorkerJob
+  let runtimeLease = claimedJob.runtimeLease ?? job.spec.lease
+  let stopped = false
+  // Heartbeats only change authority runtime state. The JobSpec and its hash stay immutable.
+  const heartbeat = setInterval(() => {
+    if (stopped) return
+    void request(`/renew/${encodeURIComponent(dispatchKey)}`, {
+      method: 'POST',
+      body: JSON.stringify({ lease: runtimeLease }),
+    })
+      .then(async (response) => {
+        if (!response.ok) return
+        const renewed = (await response.json()) as WorkerJob
+        if (renewed.runtimeLease) runtimeLease = renewed.runtimeLease
+      })
+      .catch(() => {})
+  }, 1_000)
+  const done = () => {
+    stopped = true
+    clearInterval(heartbeat)
+  }
+  try {
   if (process.env.JOB_DAEMON_WORKER_WAIT_AFTER_CLAIM === '1') await Bun.sleep(60_000)
   const latest = (await request(`/jobs/${encodeURIComponent(dispatchKey)}`).then((response) =>
     response.ok ? response.json() : null,
@@ -71,7 +94,7 @@ export async function runResearchJobWorker(args: readonly string[]) {
     if (latest?.status === 'cancel_requested')
       await request(`/cancelled/${encodeURIComponent(dispatchKey)}`, {
         method: 'POST',
-        body: JSON.stringify({ lease: job.spec.lease }),
+        body: JSON.stringify({ lease: runtimeLease }),
       })
     return 0
   }
@@ -101,11 +124,14 @@ export async function runResearchJobWorker(args: readonly string[]) {
   const finish = await request(`/finish/${encodeURIComponent(dispatchKey)}`, {
     method: 'POST',
     body: JSON.stringify({
-      lease: job.spec.lease,
+      lease: runtimeLease,
       result: { contentHash: hashBytes(bytes), outputPath: path },
     }),
   })
   return finish.ok ? 0 : 6
+  } finally {
+    done()
+  }
 }
 
 if (import.meta.main) process.exit(await runResearchJobWorker(Bun.argv.slice(2)))

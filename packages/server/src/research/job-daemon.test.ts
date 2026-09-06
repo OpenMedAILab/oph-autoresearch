@@ -190,10 +190,17 @@ describe('durable localhost job daemon', () => {
     const { root, daemon } = await fresh()
     daemon.submit(spec('junction'))
     const outside = join(root, 'outside')
-    await Bun.write(outside, '')
-    await rm(outside)
-    await Bun.spawn(['cmd', '/c', 'mkdir', outside]).exited
-    await symlink(outside, join(root, 'out', 'junction'), 'junction')
+    // POSIX has no junctions; a directory symlink exercises the same lstat/realpath boundary.
+    // Windows uses a junction because its directory symlink privilege is often unavailable.
+    if (process.platform === 'win32') {
+      await Bun.spawn(['cmd', '/c', 'mkdir', outside]).exited
+      await symlink(outside, join(root, 'out', 'junction'), 'junction')
+    } else {
+      await Bun.write(outside, '')
+      await rm(outside)
+      await Bun.spawn(['mkdir', outside]).exited
+      await symlink(outside, join(root, 'out', 'junction'), 'dir')
+    }
     const unsafe = await daemon.launchWorker('junction')
     expect(await unsafe.exited).not.toBe(0)
     expect(daemon.query('junction')).toMatchObject({ status: 'running' })
@@ -215,5 +222,55 @@ describe('durable localhost job daemon', () => {
     ])
     expect(() => restarted.submit(spec('killed-worker'))).toThrow('dispatch_key_conflict')
     restarted.close()
+  })
+
+  test('renews mutable runtime lease without changing the durable v1 spec hash, then enforces its separate deadline', async () => {
+    const { daemon } = await fresh()
+    const submitted = daemon.submit(spec('renewable', 1, 'synthetic-summary-v1', Date.now() + 30))
+    const { endpoint, token } = daemon.startHttp()
+    const claimed = await fetch(`${endpoint}/claim/renewable`, {
+      method: 'POST', headers: authenticated(token),
+      body: JSON.stringify({ lease: submitted.spec.lease, workerPid: 999_999 }),
+    })
+    expect(claimed.ok).toBe(true)
+    const runtime = (await claimed.json() as JobSpec & { runtimeLease?: JobSpec['lease'] }).runtimeLease
+    expect(runtime).toBeDefined()
+    const renewed = await fetch(`${endpoint}/renew/renewable`, {
+      method: 'POST', headers: authenticated(token), body: JSON.stringify({ lease: runtime }),
+    })
+    expect(renewed.ok).toBe(true)
+    // Simulate a dropped renewal response: the worker retries its prior generation.
+    const replay = await fetch(`${endpoint}/renew/renewable`, {
+      method: 'POST', headers: authenticated(token), body: JSON.stringify({ lease: runtime }),
+    })
+    expect(replay.ok).toBe(true)
+    const observed = daemon.query('renewable')!
+    expect(observed.specHash).toBe(submitted.specHash)
+    expect(observed.spec).toEqual(submitted.spec)
+    expect(observed.runtimeLease?.fence).toBe(2)
+    daemon.close()
+  })
+
+  test('global runtime configuration can constrain v1 but cannot enlarge its frozen approved expiry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oph-job-daemon-'))
+    roots.push(root)
+    const daemon = new JobDaemon({
+      dbPath: join(root, 'jobs.sqlite'), outputRoot: join(root, 'out'),
+      executionRuntimeMs: 90, renewalMs: 40,
+    })
+    const submitted = daemon.submit(spec('deadline', 1, 'synthetic-summary-v1', Date.now() + 20))
+    const { endpoint, token } = daemon.startHttp()
+    const claim = await fetch(`${endpoint}/claim/deadline`, {
+      method: 'POST', headers: authenticated(token),
+      body: JSON.stringify({ lease: submitted.spec.lease, workerPid: 999_998 }),
+    })
+    const initial = (await claim.json()) as { runtimeLease: JobSpec['lease']; executionDeadlineAt: number }
+    const deadline = initial.executionDeadlineAt
+    expect(deadline).toBeLessThanOrEqual(submitted.spec.lease.expiresAt)
+    await Bun.sleep(Math.max(1, deadline - Date.now() + 5))
+    daemon.enforceRuntimeLimits()
+    daemon.reconcileInterrupted()
+    expect(daemon.query('deadline')?.status).toBe('cancelled')
+    daemon.close()
   })
 })

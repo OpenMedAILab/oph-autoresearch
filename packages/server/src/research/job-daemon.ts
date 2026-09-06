@@ -34,6 +34,10 @@ export interface JobSpec {
 export interface DurableJob {
   spec: JobSpec
   specHash: string
+  /** Mutable authority state. It is deliberately outside the signed JobSpec. */
+  runtimeLease?: JobSpec['lease']
+  executionDeadlineAt?: number
+  workerHeartbeatAt?: number
   status: JobStatus
   outputPath: string | null
   contentHash: string | null
@@ -131,6 +135,15 @@ function row(value: Record<string, unknown> | null): DurableJob | null {
     ? {
         spec: JSON.parse(String(value.spec)) as JobSpec,
         specHash: String(value.spec_hash),
+        ...(value.runtime_lease
+          ? { runtimeLease: JSON.parse(String(value.runtime_lease)) as JobSpec['lease'] }
+          : {}),
+        ...(typeof value.execution_deadline_at === 'number'
+          ? { executionDeadlineAt: value.execution_deadline_at }
+          : {}),
+        ...(typeof value.worker_heartbeat_at === 'number'
+          ? { workerHeartbeatAt: value.worker_heartbeat_at }
+          : {}),
         status: value.status as JobStatus,
         outputPath: value.output_path as string | null,
         contentHash: value.content_hash as string | null,
@@ -157,6 +170,12 @@ function leaseMatches(expected: JobSpec['lease'], value: unknown) {
     expected.expiresAt === value.expiresAt
   )
 }
+function leaseIdentityMatches(expected: JobSpec['lease'], value: unknown) {
+  return isRecord(value) &&
+    typeof value.ownerId === 'string' && typeof value.token === 'string' &&
+    value.ownerId === expected.ownerId && value.token === expected.token &&
+    typeof value.fence === 'number'
+}
 function isSafeDirectory(path: string, boundary: string) {
   const stat = lstatSync(path)
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('unsafe output directory')
@@ -176,8 +195,17 @@ export class JobDaemon implements JobDaemonPort {
   private closed = false
   readonly outputRoot: string
   private readonly outputRootRealpath: string
+  private readonly executionRuntimeMs: number | undefined
+  private readonly renewalMs: number
 
-  constructor(opts: { dbPath: string; outputRoot: string; tracking?: RunnerTrackingConfig }) {
+  constructor(opts: {
+    dbPath: string
+    outputRoot: string
+    tracking?: RunnerTrackingConfig
+    /** Enables a deadline independent of a short, renewable v1 observation lease. */
+    executionRuntimeMs?: number
+    renewalMs?: number
+  }) {
     if (opts.tracking) {
       const captured = captureRunnerTracking(opts.tracking)
       this.trackingPolicyHash = captured.policyHash
@@ -188,6 +216,12 @@ export class JobDaemon implements JobDaemonPort {
     const rootStat = lstatSync(this.outputRoot)
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('unsafe output root')
     this.outputRootRealpath = realpathSync(this.outputRoot)
+    if (opts.executionRuntimeMs !== undefined && (!Number.isSafeInteger(opts.executionRuntimeMs) || opts.executionRuntimeMs < 1))
+      throw new Error('invalid execution runtime')
+    if (opts.renewalMs !== undefined && (!Number.isSafeInteger(opts.renewalMs) || opts.renewalMs < 1))
+      throw new Error('invalid renewal interval')
+    this.executionRuntimeMs = opts.executionRuntimeMs
+    this.renewalMs = opts.renewalMs ?? 15_000
     this.db = new Database(opts.dbPath)
     this.db.exec('PRAGMA busy_timeout = 5000')
     this.db.exec(
@@ -196,6 +230,14 @@ export class JobDaemon implements JobDaemonPort {
     const columns = this.db.query('PRAGMA table_info(local_jobs)').all() as { name: string }[]
     if (!columns.some((c) => c.name === 'worker_pid'))
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_pid INTEGER')
+    if (!columns.some((c) => c.name === 'runtime_lease'))
+      this.db.exec('ALTER TABLE local_jobs ADD COLUMN runtime_lease TEXT')
+    if (!columns.some((c) => c.name === 'execution_deadline_at'))
+      this.db.exec('ALTER TABLE local_jobs ADD COLUMN execution_deadline_at INTEGER')
+    if (!columns.some((c) => c.name === 'worker_heartbeat_at'))
+      this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_heartbeat_at INTEGER')
+    if (!columns.some((c) => c.name === 'worker_pgid'))
+      this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_pgid INTEGER')
   }
   submit(input: unknown): DurableJob {
     const spec = parse(input)
@@ -207,9 +249,17 @@ export class JobDaemon implements JobDaemonPort {
     const specHash = hash(spec)
     const inserted = this.db
       .query(
-        'INSERT INTO local_jobs (dispatch_key,spec,spec_hash,status,output_path,content_hash,error) VALUES (?,?,?,?,?,?,?) ON CONFLICT(dispatch_key) DO NOTHING',
+        'INSERT INTO local_jobs (dispatch_key,spec,spec_hash,status,output_path,content_hash,error,runtime_lease,execution_deadline_at,worker_heartbeat_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dispatch_key) DO NOTHING',
       )
-      .run(spec.dispatchKey, canonical(spec), specHash, 'queued', null, null, null)
+      .run(
+        spec.dispatchKey, canonical(spec), specHash, 'queued', null, null, null,
+        canonical(spec.lease),
+        // v1 has no approved runtime budget: configuration may tighten, never enlarge its frozen expiry.
+        this.executionRuntimeMs === undefined
+          ? spec.lease.expiresAt
+          : Math.min(spec.lease.expiresAt, Date.now() + this.executionRuntimeMs),
+        null,
+      )
     const job = this.query(spec.dispatchKey)
     if (!job) throw new Error('job insert failed')
     if (inserted.changes === 0 && job.specHash !== specHash)
@@ -237,17 +287,20 @@ export class JobDaemon implements JobDaemonPort {
           "UPDATE local_jobs SET status='cancel_requested' WHERE dispatch_key=? AND status='running'",
         )
         .run(dispatchKey)
-      this.workers.get(dispatchKey)?.kill()
+      this.stopWorkerTree(dispatchKey)
     }
     return this.query(dispatchKey)
   }
   reconcileInterrupted(): DurableJob[] {
     const candidates = this.db
       .query(
-        "SELECT dispatch_key,status,worker_pid FROM local_jobs WHERE status IN ('running','cancel_requested')",
+        "SELECT dispatch_key,status,worker_pid,worker_pgid,execution_deadline_at,runtime_lease FROM local_jobs WHERE status IN ('running','cancel_requested')",
       )
-      .all() as { dispatch_key: string; status: string; worker_pid: number | null }[]
+      .all() as { dispatch_key: string; status: string; worker_pid: number | null; worker_pgid: number | null; execution_deadline_at: number | null; runtime_lease: string | null }[]
     for (const candidate of candidates) {
+      if (candidate.execution_deadline_at !== null && Date.now() >= candidate.execution_deadline_at) {
+        this.cancel(candidate.dispatch_key)
+      }
       if (!candidate.worker_pid) continue // A missing process identity cannot prove termination.
       try {
         process.kill(candidate.worker_pid, 0)
@@ -255,6 +308,7 @@ export class JobDaemon implements JobDaemonPort {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue
       }
+      if (candidate.worker_pgid && this.processGroupAlive(candidate.worker_pgid)) continue
       this.db
         .query('UPDATE local_jobs SET status=?, error=? WHERE dispatch_key=? AND status=?')
         .run(
@@ -277,24 +331,42 @@ export class JobDaemon implements JobDaemonPort {
       typeof workerPid !== 'number' ||
       !Number.isSafeInteger(workerPid) ||
       workerPid < 1 ||
-      Date.now() >= job.spec.lease.expiresAt ||
-      !leaseMatches(job.spec.lease, lease)
+      Date.now() >= (job.executionDeadlineAt ?? job.spec.lease.expiresAt) ||
+      !leaseMatches(job.runtimeLease ?? job.spec.lease, lease)
     )
       return null
     const updated = this.db
       .query(
-        "UPDATE local_jobs SET status='running', worker_pid=? WHERE dispatch_key=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested'))",
+        "UPDATE local_jobs SET status='running', worker_pid=?, worker_pgid=?, worker_heartbeat_at=? WHERE dispatch_key=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested'))",
       )
-      .run(workerPid, key)
+      .run(workerPid, this.workers.get(key)?.pid === workerPid && process.platform !== 'win32' ? workerPid : null, Date.now(), key)
     return updated.changes === 1 ? this.query(key) : null
+  }
+  private renew(key: string, lease: unknown): DurableJob | null {
+    const job = this.query(key)
+    const deadline = job?.executionDeadlineAt ?? job?.spec.lease.expiresAt
+    const current = job?.runtimeLease ?? job?.spec.lease
+    if (!job || !current || job.status !== 'running' || !deadline || Date.now() >= deadline || Date.now() >= current.expiresAt)
+      return null
+    // A response can be lost after the authority commits renewal. Replaying the immediately
+    // preceding generation returns the current lease instead of stranding the same worker.
+    if (!leaseMatches(current, lease)) {
+      if (leaseIdentityMatches(current, lease) && (lease as { fence: number }).fence === current.fence - 1)
+        return job
+      return null
+    }
+    const renewed = { ...current, fence: current.fence + 1, expiresAt: Math.min(deadline, Date.now() + this.renewalMs) }
+    this.db.query('UPDATE local_jobs SET runtime_lease=?, worker_heartbeat_at=? WHERE dispatch_key=? AND status=\'running\'')
+      .run(canonical(renewed), Date.now(), key)
+    return this.query(key)
   }
   private cancelAcknowledged(key: string, lease: unknown): DurableJob | null {
     const job = this.query(key)
-    if (!job || job.status !== 'cancel_requested' || !leaseMatches(job.spec.lease, lease))
+    if (!job || job.status !== 'cancel_requested' || !leaseMatches(job.runtimeLease ?? job.spec.lease, lease))
       return null
     const identity = this.db
-      .query('SELECT worker_pid FROM local_jobs WHERE dispatch_key=?')
-      .get(key) as { worker_pid: number | null } | null
+      .query('SELECT worker_pid,worker_pgid FROM local_jobs WHERE dispatch_key=?')
+      .get(key) as { worker_pid: number | null; worker_pgid: number | null } | null
     if (!identity?.worker_pid) return job
     try {
       process.kill(identity.worker_pid, 0)
@@ -302,6 +374,7 @@ export class JobDaemon implements JobDaemonPort {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return job
     }
+    if (identity.worker_pgid && this.processGroupAlive(identity.worker_pgid)) return job
     this.db
       .query(
         "UPDATE local_jobs SET status='cancelled' WHERE dispatch_key=? AND status='cancel_requested'",
@@ -348,8 +421,9 @@ export class JobDaemon implements JobDaemonPort {
     if (
       !job ||
       job.status !== 'running' ||
-      Date.now() >= job.spec.lease.expiresAt ||
-      !leaseMatches(job.spec.lease, lease)
+      Date.now() >= (job.executionDeadlineAt ?? job.spec.lease.expiresAt) ||
+      Date.now() >= (job.runtimeLease ?? job.spec.lease).expiresAt ||
+      !leaseMatches(job.runtimeLease ?? job.spec.lease, lease)
     )
       return null
     const verified = this.verifiedOutput(job, result)
@@ -386,6 +460,17 @@ export class JobDaemon implements JobDaemonPort {
       .map((row) => this.query(row.dispatch_key)!)
       .filter(Boolean)
   }
+  /** Deadline/lease authority lives here, never in a reconnecting observer. */
+  enforceRuntimeLimits(): void {
+    for (const job of this.pendingJobs()) {
+      const deadline = job.executionDeadlineAt ?? job.spec.lease.expiresAt
+      const lease = job.runtimeLease ?? job.spec.lease
+      if (Date.now() >= deadline || (job.status === 'queued' && Date.now() >= lease.expiresAt))
+        this.cancel(job.spec.dispatchKey)
+      if (job.status === 'running' && Date.now() >= lease.expiresAt)
+        this.cancel(job.spec.dispatchKey)
+    }
+  }
   receipt(dispatchKey: string): Uint8Array {
     const job = this.query(dispatchKey)
     if (
@@ -395,6 +480,30 @@ export class JobDaemon implements JobDaemonPort {
     )
       throw new Error('Verified daemon receipt unavailable')
     return readFileSync(job.outputPath!)
+  }
+  private stopWorkerTree(dispatchKey: string) {
+    const child = this.workers.get(dispatchKey)
+    const pid = child?.pid
+    // Workers are spawned detached below, so their PID is also their process-group id.
+    // On Windows group probing is unavailable; retain cancel_requested until the worker exits.
+    if (pid && process.platform !== 'win32') {
+      try {
+        process.kill(-pid, 'SIGTERM')
+        return
+      } catch {
+        // A launch race or an unsupported platform falls back to the direct child.
+      }
+    }
+    child?.kill()
+  }
+  private processGroupAlive(pgid: number): boolean {
+    if (process.platform === 'win32') return true // conservative: only worker exit can prove termination.
+    try {
+      process.kill(-pgid, 0)
+      return true
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+    }
   }
   startHttp(): JobDaemonEndpoint {
     if (this.server && this.endpointToken)
@@ -417,6 +526,8 @@ export class JobDaemon implements JobDaemonPort {
           const lease = isRecord(body) ? body.lease : null
           const result = url.pathname.startsWith('/claim/')
             ? this.claim(key, lease, isRecord(body) ? body.workerPid : null)
+            : url.pathname.startsWith('/renew/')
+              ? this.renew(key, lease)
             : url.pathname.startsWith('/finish/')
               ? this.finish(key, lease, isRecord(body) ? body.result : null)
               : url.pathname.startsWith('/cancelled/')
@@ -459,24 +570,20 @@ export class JobDaemon implements JobDaemonPort {
         ...(options.waitAfterClaim ? { JOB_DAEMON_WORKER_WAIT_AFTER_CLAIM: '1' } : {}),
         ...(this.trackingConfigJson ? { OPH_RESEARCH_TRACKING_STDIN: '1' } : {}),
       },
+      detached: process.platform !== 'win32',
     })
     this.workers.set(dispatchKey, child)
     void child.exited.then(() => {
       this.workers.delete(dispatchKey)
       if (this.closed) return
       const job = this.query(dispatchKey)
-      if (job?.status === 'cancel_requested')
-        this.db
-          .query(
-            "UPDATE local_jobs SET status='cancelled' WHERE dispatch_key=? AND status='cancel_requested'",
-          )
-          .run(dispatchKey)
+      if (job?.status === 'cancel_requested') this.cancelAcknowledged(dispatchKey, job.runtimeLease ?? job.spec.lease)
     })
     return child
   }
   close() {
     this.closed = true
-    for (const worker of this.workers.values()) worker.kill()
+    for (const [key] of this.workers) this.stopWorkerTree(key)
     this.workers.clear()
     this.stopHttp()
     this.db.close()
