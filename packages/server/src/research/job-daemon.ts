@@ -731,7 +731,12 @@ export class JobDaemon implements JobDaemonPort {
         "UPDATE local_jobs SET status='completion_requested', content_hash=?, output_path=? WHERE dispatch_key=? AND status='running'",
       )
       .run(verified.contentHash, verified.outputPath, key)
-    return this.query(key)
+    const completion = this.query(key)
+    // A CLI may exit while a deliberately detached descendant survives with all
+    // standard streams closed. Keep the receipt durable, then terminate the
+    // verified job group before treating that receipt as a completed authority run.
+    if (completion && isCliPreparationJob(completion.spec)) this.stopWorkerTree(key)
+    return completion
   }
   private authorized(request: Request) {
     const token = request.headers.get('authorization')?.replace(/^Bearer /, '')
@@ -835,7 +840,7 @@ export class JobDaemon implements JobDaemonPort {
     const timer = setTimeout(() => {
       this.escalationTimers.delete(dispatchKey)
       const job = this.query(dispatchKey)
-      if (job?.status !== 'cancel_requested') return
+      if (job?.status !== 'cancel_requested' && job?.status !== 'completion_requested') return
       const latest = this.persistedWorkerIdentity(dispatchKey)
       if (latest) this.signalOwnedWorker(latest, 'SIGKILL')
     }, 250)

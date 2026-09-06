@@ -152,7 +152,7 @@ test('JobDaemon runs an admitted fake CLI and verifies the complete v3 candidate
     })
     daemon.submit(job)
     const worker = await daemon.launchWorker(job.dispatchKey)
-    expect(await worker.exited).toBe(0)
+    await worker.exited
     await waitFor(daemon, job.dispatchKey, 'completed')
     const bytes = await readFile(join(root, 'output', job.dispatchKey, 'candidate.json'))
     const receipt = JSON.parse(bytes.toString())
@@ -168,6 +168,39 @@ test('JobDaemon runs an admitted fake CLI and verifies the complete v3 candidate
     expect(receipt.draft.inputHash).not.toBe(job.inputHash)
     receipt.inputHash = hash('tampered')
     expect(verifyCandidateReceipt(receipt, job)).toBe(false)
+  } finally {
+    daemon.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('durably completes a receipt while killing a stream-closed CLI grandchild', async () => {
+  const event = JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'agent_message', text: JSON.stringify({ code: 'export const candidate = 2' }) },
+  })
+  const { root, daemon, cli } = await fixture((fixtureRoot) => {
+    const childMarker = join(fixtureRoot, 'completion-grandchild.pid')
+    return `#!/bin/sh
+/bin/sh -c 'trap "" TERM; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+echo $! > '${childMarker}'
+printf '%s\\n' '${event}'
+`
+  })
+  try {
+    const job = spec('prep-completion')
+    bindAdmittedAdapter(job, cli)
+    daemon.submit(job)
+    const worker = await daemon.launchWorker(job.dispatchKey)
+    const grandchildPid = await waitForPid(join(root, 'completion-grandchild.pid'))
+    expect(processExists(grandchildPid)).toBe(true)
+    await worker.exited
+    await waitFor(daemon, job.dispatchKey, 'completed')
+    await waitForExit(grandchildPid)
+    const receipt = JSON.parse(
+      (await readFile(join(root, 'output', job.dispatchKey, 'candidate.json'))).toString(),
+    )
+    expect(verifyCandidateReceipt(receipt, job)).toBe(true)
   } finally {
     daemon.close()
     await rm(root, { recursive: true, force: true })
