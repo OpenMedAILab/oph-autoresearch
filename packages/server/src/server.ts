@@ -78,6 +78,7 @@ export interface ServeOptions {
     workerArgv?: readonly string[]
     tracking?: RunnerTrackingConfig
   }
+  researchControllerOnly?: boolean
   researchHumanAuth?: HumanAuthVerifierConfig
   researchRequireApproval?: boolean
   /** Trusted, immutable launch setting; never sourced from workspace or HTTP config. */
@@ -141,6 +142,7 @@ export function serve(opts: ServeOptions) {
     ? createHumanAuthVerifier(opts.researchHumanAuth)
     : undefined
   const researchRequireApproval = opts.researchRequireApproval ?? Boolean(researchHumanAuth)
+  const researchControllerOnly = opts.researchControllerOnly === true
   const researchBoundary = opts.researchBoundary ?? 'standard'
   const restricted = researchBoundary !== 'standard'
   const researchDeployment =
@@ -320,6 +322,7 @@ export function serve(opts: ServeOptions) {
         })
         patch.lastRunConversationId = conv.id
         await startRun(conv.id, s.prompt, undefined, {
+          researchControllerOnly,
           store: opts.store,
           content,
           config: opts.config,
@@ -516,6 +519,7 @@ export function serve(opts: ServeOptions) {
                 config: opts.config,
                 bus,
                 runs,
+                researchControllerOnly,
                 researchControlFactory: ({ workspaceId, workspaceRoot, campaignIds, signal }) =>
                   createNativeResearchControlBridge(
                     researchControlDeps(workspaceId, workspaceRoot),
@@ -592,6 +596,7 @@ export function serve(opts: ServeOptions) {
           config: opts.config,
           bus,
           runs,
+          researchControllerOnly,
           researchControlFactory: ({ workspaceId, workspaceRoot, campaignIds, signal }) =>
             createNativeResearchControlBridge(
               researchControlDeps(workspaceId, workspaceRoot),

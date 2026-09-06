@@ -132,6 +132,26 @@ export async function startRun(
   const isRemoteCli = getConversation(deps.store, conversationId)?.provider.startsWith(
     `${CLI_PROVIDER_PREFIX}ssh:`,
   )
+  if (
+    deps.researchControllerOnly &&
+    (isNativeCli ||
+      !deps.researchControlPortFactory ||
+      listResearchCampaigns(deps.store, ws.id, conversationId).length === 0)
+  ) {
+    deps.runs.release(conversationId)
+    deps.bus.publish(
+      {
+        type: 'run.error',
+        runId: '' as RunId,
+        code: 'internal_error',
+        message: isNativeCli
+          ? '研究控制模式暂不支持本机 CLI 主控，请选择 API 模型。'
+          : '请先在流程页面建立研究提案，再使用研究控制模式。',
+      },
+      conversationId,
+    )
+    return
+  }
   const researchControl =
     isNativeCli && !isRemoteCli && deps.researchControlFactory
       ? deps.researchControlFactory({
@@ -171,11 +191,16 @@ export async function startRun(
         workspaceRoot: ws.rootPath,
         signal: controller.signal,
         ...(researchControlPort ? { researchControl: researchControlPort } : {}),
+        researchControllerOnly: deps.researchControllerOnly === true,
         // 派活通道只给顶层会话。成员会话（`team-run.ts`）不传，因此它那边连
         // `subagent` 工具都不注册——子 agent 再派活没有终止条件。
-        delegate: makeDelegate({ deps, workspaceRoot: ws.rootPath, conversationId }),
+        ...(!deps.researchControllerOnly
+          ? { delegate: makeDelegate({ deps, workspaceRoot: ws.rootPath, conversationId }) }
+          : {}),
         // 装插件同样只给顶层会话：成员会话不该给整台机器装插件。
-        plugins: makePluginPort({ workspaceRoot: ws.rootPath }),
+        ...(!deps.researchControllerOnly
+          ? { plugins: makePluginPort({ workspaceRoot: ws.rootPath }) }
+          : {}),
         // 跟进消息队列同样只给顶层会话：成员会话不在界面上，没有人往它里面插话。
         followUps: (id) => deps.runs.takeSteered(id),
       })

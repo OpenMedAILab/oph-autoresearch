@@ -630,3 +630,27 @@ afterEach(() => {
   if (HOME_BEFORE === undefined) delete process.env.OPH_AUTORESEARCH_HOME
   else process.env.OPH_AUTORESEARCH_HOME = HOME_BEFORE
 })
+
+test('research controller mode exposes only ledger control even when a broad role is requested', async () => {
+  const { s, store, names } = await session({
+    researchControllerOnly: true,
+    allowedTools: ['run_command', 'ssh_run', 'subagent', 'install_plugin', 'research_control'],
+    researchControl: { execute: async () => ({ ok: true, status: 200, data: {} }) },
+  })
+  try {
+    expect(names()).toEqual(['research_control'])
+    // This entry normally starts extension hosts. Control mode returns before
+    // loading any plugin or MCP even if a future caller reaches it directly.
+    await (
+      s as unknown as { loadExtensionTools: (density: TokenDensity) => Promise<void> }
+    ).loadExtensionTools(DEFAULT_DENSITY)
+    expect(names()).toEqual(['research_control'])
+  } finally {
+    await s.dispose()
+    store.close()
+  }
+})
+
+test('research controller mode rejects construction without a scoped control port', async () => {
+  await expect(session({ researchControllerOnly: true })).rejects.toThrow('研究控制模式需要已绑定')
+})

@@ -118,6 +118,8 @@ import { RuntimeSink } from './sink.ts'
 import { buildHistory } from './transcript.ts'
 
 export interface SessionOptions {
+  /** Only the ledger control tool is exposed; external tool hosts are never loaded. */
+  researchControllerOnly?: boolean
   researchControl?: ResearchControlPort
   researchRequestGuard?: ResearchRequestGuard
   /** Logical campaign workspace; evidence-only execution still uses an isolated scratch root. */
@@ -235,9 +237,12 @@ export class Session {
     if (opts.researchBoundary !== undefined && opts.researchBoundary !== 'standard') {
       throw new Error(RESTRICTED_RESEARCH_CAPABILITY_DENIED)
     }
-    this.extraDirs = opts.researchEvidenceOnly
-      ? []
-      : normalizeAdditionalDirectories(opts.config.additionalDirectories).dirs
+    if (opts.researchControllerOnly && !opts.researchControl)
+      throw new Error('研究控制模式需要已绑定的研究项目控制端口。')
+    this.extraDirs =
+      opts.researchEvidenceOnly || opts.researchControllerOnly
+        ? []
+        : normalizeAdditionalDirectories(opts.config.additionalDirectories).dirs
 
     // 派活与装插件都跟着各自的通道走：成员会话两条都拿不到，因此它那边既没有
     // `subagent`（子 agent 不得再派活，递归没有终止条件），也没有 `install_plugin`
@@ -250,7 +255,12 @@ export class Session {
     }
     if (opts.researchEvidenceOnly && !opts.researchSkills)
       throw new Error('Evidence-only research requires a locked skill port')
-    if (opts.researchEvidenceOnly) {
+    if (opts.researchControllerOnly) {
+      const all = new ToolRegistry()
+      registerBuiltinTools(all, { researchControl: true })
+      for (const spec of all.list())
+        if (spec.name === 'research_control') this.registry.register(spec)
+    } else if (opts.researchEvidenceOnly) {
       const all = new ToolRegistry()
       registerBuiltinTools(all, { delegate: false, plugins: false, mcpConfig: false })
       for (const spec of all.list()) if (spec.name === 'read_skill') this.registry.register(spec)
@@ -413,15 +423,19 @@ export class Session {
       ? this.opts.researchRequestGuard.wrap(rawAdapter)
       : rawAdapter
     const disabled = listDisabledExtras(store, conversationId)
-    if (!this.extensions && !this.researchEvidenceOnly) {
+    if (!this.extensions && !this.researchEvidenceOnly && !this.opts.researchControllerOnly) {
       await this.loadExtensionTools(adapter.spec.density, disabled, conversationId)
     }
     const roots = scopeRoots(this.opts.workspaceRoot)
-    const skills = (this.opts.researchSkills ? [] : await scanSkills(roots).catch(() => [])).filter(
-      (skill) => !disabled.has(`skill:${skill.name}`),
-    )
+    const skills = (
+      this.opts.researchSkills || this.opts.researchControllerOnly
+        ? []
+        : await scanSkills(roots).catch(() => [])
+    ).filter((skill) => !disabled.has(`skill:${skill.name}`))
     const memories = (
-      this.researchEvidenceOnly ? [] : await listScopedEntries(roots).catch(() => [])
+      this.researchEvidenceOnly || this.opts.researchControllerOnly
+        ? []
+        : await listScopedEntries(roots).catch(() => [])
     ).filter((memory) => !disabled.has(`memory:${memory.key}`))
     const contextSnapshot = buildTailNotes({
       workspaceRoot: this.opts.workspaceRoot,
@@ -696,6 +710,7 @@ export class Session {
     disabled: ReadonlySet<string> = new Set(),
     conversationId?: ConversationId,
   ): Promise<void> {
+    if (this.opts.researchControllerOnly) return
     const ext = await acquireExtensions(this.opts.workspaceRoot, (line) =>
       process.stderr.write(`${line}
 `),

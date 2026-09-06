@@ -22,6 +22,7 @@ import type { RunManager } from './runs.ts'
  * 而同一条会话可以同时开在桌面端和手机上，「当前工作区」本来就不该由连接来回答。
  */
 export interface CommandDeps {
+  researchControllerOnly?: boolean
   ws: ServerWebSocket<SocketData>
   store: Store
   content: ContentStore
