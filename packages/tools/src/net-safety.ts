@@ -84,12 +84,25 @@ export interface SafetyOptions {
  *
  * 超时当作解析失败处理（默认拒绝），而不是放行。
  */
-async function resolveWithTimeout(host: string, timeoutMs: number): Promise<string> {
-  const timer = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error('dns timeout')), timeoutMs).unref?.(),
-  )
-  const res = await Promise.race([lookup(host), timer])
-  return res.address
+/** Internal dependency for deterministic DNS failure and rebinding tests. */
+type ResolveHost = (host: string) => Promise<{ address: string }>
+
+async function resolveWithTimeout(
+  host: string,
+  timeoutMs: number,
+  resolveHost: ResolveHost,
+): Promise<string> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const timer = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error('dns timeout')), timeoutMs)
+    timeout.unref?.()
+  })
+  try {
+    const res = await Promise.race([resolveHost(host), timer])
+    return res.address
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 /**
@@ -98,7 +111,11 @@ async function resolveWithTimeout(host: string, timeoutMs: number): Promise<stri
  * 做 DNS 解析，所以是异步的。**返回的 `resolved` 应当被用来实际连接**——
  * 校验时解析一次、连接时再解析一次，中间那个窗口就是 DNS 重绑定攻击的入口。
  */
-export async function checkUrl(raw: string, opts: SafetyOptions = {}): Promise<SafetyVerdict> {
+export async function checkUrl(
+  raw: string,
+  opts: SafetyOptions = {},
+  resolveHost: ResolveHost = lookup,
+): Promise<SafetyVerdict> {
   let url: URL
   try {
     url = new URL(raw)
@@ -141,7 +158,7 @@ export async function checkUrl(raw: string, opts: SafetyOptions = {}): Promise<S
       return { allowed: false, reason: 'loopback', message: '拒绝访问本机' }
     }
     try {
-      address = await resolveWithTimeout(host, opts.dnsTimeoutMs ?? 3000)
+      address = await resolveWithTimeout(host, opts.dnsTimeoutMs ?? 3000, resolveHost)
     } catch {
       // 解析不了就拒。放行等于把判定推给 fetch，而那时已经在连接了。
       return { allowed: false, reason: 'dns_failed', message: `域名解析失败：${host}` }

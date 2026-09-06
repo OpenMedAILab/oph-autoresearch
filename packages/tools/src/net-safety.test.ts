@@ -103,9 +103,44 @@ describe('URL 校验', () => {
   })
 
   test('解析不了的域名默认拒绝，不放行给 fetch 去撞', async () => {
-    const v = await checkUrl('http://这个域名一定不存在.invalid/')
+    const v = await checkUrl('http://这个域名一定不存在.invalid/', {}, async () => {
+      throw new Error('ENOTFOUND')
+    })
     expect(v.allowed).toBe(false)
     expect(v.reason).toBe('dns_failed')
+  })
+
+  test('DNS 将普通域名指向受限地址时仍拒绝', async () => {
+    for (const [address, reason] of [
+      ['127.0.0.1', 'loopback'],
+      ['10.0.0.2', 'private_network'],
+      ['169.254.169.254', 'link_local'],
+      ['198.18.0.1', 'reserved'],
+      ['::ffff:7f00:1', 'loopback'],
+    ] as const) {
+      const verdict = await checkUrl('https://research.example.org/', {}, async () => ({
+        address,
+      }))
+      expect(verdict.allowed).toBe(false)
+      expect(verdict.reason).toBe(reason)
+    }
+  })
+
+  test('DNS 超时默认拒绝', async () => {
+    const verdict = await checkUrl(
+      'https://research.example.org/',
+      { dnsTimeoutMs: 10 },
+      () => new Promise(() => {}),
+    )
+    expect(verdict.allowed).toBe(false)
+    expect(verdict.reason).toBe('dns_failed')
+  })
+
+  test('DNS 公网结果用于后续固定连接地址', async () => {
+    const verdict = await checkUrl('https://research.example.org/', {}, async () => ({
+      address: '93.184.216.34',
+    }))
+    expect(verdict).toEqual({ allowed: true, resolved: '93.184.216.34' })
   })
 
   test('显式放行的主机绕过检查 —— 本地开发时抓自己起的服务', async () => {
