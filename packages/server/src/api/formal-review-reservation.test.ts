@@ -80,7 +80,7 @@ async function eventually<T>(read: () => T | undefined): Promise<T> {
 function deps(
   store: Store,
   root: string,
-  reviewer: ApiDeps['researchFormalCodeReviewer'],
+  reviewer: NonNullable<ApiDeps['researchFormalCodeReviewer']>,
   drift = false,
 ): ApiDeps {
   const workspace = upsertWorkspace(store, root, 'formal')
@@ -96,7 +96,7 @@ function deps(
     store,
     config: {} as ApiDeps['config'],
     runs: {} as ApiDeps['runs'],
-    bus: { publish() {} } as ApiDeps['bus'],
+    bus: { publish() {} } as unknown as ApiDeps['bus'],
     pairing: {} as ApiDeps['pairing'],
     token: '',
     port: 0,
@@ -277,11 +277,10 @@ test('formal review reserves before provider, replays safely, and binds the acce
     }
     authority.bytes = Buffer.from(JSON.stringify(candidateReceipt(spec, draft)))
     authority.current = { ...authority.current!, status: 'completed' }
-    const campaign = await eventually(() =>
-      getResearchCampaign(store, created.campaign.id)?.cliPreparations?.[0]?.status === 'candidate'
-        ? getResearchCampaign(store, created.campaign.id)
-        : undefined,
-    )
+    const campaign = await eventually(() => {
+      const current = getResearchCampaign(store, created.campaign.id)
+      return current?.cliPreparations?.[0]?.status === 'candidate' ? current : undefined
+    })
     const base = {
       planId: 'plan',
       preparationId: proposed.preparationId,
