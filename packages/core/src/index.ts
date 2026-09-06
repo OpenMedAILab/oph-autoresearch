@@ -11,6 +11,13 @@
  */
 
 // id 与构造器：账本、事件、协议三处都按它们对齐类型
+export { canonicalCliPreparationConfig } from './domain/cli-preparation.ts'
+export type {
+  CliPreparationCandidateValidation,
+  CliPreparationFrozenConfig,
+  CliPreparationJobSpec,
+  CliPreparationLimits,
+} from './domain/cli-preparation.ts'
 export {
   type ConversationId,
   type GoalId,

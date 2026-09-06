@@ -1,3 +1,8 @@
+import type {
+  CliPreparationCandidateValidation,
+  CliPreparationJobSpec,
+  CliPreparationLimits,
+} from './cli-preparation.ts'
 import type { LabelSetReference } from './labelset.ts'
 export const RESEARCH_STAGES = [
   'question',
@@ -95,6 +100,7 @@ export interface TrustedHumanReviewerProof {
 export type ApprovalStatus = 'active' | 'revoked' | 'invalidated'
 
 export interface ResearchApprovalScope {
+  preparationLimits?: CliPreparationLimits
   display?: { title: string; task: string; revision: number }
   executionLimits?: {
     maxRuntimeMs: number
@@ -194,6 +200,8 @@ export interface ResearchAttempt {
   backend?: 'builtin-local' | 'localhost-daemon' | 'ssh-daemon'
   jobSpec?: ResearchJobSpec
   jobSpecHash?: string
+  cliPreparationJobSpec?: CliPreparationJobSpec
+  cliPreparationJobSpecHash?: string
   id: string
   taskRevisionId: string
   dispatchKey: string
@@ -213,6 +221,8 @@ export interface ResearchCliPreparation {
   dispatchKey: string
   candidateId: string
   adapterId: string
+  adapterConfigHash: string
+  backendPolicyHash: string
   model: string
   instructions: string
   inputHash: string
@@ -220,6 +230,8 @@ export interface ResearchCliPreparation {
   deviceId: string
   maxRuntimeMs: number
   maxCost: number
+  acknowledgeUnknownCost: true
+  actualCost: null
   status: 'proposed' | 'claimed' | 'candidate'
   attemptId: string | null
   artifactVersionId: string | null
@@ -321,6 +333,8 @@ export type ResearchCommand =
       dispatchKey: string
       candidateId: string
       adapterId: string
+      adapterConfigHash: string
+      backendPolicyHash: string
       model: string
       instructions: string
       inputHash: string
@@ -328,8 +342,18 @@ export type ResearchCommand =
       deviceId: string
       maxRuntimeMs: number
       maxCost: number
+      acknowledgeUnknownCost: true
     }
   | { kind: 'claimCliPreparation'; preparationId: string; approvalId: string }
+  | { kind: 'bindCliPreparationJob'; attemptId: string; spec: CliPreparationJobSpec }
+  | {
+      kind: 'finishCliPreparation'
+      attemptId: string
+      uri: string
+      artifactKind: 'cli_preparation_candidate'
+      contentHash: string
+      validation: CliPreparationCandidateValidation
+    }
   | {
       kind: 'recordArtifact'
       artifactId: string
@@ -475,6 +499,8 @@ export function canonicalResearchBundle(campaign: ResearchCampaign): string {
                   dispatchKey,
                   candidateId,
                   adapterId,
+                  adapterConfigHash,
+                  backendPolicyHash,
                   model,
                   instructions,
                   inputHash,
@@ -482,12 +508,15 @@ export function canonicalResearchBundle(campaign: ResearchCampaign): string {
                   deviceId,
                   maxRuntimeMs,
                   maxCost,
+                  acknowledgeUnknownCost,
                 }) => ({
                   id,
                   taskRevisionId,
                   dispatchKey,
                   candidateId,
                   adapterId,
+                  adapterConfigHash,
+                  backendPolicyHash,
                   model,
                   instructions,
                   inputHash,
@@ -495,6 +524,7 @@ export function canonicalResearchBundle(campaign: ResearchCampaign): string {
                   deviceId,
                   maxRuntimeMs,
                   maxCost,
+                  acknowledgeUnknownCost,
                 }),
               )
               .sort((left, right) => compareCodeUnits(left.id, right.id)),
