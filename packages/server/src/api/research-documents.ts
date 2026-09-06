@@ -1,13 +1,73 @@
-import { getResearchCampaign, type Store } from '@oph-autoresearch/store'
-import { listResearchDocuments, writeResearchDocument } from '../research/research-documents.ts'
+import { getResearchCampaign } from '@oph-autoresearch/store'
+import {
+  ResearchDocumentError,
+  type ResearchDocumentKind,
+  readResearchDocuments,
+  writeResearchDocument,
+} from '../research/research-documents.ts'
+import { publishResearchEvents } from '../research-events.ts'
+import { type ApiHandler, json } from './types.ts'
 
-/** Standalone route for wiring by the main research API. */
-export async function handleResearchDocumentsApi(input:{store:Store;workspaceId:string;workspaceRoot:string;url:URL;request:Request}) {
- const m=/^\/api\/research\/campaigns\/([A-Za-z0-9_-]+)\/documents$/.exec(input.url.pathname);if(!m)return null
- const campaign=getResearchCampaign(input.store,m[1]!);if(!campaign||campaign.workspaceId!==input.workspaceId)return Response.json({error:'not_found'},{status:404})
- if(input.request.method==='GET')return Response.json({documents:listResearchDocuments(input.store,campaign.id)})
- if(input.request.method!=='POST')return new Response('',{status:405})
- const body=await input.request.json().catch(()=>null) as {expectedVersion?:unknown;idempotencyKey?:unknown;kind?:unknown;document?:unknown}|null
- if(!body||typeof body.expectedVersion!=='number'||typeof body.idempotencyKey!=='string'||!['study','manuscript','skillcandidate'].includes(String(body.kind))||!body.document||typeof body.document!=='object'||Array.isArray(body.document))return Response.json({error:'invalid_document'},{status:400})
- try{return Response.json(await writeResearchDocument({store:input.store,workspaceRoot:input.workspaceRoot,campaignId:campaign.id,expectedVersion:body.expectedVersion,idempotencyKey:body.idempotencyKey,kind:body.kind as 'study'|'manuscript'|'skillcandidate',document:body.document as Record<string,unknown>}))}catch(error){return Response.json({error:error instanceof Error?error.message:'document_write_failed'},{status:409})}
+function exactBody(value: unknown): value is {
+  expectedVersion: number
+  idempotencyKey: string
+  kind: ResearchDocumentKind
+  document: Record<string, unknown>
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const body = value as Record<string, unknown>
+  const keys = Object.keys(body).sort()
+  return (
+    keys.length === 4 &&
+    keys.every(
+      (key, index) => key === ['document', 'expectedVersion', 'idempotencyKey', 'kind'][index],
+    ) &&
+    typeof body.expectedVersion === 'number' &&
+    Number.isSafeInteger(body.expectedVersion) &&
+    body.expectedVersion > 0 &&
+    typeof body.idempotencyKey === 'string' &&
+    ['study', 'manuscript', 'skillcandidate'].includes(String(body.kind)) &&
+    !!body.document &&
+    typeof body.document === 'object' &&
+    !Array.isArray(body.document)
+  )
+}
+
+/** Immutable campaign documents. This route is deliberately separate from mutable research proposals. */
+export const handleResearchDocumentsApi: ApiHandler = async (url, req, d) => {
+  const match = /^\/api\/research\/campaigns\/([A-Za-z0-9_-]+)\/documents$/.exec(url.pathname)
+  if (!match) return null
+  const campaign = getResearchCampaign(d.store, match[1]!)
+  if (!campaign || campaign.workspaceId !== d.workspaceId) return json({ error: 'not_found' }, 404)
+  if (req.method === 'GET') {
+    try {
+      return json({ documents: await readResearchDocuments(d.store, d.workspaceRoot, campaign.id) })
+    } catch (error) {
+      const status = error instanceof ResearchDocumentError ? error.status : 409
+      return json(
+        { error: error instanceof Error ? error.message : 'document_read_failed' },
+        status,
+      )
+    }
+  }
+  if (req.method !== 'POST')
+    return new Response('', { status: 405, headers: { allow: 'GET, POST' } })
+  const body = await req.json().catch(() => null)
+  if (!exactBody(body)) return json({ error: 'invalid_document' }, 400)
+  try {
+    const result = await writeResearchDocument({
+      store: d.store,
+      workspaceRoot: d.workspaceRoot,
+      campaignId: campaign.id,
+      expectedVersion: body.expectedVersion,
+      idempotencyKey: body.idempotencyKey,
+      kind: body.kind,
+      document: body.document,
+    })
+    publishResearchEvents(d.store, d.bus)
+    return json(result, result.replayed ? 200 : 201)
+  } catch (error) {
+    const status = error instanceof ResearchDocumentError ? error.status : 409
+    return json({ error: error instanceof Error ? error.message : 'document_write_failed' }, status)
+  }
 }
