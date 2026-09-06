@@ -105,7 +105,7 @@ export interface ResearchApprovalScope {
   }
   backendPolicyHash?: string
   trackingPolicyHash?: string
-  kind: 'protocol' | 'execution' | 'model_review' | 'release'
+  kind: 'protocol' | 'execution' | 'cli_preparation' | 'model_review' | 'release'
   evidencePackHash?: string
   configHash?: string
   maxRequests?: number
@@ -206,6 +206,26 @@ export interface ResearchAttempt {
   cancelRequestedAt: number | null
 }
 
+/** Immutable proposal; its generated code remains a candidate artifact until a separate workflow admits it. */
+export interface ResearchCliPreparation {
+  id: string
+  taskRevisionId: string
+  dispatchKey: string
+  candidateId: string
+  adapterId: string
+  model: string
+  instructions: string
+  inputHash: string
+  configHash: string
+  deviceId: string
+  maxRuntimeMs: number
+  maxCost: number
+  status: 'proposed' | 'claimed' | 'candidate'
+  attemptId: string | null
+  artifactVersionId: string | null
+  createdAt: number
+}
+
 export interface SyntheticCompletionValidation {
   inputHash: string
   contentHash: string
@@ -255,6 +275,7 @@ export interface ResearchLiteratureCitation {
 }
 
 export interface ResearchCampaign {
+  cliPreparations?: ResearchCliPreparation[]
   pattern?: { contractHash: string; plan: ResearchJsonObject; taskRevisionIds: string[] }
   patternHistory?: Array<{
     contractHash: string
@@ -293,6 +314,22 @@ export type ResearchCommand =
   | { kind: 'setPolicy'; policy: ResearchJsonObject }
   | { kind: 'setInputs'; inputs: ResearchJsonObject }
   | { kind: 'setBudget'; budget: ResearchBudget }
+  | {
+      kind: 'proposeCliPreparation'
+      preparationId: string
+      taskRevisionId: string
+      dispatchKey: string
+      candidateId: string
+      adapterId: string
+      model: string
+      instructions: string
+      inputHash: string
+      configHash: string
+      deviceId: string
+      maxRuntimeMs: number
+      maxCost: number
+    }
+  | { kind: 'claimCliPreparation'; preparationId: string; approvalId: string }
   | {
       kind: 'recordArtifact'
       artifactId: string
@@ -428,6 +465,41 @@ export function canonicalResearchBundle(campaign: ResearchCampaign): string {
           }
         : {}),
       ...(campaign.labelSets === undefined ? {} : { labelSets: campaign.labelSets }),
+      ...((campaign.cliPreparations ?? []).length
+        ? {
+            cliPreparations: campaign
+              .cliPreparations!.map(
+                ({
+                  id,
+                  taskRevisionId,
+                  dispatchKey,
+                  candidateId,
+                  adapterId,
+                  model,
+                  instructions,
+                  inputHash,
+                  configHash,
+                  deviceId,
+                  maxRuntimeMs,
+                  maxCost,
+                }) => ({
+                  id,
+                  taskRevisionId,
+                  dispatchKey,
+                  candidateId,
+                  adapterId,
+                  model,
+                  instructions,
+                  inputHash,
+                  configHash,
+                  deviceId,
+                  maxRuntimeMs,
+                  maxCost,
+                }),
+              )
+              .sort((left, right) => compareCodeUnits(left.id, right.id)),
+          }
+        : {}),
       stage: campaign.stage,
       policy: campaign.policy,
       inputs: campaign.inputs,

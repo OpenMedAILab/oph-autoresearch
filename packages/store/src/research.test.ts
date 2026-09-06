@@ -19,6 +19,108 @@ import {
 const CONTENT_HASH = `sha256:${'a'.repeat(64)}`
 const INPUT_HASH = `sha256:${'c'.repeat(64)}`
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (value && typeof value === 'object')
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+      .join(',')}}`
+  return JSON.stringify(value) ?? 'null'
+}
+
+function sha256(value: string): string {
+  const hasher = new Bun.CryptoHasher('sha256')
+  hasher.update(value)
+  return `sha256:${hasher.digest('hex')}`
+}
+
+function cliProposal(taskRevisionId: string, overrides: Record<string, unknown> = {}) {
+  const draft = {
+    kind: 'proposeCliPreparation' as const,
+    preparationId: 'rcp_fixture',
+    taskRevisionId,
+    dispatchKey: 'prepare-fixture',
+    candidateId: 'candidate_fixture',
+    adapterId: 'fixture-cli',
+    model: 'fixture-model',
+    instructions: 'produce a candidate only',
+    inputHash: INPUT_HASH,
+    deviceId: 'fixture-device-1',
+    maxRuntimeMs: 60_000,
+    maxCost: 10,
+    ...overrides,
+  }
+  return {
+    ...draft,
+    configHash: sha256(
+      canonicalJson({
+        preparationId: draft.preparationId,
+        taskRevisionId: draft.taskRevisionId,
+        dispatchKey: draft.dispatchKey,
+        candidateId: draft.candidateId,
+        adapterId: draft.adapterId,
+        model: draft.model,
+        instructions: draft.instructions,
+        inputHash: draft.inputHash,
+        deviceId: draft.deviceId,
+        maxRuntimeMs: draft.maxRuntimeMs,
+        maxCost: draft.maxCost,
+      }),
+    ),
+  }
+}
+
+function declareCliTask(store: Store, campaign: ReturnType<typeof created>['campaign']) {
+  const result = mutateResearchCampaign(store, campaign.id, {
+    idempotencyKey: `declare-cli-${crypto.randomUUID()}`,
+    expectedVersion: campaign.version,
+    command: {
+      kind: 'declareSyntheticTask',
+      taskId: `cli-task-${crypto.randomUUID()}`,
+      inputHash: INPUT_HASH,
+      artifactVersionIds: [],
+    },
+  })
+  if (!result.ok) throw new Error(result.message)
+  return result.campaign
+}
+
+function approveCliPreparation(
+  store: Store,
+  campaign: ReturnType<typeof created>['campaign'],
+  proposal: ReturnType<typeof cliProposal>,
+  idempotencyKey = `approve-cli-${crypto.randomUUID()}`,
+) {
+  return mutateResearchCampaign(store, campaign.id, {
+    idempotencyKey,
+    expectedVersion: campaign.version,
+    command: {
+      kind: 'approve',
+      approvalId: `hap-${idempotencyKey}`,
+      bundleHash: campaign.bundleHash,
+      reviewer: { reviewerId: 'human', proofId: idempotencyKey, verifiedAt: Date.now() },
+      scope: {
+        kind: 'cli_preparation',
+        taskRevisionId: proposal.taskRevisionId as string,
+        dispatchKey: proposal.dispatchKey as string,
+        configHash: proposal.configHash,
+        executionLimits: {
+          maxRuntimeMs: proposal.maxRuntimeMs as number,
+          cpu: 1,
+          memoryMb: 256,
+          codeHash: proposal.configHash,
+          inputHash: proposal.inputHash as string,
+        },
+        artifactVersionIds: [],
+        currency: campaign.budget.currency,
+        maxCost: proposal.maxCost as number,
+        expiresAt: Date.now() + 60_000,
+      },
+    },
+  })
+}
+
 function claim(
   store: Store,
   campaignId: string,
@@ -496,4 +598,193 @@ test('approval display is bound to the ledger research title and exact task revi
   } finally {
     store.close()
   }
+})
+
+describe('CLI preparation authorization ledger', () => {
+  test('rejects a proposal whose supplied hash omits any frozen authorization field', () => {
+    const fields = [
+      ['preparationId', 'rcp_other'],
+      ['taskRevisionId', 'rtr_other'],
+      ['dispatchKey', 'prepare-other'],
+      ['candidateId', 'candidate_other'],
+      ['adapterId', 'other-cli'],
+      ['model', 'other-model'],
+      ['instructions', 'different instruction'],
+      ['inputHash', CONTENT_HASH],
+      ['deviceId', 'device-other'],
+      ['maxRuntimeMs', 120_000],
+      ['maxCost', 11],
+    ] as const
+    for (const [field, value] of fields) {
+      const store = fresh()
+      try {
+        const taskCampaign = declareCliTask(store, created(store).campaign)
+        const valid = cliProposal(taskCampaign.taskRevisions[0]!.id)
+        const denied = mutateResearchCampaign(store, taskCampaign.id, {
+          idempotencyKey: `bad-config-${field}`,
+          expectedVersion: taskCampaign.version,
+          command: { ...valid, [field]: value },
+        })
+        expect(denied.ok).toBe(false)
+        if (!denied.ok) expect(denied.code).toBe('invalid_cli_preparation_proposal')
+      } finally {
+        store.close()
+      }
+    }
+  })
+
+  test('does not issue a CLI approval without the exact proposed frozen specification', () => {
+    const store = fresh()
+    try {
+      const campaign = declareCliTask(store, created(store).campaign)
+      const proposal = cliProposal(campaign.taskRevisions[0]!.id)
+      const denied = approveCliPreparation(store, campaign, proposal, 'missing-proposal')
+      expect(denied.ok).toBe(false)
+      if (!denied.ok) expect(denied.code).toBe('invalid_approval_scope')
+    } finally {
+      store.close()
+    }
+  })
+
+  test('does not let an approval substitute a different device-bound configuration hash', () => {
+    const store = fresh()
+    try {
+      const taskCampaign = declareCliTask(store, created(store).campaign)
+      const proposal = cliProposal(taskCampaign.taskRevisions[0]!.id)
+      const proposed = mutateResearchCampaign(store, taskCampaign.id, {
+        idempotencyKey: 'propose-scope-hash',
+        expectedVersion: taskCampaign.version,
+        command: proposal,
+      })
+      if (!proposed.ok) throw new Error(proposed.message)
+      const denied = approveCliPreparation(
+        store,
+        proposed.campaign,
+        { ...proposal, configHash: CONTENT_HASH },
+        'wrong-device-bound-hash',
+      )
+      expect(denied.ok).toBe(false)
+      if (!denied.ok) expect(denied.code).toBe('invalid_approval_scope')
+    } finally {
+      store.close()
+    }
+  })
+
+  test('rejects claim after the proposed task becomes stale', () => {
+    const store = fresh()
+    try {
+      const taskCampaign = declareCliTask(store, created(store).campaign)
+      const proposal = cliProposal(taskCampaign.taskRevisions[0]!.id)
+      const proposed = mutateResearchCampaign(store, taskCampaign.id, {
+        idempotencyKey: 'propose-stale',
+        expectedVersion: taskCampaign.version,
+        command: proposal,
+      })
+      if (!proposed.ok) throw new Error(proposed.message)
+      const approved = approveCliPreparation(store, proposed.campaign, proposal, 'approve-stale')
+      if (!approved.ok) throw new Error(approved.message)
+      const changed = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'change-context',
+        expectedVersion: approved.campaign.version,
+        command: { kind: 'setInputs', inputs: { modality: 'fundus' } },
+      })
+      if (!changed.ok) throw new Error(changed.message)
+      const denied = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'claim-stale',
+        expectedVersion: changed.campaign.version,
+        command: {
+          kind: 'claimCliPreparation',
+          preparationId: proposal.preparationId,
+          approvalId: approved.campaign.approvals[0]!.id,
+        },
+      })
+      expect(denied.ok).toBe(false)
+      if (!denied.ok) expect(denied.code).toBe('cli_preparation_approval_required')
+    } finally {
+      store.close()
+    }
+  })
+
+  test('rejects a CLI claim when an ordinary attempt already owns its dispatch key', () => {
+    const store = fresh()
+    try {
+      const taskCampaign = declareCliTask(store, created(store).campaign)
+      const proposal = cliProposal(taskCampaign.taskRevisions[0]!.id)
+      const proposed = mutateResearchCampaign(store, taskCampaign.id, {
+        idempotencyKey: 'propose-collision',
+        expectedVersion: taskCampaign.version,
+        command: proposal,
+      })
+      if (!proposed.ok) throw new Error(proposed.message)
+      const ordinary = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'ordinary-collision',
+        expectedVersion: proposed.campaign.version,
+        command: {
+          kind: 'claimSynthetic',
+          taskRevisionId: proposal.taskRevisionId,
+          templateId: 'synthetic-summary-v1',
+          dispatchKey: proposal.dispatchKey,
+          inputHash: INPUT_HASH,
+        },
+      })
+      if (!ordinary.ok) throw new Error(ordinary.message)
+      const approved = approveCliPreparation(
+        store,
+        ordinary.campaign,
+        proposal,
+        'approve-collision',
+      )
+      if (!approved.ok) throw new Error(approved.message)
+      const denied = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'claim-collision',
+        expectedVersion: approved.campaign.version,
+        command: {
+          kind: 'claimCliPreparation',
+          preparationId: proposal.preparationId,
+          approvalId: approved.campaign.approvals[0]!.id,
+        },
+      })
+      expect(denied.ok).toBe(false)
+      if (!denied.ok) expect(denied.code).toBe('cli_preparation_approval_required')
+    } finally {
+      store.close()
+    }
+  })
+
+  test('claims once under an exact approval and replays the original claim idempotently', () => {
+    const store = fresh()
+    try {
+      const taskCampaign = declareCliTask(store, created(store).campaign)
+      const proposal = cliProposal(taskCampaign.taskRevisions[0]!.id)
+      const proposed = mutateResearchCampaign(store, taskCampaign.id, {
+        idempotencyKey: 'propose-claim',
+        expectedVersion: taskCampaign.version,
+        command: proposal,
+      })
+      if (!proposed.ok) throw new Error(proposed.message)
+      const approved = approveCliPreparation(store, proposed.campaign, proposal, 'approve-claim')
+      if (!approved.ok) throw new Error(approved.message)
+      const command = {
+        kind: 'claimCliPreparation' as const,
+        preparationId: proposal.preparationId,
+        approvalId: approved.campaign.approvals[0]!.id,
+      }
+      const claimed = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'claim-once',
+        expectedVersion: approved.campaign.version,
+        command,
+      })
+      if (!claimed.ok) throw new Error(claimed.message)
+      expect(claimed.campaign.attempts).toHaveLength(1)
+      const replayed = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'claim-once',
+        expectedVersion: approved.campaign.version,
+        command,
+      })
+      expect(replayed.ok && replayed.replayed).toBe(true)
+      if (replayed.ok) expect(replayed.campaign.attempts).toHaveLength(1)
+    } finally {
+      store.close()
+    }
+  })
 })

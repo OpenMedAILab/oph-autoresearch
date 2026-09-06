@@ -124,6 +124,7 @@ export {
   type ResearchBudget,
   type ResearchCampaign,
   type ResearchCampaignInput,
+  type ResearchCliPreparation,
   type ResearchCommand,
   type ResearchEvent,
   type ResearchExecutionStage,
