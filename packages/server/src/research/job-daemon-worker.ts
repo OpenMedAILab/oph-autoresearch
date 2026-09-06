@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, realpathSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { unlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { prepareCliDraft } from './cli-preparation.ts'
 import { candidateReceipt } from './cli-preparation-candidate.ts'
@@ -140,6 +140,12 @@ export async function runResearchJobWorker(args: readonly string[]) {
     clearInterval(heartbeat)
     await heartbeatInFlight
   }
+  // The only safe exit after daemon TERM is its owned group SIGKILL. Returning
+  // would lose the group leader and could strand a TERM-ignoring CLI descendant.
+  const awaitCancellationEscalation = async () => {
+    if (!terminationRequested) return
+    await new Promise<never>(() => {})
+  }
   try {
     if (process.env.JOB_DAEMON_WORKER_WAIT_AFTER_CLAIM === '1') await Bun.sleep(60_000)
     const latest = (await request(`/jobs/${encodeURIComponent(dispatchKey)}`).then((response) =>
@@ -203,13 +209,19 @@ export async function runResearchJobWorker(args: readonly string[]) {
           },
         })
       } catch {
-        if (terminationRequested) await Bun.sleep(300)
+        await awaitCancellationEscalation()
         return 9
       }
+      await awaitCancellationEscalation()
       const bytes = Buffer.from(`${JSON.stringify(candidateReceipt(cliJob, draft))}\n`)
       const directory = safeOutputDirectory(root, dispatchKey)
       const path = join(directory, 'candidate.json')
       await writeFile(path, bytes, { flag: 'wx' })
+      if (terminationRequested) {
+        await unlink(path).catch(() => {})
+        await awaitCancellationEscalation()
+      }
+      await awaitCancellationEscalation()
       await heartbeatInFlight
       const finish = await request(`/finish/${encodeURIComponent(dispatchKey)}`, {
         method: 'POST',

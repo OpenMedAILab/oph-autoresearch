@@ -931,14 +931,17 @@ export class JobDaemon implements JobDaemonPort {
     })
     return child
   }
-  close() {
+  /** `terminateWorkers: false` models an authority crash for restart-recovery tests. */
+  close(options: { terminateWorkers?: boolean } = {}) {
     this.closed = true
     clearInterval(this.watchdog)
-    for (const [key, child] of this.workers) {
-      this.stopWorkerTree(key)
-      // These are children launched by this exact daemon, so close may clean
-      // them up even when platform identity inspection is unavailable.
-      child.kill()
+    if (options.terminateWorkers !== false) {
+      for (const [key, child] of this.workers) {
+        this.stopWorkerTree(key)
+        // These are children launched by this exact daemon, so close may clean
+        // them up even when platform identity inspection is unavailable.
+        child.kill()
+      }
     }
     this.workers.clear()
     for (const timer of this.escalationTimers.values()) clearTimeout(timer)

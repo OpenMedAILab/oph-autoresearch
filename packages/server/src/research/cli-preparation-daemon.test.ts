@@ -67,24 +67,59 @@ async function fixture(script: string): Promise<{ root: string; daemon: JobDaemo
   const daemon = new JobDaemon({
     dbPath: join(root, 'jobs.sqlite'),
     outputRoot: join(root, 'output'),
-    cliPreparation: {
-      backendPolicyHash: hash('device-backend-policy'),
-      workspaceRoot: root,
-      workspaceScope: '.',
-      credentialHome: join(root, 'credentials'),
-      adapters: [
-        {
-          deviceId: 'local-fixture',
-          kind: 'codex-exec',
-          executable: cli,
-          binaryHash: cliPreparationExecutableHash(cli),
-          id: 'fixture',
-          model: 'fixture-model',
-        },
-      ],
-    },
+    cliPreparation: adminConfig(root, cli),
   })
   return { root, daemon, cli }
+}
+
+function adminConfig(root: string, cli: string) {
+  return {
+    backendPolicyHash: hash('device-backend-policy'),
+    workspaceRoot: root,
+    workspaceScope: '.',
+    credentialHome: join(root, 'credentials'),
+    adapters: [
+      {
+        deviceId: 'local-fixture',
+        kind: 'codex-exec' as const,
+        executable: cli,
+        binaryHash: cliPreparationExecutableHash(cli),
+        id: 'fixture',
+        model: 'fixture-model',
+      },
+    ],
+  }
+}
+
+function bindAdmittedAdapter(job: CliPreparationJobSpec, cli: string) {
+  job.execution.adapterConfigHash = cliPreparationAdapterConfigHash({
+    kind: 'codex-exec',
+    executable: cli,
+    binaryHash: cliPreparationExecutableHash(cli),
+    id: 'fixture',
+    model: 'fixture-model',
+  })
+}
+
+async function waitForPid(path: string) {
+  for (let i = 0; i < 300; i++) {
+    try {
+      const text = await Bun.file(path).text()
+      const pid = Number(text.trim())
+      if (Number.isSafeInteger(pid) && pid > 1) return pid
+    } catch {}
+    await Bun.sleep(10)
+  }
+  throw new Error(`PID marker was not written: ${path}`)
+}
+
+function processExists(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 test('JobDaemon runs an admitted fake CLI and verifies the complete v3 candidate receipt', async () => {
@@ -141,55 +176,70 @@ test('rejects unknown administrator adapters before launch', async () => {
   }
 })
 
-test('cancellation and v3 execution deadlines terminate a preparation worker without a candidate', async () => {
-  const { root, daemon } = await fixture('#!/bin/sh\ntrap "" TERM\nwhile :; do sleep 1; done\n')
+test('a restarted authority kills a started TERM-ignoring CLI group without a candidate', async () => {
+  let daemon: JobDaemon | undefined
+  let restarted: JobDaemon | undefined
+  const { root, daemon: first, cli } = await fixture('')
+  daemon = first
+  const cliPidMarker = join(root, 'cli.pid')
+  const grandchildPidMarker = join(root, 'grandchild.pid')
+  await writeFile(
+    cli,
+    `#!/bin/sh
+echo $$ > '${cliPidMarker}'
+/bin/sh -c 'trap "" TERM; while :; do sleep 1; done' &
+echo $! > '${grandchildPidMarker}'
+trap '' TERM
+while :; do sleep 1; done
+`,
+  )
+  await chmod(cli, 0o755)
+  // Recreate the authority after writing the executable so startup captures its bytes.
+  daemon.close()
+  daemon = new JobDaemon({
+    dbPath: join(root, 'jobs.sqlite'),
+    outputRoot: join(root, 'output'),
+    cliPreparation: adminConfig(root, cli),
+  })
   try {
     const cancelled = spec('prep-cancel')
-    cancelled.execution.adapterConfigHash = cliPreparationAdapterConfigHash({
-      kind: 'codex-exec',
-      executable: join(root, 'fake-cli'),
-      binaryHash: cliPreparationExecutableHash(join(root, 'fake-cli')),
-      id: 'fixture',
-      model: 'fixture-model',
-    })
+    bindAdmittedAdapter(cancelled, cli)
     daemon.submit(cancelled)
     const cancelWorker = await daemon.launchWorker(cancelled.dispatchKey)
     await waitFor(daemon, cancelled.dispatchKey, 'running')
-    await Bun.sleep(50)
-    expect(daemon.cancel(cancelled.dispatchKey)?.status).toBe('cancel_requested')
-    await cancelWorker.exited
-    await waitFor(daemon, cancelled.dispatchKey, 'cancelled')
-    const restarted = new JobDaemon({
+    const cliPid = await waitForPid(cliPidMarker)
+    const grandchildPid = await waitForPid(grandchildPidMarker)
+    expect(processExists(cliPid)).toBe(true)
+    expect(processExists(grandchildPid)).toBe(true)
+    daemon.close({ terminateWorkers: false })
+    daemon = undefined
+    restarted = new JobDaemon({
       dbPath: join(root, 'jobs.sqlite'),
       outputRoot: join(root, 'output'),
-      cliPreparation: {
-        backendPolicyHash: hash('device-backend-policy'),
-        workspaceRoot: root,
-        workspaceScope: '.',
-        credentialHome: join(root, 'credentials'),
-        adapters: [
-          {
-            deviceId: 'local-fixture',
-            kind: 'codex-exec',
-            executable: join(root, 'fake-cli'),
-            binaryHash: cliPreparationExecutableHash(join(root, 'fake-cli')),
-            id: 'fixture',
-            model: 'fixture-model',
-          },
-        ],
-      },
+      cliPreparation: adminConfig(root, cli),
     })
-    expect(restarted.query(cancelled.dispatchKey)?.status).toBe('cancelled')
-    restarted.close()
+    expect(restarted.cancel(cancelled.dispatchKey)?.status).toBe('cancel_requested')
+    await cancelWorker.exited
+    await waitFor(restarted, cancelled.dispatchKey, 'cancelled')
+    expect(processExists(cliPid)).toBe(false)
+    expect(processExists(grandchildPid)).toBe(false)
+    expect(
+      await Bun.file(join(root, 'output', cancelled.dispatchKey, 'candidate.json')).exists(),
+    ).toBe(false)
+  } finally {
+    daemon?.close()
+    restarted?.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
+test('v3 execution deadline terminates preparation without a candidate', async () => {
+  const { root, daemon, cli } = await fixture(
+    '#!/bin/sh\ntrap "" TERM\nwhile :; do sleep 1; done\n',
+  )
+  try {
     const timedOut = spec('prep-timeout', 50)
-    timedOut.execution.adapterConfigHash = cliPreparationAdapterConfigHash({
-      kind: 'codex-exec',
-      executable: join(root, 'fake-cli'),
-      binaryHash: cliPreparationExecutableHash(join(root, 'fake-cli')),
-      id: 'fixture',
-      model: 'fixture-model',
-    })
+    bindAdmittedAdapter(timedOut, cli)
     daemon.submit(timedOut)
     const timeoutWorker = await daemon.launchWorker(timedOut.dispatchKey)
     await timeoutWorker.exited
