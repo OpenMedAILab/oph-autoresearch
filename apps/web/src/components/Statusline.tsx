@@ -87,9 +87,14 @@ export default function Statusline() {
       <Show when={!blank() && !empty()}>
         <span class="statusline-scope">本会话</span>
         <span class="statusline-metric" data-tip="输入 / 输出 token">
-          ↓{compact(totals().input + (totals().cached ?? 0))} ↑{compact(totals().output)}
+          {runs().some((run) => run.usage?.reporting === 'unavailable')
+            ? '包含未回报 CLI 用量'
+            : `↓${compact(totals().input + (totals().cached ?? 0))} ↑${compact(totals().output)}`}
         </span>
-        <span class="statusline-metric statusline-cost">{money(totals().cost)}</span>
+        <span class="statusline-metric statusline-cost">
+          {money(totals().cost)}
+          {runs().some((run) => run.usage?.reporting === 'unavailable') ? ' + CLI 费用未知' : ''}
+        </span>
         <span class="statusline-metric">{runs().length} 轮</span>
       </Show>
       {/* 运行状态放在最右：它是这一条里唯一「正在变」的，与按需刷新的合计隔开。 */}
@@ -116,7 +121,7 @@ function addMaybe(acc: number | null, v: number | null | undefined): number | nu
 /** 把一笔花费并进按币种分的桶里。**不跨币种相加。** */
 function addCost(
   acc: Record<string, number>,
-  cost: number | undefined,
+  cost: number | null | undefined,
   currency: Currency | undefined,
 ): Record<string, number> {
   if (!cost) return acc

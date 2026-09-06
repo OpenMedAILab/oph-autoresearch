@@ -1133,6 +1133,11 @@ ALTER TABLE provider_requests ADD COLUMN purpose TEXT NOT NULL DEFAULT 'turn'
   CHECK (purpose IN ('turn', 'summary'));
 `,
   },
+  {
+    id: 38,
+    name: 'run_usage_reporting',
+    sql: `ALTER TABLE runs ADD COLUMN usage_unavailable INTEGER NOT NULL DEFAULT 0 CHECK (usage_unavailable IN (0, 1));`,
+  },
 ]
 
 /**
@@ -1199,6 +1204,7 @@ export interface MessageRow {
 }
 
 export interface RunRow {
+  usage_unavailable: number
   id: RunId
   conversation_id: ConversationId
   workspace_id: WorkspaceId
@@ -1349,6 +1355,7 @@ export const ROW_COLUMNS: Record<string, readonly string[]> = {
     'cost',
     'currency',
     'usage_turns',
+    'usage_unavailable',
     'step_count',
     'error_message',
     'error_code',

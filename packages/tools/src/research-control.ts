@@ -29,7 +29,7 @@ export const researchControlTool: ToolSpec = {
   },
   actionKind: 'run',
   objectLabel: '研究控制',
-  category: 'research',
+  category: 'planning',
   facet: '受控研究',
   summary: '在已授权 campaign 上执行受控操作',
   permissionEffect: 'internal_control',
@@ -59,12 +59,12 @@ export const researchControlTool: ToolSpec = {
       ? {
           status: 'success',
           message: `研究控制操作完成（HTTP ${result.status}）`,
-          data: result.data,
+          data: { response: result.data },
         }
       : {
           status: 'failure',
           message: `研究控制操作被拒绝（HTTP ${result.status}）`,
-          data: result.data,
+          data: { response: result.data },
         }
   },
 }

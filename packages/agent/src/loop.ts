@@ -2247,7 +2247,7 @@ function mergeUsage(
     acc.cacheWriteTokens = (acc.cacheWriteTokens ?? 0) + turn.cacheWriteTokens
   }
   const turnCost = computeCost(adapter.spec, turn)
-  acc.cost = Math.round((acc.cost + turnCost) * 1e6) / 1e6
+  acc.cost = Math.round(((acc.cost ?? 0) + turnCost) * 1e6) / 1e6
   acc.turns.push({
     turnIndex,
     input: turn.inputTokens,

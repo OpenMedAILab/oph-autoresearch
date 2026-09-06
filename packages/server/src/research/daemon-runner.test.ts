@@ -112,6 +112,13 @@ describe('durable daemon runner integration', () => {
           reviewer: { reviewerId: 'test-human', proofId: 'v2-human', verifiedAt: Date.now() },
           scope: {
             kind: 'execution',
+            executionLimits: {
+              maxRuntimeMs: 600_000,
+              cpu: 1,
+              memoryMb: 256,
+              codeHash: SUPERVISED_BINDING.sourceHash,
+              inputHash: SUPERVISED_INPUT_HASH,
+            },
             taskRevisionId: task.id,
             dispatchKey: input.dispatchKey,
             artifactVersionIds: [],

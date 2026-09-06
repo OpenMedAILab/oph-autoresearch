@@ -353,7 +353,7 @@ async function main(): Promise<number> {
     check(`run 正常收尾（${finished.stopReason}）`, finished.status === 'done', finished.stopReason)
     // `RunUsage` 上是 `cost` 不是 `costUsd`：单位由同结构的 `currency` 决定，
     // 三家国内厂商按人民币标价，装进一个叫 usd 的字段差七倍而界面看不出来。
-    check('计费非零', finished.usage.cost > 0, finished.usage.cost)
+    check('计费非零', (finished.usage.cost ?? 0) > 0, finished.usage.cost)
 
     // seq 必须严格单调递增，否则断线补发的缺口计算全是错的。
     const seqs = frames.map((f) => f.seq)

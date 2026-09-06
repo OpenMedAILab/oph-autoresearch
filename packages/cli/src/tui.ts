@@ -262,7 +262,7 @@ function render(ev: AgentEvent): void {
       const u = ev.usage
       const cached = u.cachedTokens === null ? '未回报' : String(u.cachedTokens)
       process.stdout.write(
-        `\n${DIM}—— ${ev.stopReason} · 入 ${u.inputTokens} 出 ${u.outputTokens} 缓存 ${cached} · ${formatMoney(u.cost, u.currency)}${RESET}\n`,
+        `\n${DIM}—— ${ev.stopReason} · 入 ${u.inputTokens} 出 ${u.outputTokens} 缓存 ${cached} · ${u.cost === null ? '费用未知' : formatMoney(u.cost, u.currency)}${RESET}\n`,
       )
       break
     }

@@ -425,6 +425,8 @@ export function formatCosts(cost: Record<string, number>): string {
 }
 
 export interface RunUsage {
+  /** Native CLI billing may not be reported; token counters then have no measurement semantics. */
+  reporting?: 'unavailable'
   inputTokens: number
   outputTokens: number
   /** 缓存读取命中。null 表示 provider 未回报，与真实 0 命中不是一回事。 */
@@ -439,7 +441,7 @@ export interface RunUsage {
    * 把 ¥6 装进一个叫 usd 的字段差的是七倍，而界面上完全看不出来——它只是一个数字。
    * 落盘的列名同名（迁移 7）。
    */
-  cost: number
+  cost: number | null
   /** 上面那个数字的币种。**不做汇率换算**：换算出来的数字没有出处。 */
   currency: Currency
   /** 每轮一条，供命中率分桶与成本审计；不参与计费。 */

@@ -300,7 +300,7 @@ export function ResearchStageDetail() {
       </header>
 
       <ResearchCampaignPanel />
-      <p>以下为聊天执行记录（legacy_unverified），不代表科研产物已核验或人工批准。</p>
+      <p>以下为聊天执行记录，不代表科研产物已核验或人工批准。</p>
       <section class="research-stage-card" aria-label={`${stage().name}阶段详情`}>
         <div class="research-stage-meta">
           <div>
@@ -391,7 +391,7 @@ export function ResearchStageDetail() {
         <IconShield size={15} />
         <span>
           <strong>科研审批渠道未配置</strong>
-          当前工作流检查点由主会话模型审查，不构成人类批准；研究执行与结论发布尚未接入科研审批。
+          当前工作流检查点由主会话模型审查，不构成人类批准。研究实验请通过提案账本的独立审批渠道提交，结论发布仍需核验对应证据。
         </span>
       </div>
     </div>

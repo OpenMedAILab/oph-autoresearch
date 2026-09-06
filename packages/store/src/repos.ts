@@ -754,7 +754,7 @@ export function updateRunUsage(store: Store, id: RunId, usage: RunUsage): void {
   store.db
     .query(
       `UPDATE runs SET input_tokens = ?, output_tokens = ?, cached_tokens = ?,
-       cache_write_tokens = ?, reasoning_tokens = ?, cost = ?, currency = ?, usage_turns = ? WHERE id = ?`,
+       cache_write_tokens = ?, reasoning_tokens = ?, cost = ?, currency = ?, usage_turns = ?, usage_unavailable = ? WHERE id = ?`,
     )
     .run(
       usage.inputTokens,
@@ -762,9 +762,10 @@ export function updateRunUsage(store: Store, id: RunId, usage: RunUsage): void {
       usage.cachedTokens,
       usage.cacheWriteTokens,
       usage.reasoningTokens,
-      usage.cost,
+      usage.cost ?? 0,
       usage.currency,
       JSON.stringify(usage.turns),
+      usage.reporting === 'unavailable' || usage.cost === null ? 1 : 0,
       id,
     )
 }
@@ -1608,7 +1609,8 @@ function rowToRun(r: RunRow): Run {
       cachedTokens: r.cached_tokens,
       cacheWriteTokens: r.cache_write_tokens,
       reasoningTokens: r.reasoning_tokens,
-      cost: r.cost,
+      cost: r.usage_unavailable ? null : r.cost,
+      ...(r.usage_unavailable ? { reporting: 'unavailable' as const } : {}),
       currency: r.currency,
       turns: readJson(r.usage_turns, []),
     },

@@ -95,6 +95,13 @@ export interface TrustedHumanReviewerProof {
 export type ApprovalStatus = 'active' | 'revoked' | 'invalidated'
 
 export interface ResearchApprovalScope {
+  executionLimits?: {
+    maxRuntimeMs: number
+    cpu: number
+    memoryMb: number
+    codeHash: string
+    inputHash: string
+  }
   backendPolicyHash?: string
   trackingPolicyHash?: string
   kind: 'protocol' | 'execution' | 'model_review' | 'release'

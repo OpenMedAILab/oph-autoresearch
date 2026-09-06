@@ -636,8 +636,16 @@ function nextCampaign(
       }
       if (command.scope !== undefined) {
         const scope = command.scope
+        const scopedTask = campaign.taskRevisions.find((task) => task.id === scope?.taskRevisionId)
         if (
           !scope ||
+          (scope.kind === 'execution' &&
+            scopedTask?.templateId === 'supervised-phantom-v2' &&
+            (scope.executionLimits?.maxRuntimeMs !== 600_000 ||
+              scope.executionLimits.cpu !== 1 ||
+              scope.executionLimits.memoryMb !== 256 ||
+              scope.executionLimits.codeHash !== scopedTask.skillBinding?.sourceHash ||
+              scope.executionLimits.inputHash !== scopedTask.inputHash)) ||
           (scope.trackingPolicyHash !== undefined &&
             (scope.kind !== 'execution' || !SHA256.test(scope.trackingPolicyHash))) ||
           (scope.backendPolicyHash !== undefined &&

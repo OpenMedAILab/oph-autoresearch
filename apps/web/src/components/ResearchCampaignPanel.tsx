@@ -78,7 +78,7 @@ const backendLabels = {
 export function ResearchCampaignPanel() {
   const [approvalChannel, setApprovalChannel] = createSignal<string | null>(null)
   const [templateCatalog, setTemplateCatalog] = createSignal<
-    Array<{ id: string; inputHash: string }>
+    Array<{ id: string; inputHash: string; codeHash: string }>
   >([])
   const [executionBackends, setExecutionBackends] = createSignal<
     Array<{ id: string; backendPolicyHash: string | null; trackingPolicyHash: string | null }>
@@ -103,7 +103,7 @@ export function ResearchCampaignPanel() {
     const result = await client.api<{
       campaigns: ResearchCampaign[]
       approvalUrl?: string | null
-      templates?: Array<{ id: string; inputHash: string }>
+      templates?: Array<{ id: string; inputHash: string; codeHash: string }>
       executionBackends?: Array<{
         id: string
         backendPolicyHash: string | null
@@ -194,7 +194,7 @@ export function ResearchCampaignPanel() {
     if (!pending.has(key)) pending.set(key, crypto.randomUUID())
     await act(async () => {
       await client.api(
-        `/api/research/campaigns/${campaign.id}/synthetic?ws=${encodeURIComponent(campaign.workspaceId)}`,
+        `/api/research/campaigns/${campaign.id}/synthetic?accepted=true&ws=${encodeURIComponent(campaign.workspaceId)}`,
         {
           method: 'POST',
           body: JSON.stringify({
@@ -259,6 +259,17 @@ export function ResearchCampaignPanel() {
           bundleHash: current.bundleHash,
           scope: {
             kind: 'execution',
+            ...(templateId === 'supervised-phantom-v2'
+              ? {
+                  executionLimits: {
+                    maxRuntimeMs: 600_000,
+                    cpu: 1,
+                    memoryMb: 256,
+                    codeHash: template.codeHash,
+                    inputHash: template.inputHash,
+                  },
+                }
+              : {}),
             taskRevisionId: task.id,
             dispatchKey: key,
             artifactVersionIds: task.artifactVersionIds ?? [],
@@ -283,7 +294,7 @@ export function ResearchCampaignPanel() {
         const approval = approved.campaign.approvals.find(
           (item) => item.scope?.dispatchKey === key,
         )!
-        await client.api(`${endpoint}/synthetic${suffix}`, {
+        await client.api(`${endpoint}/synthetic${suffix}&accepted=true`, {
           method: 'POST',
           body: JSON.stringify({
             expectedVersion: approved.campaign.version,

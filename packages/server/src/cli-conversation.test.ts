@@ -65,6 +65,11 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
       expect((await run('first question')).at(-1)).toMatchObject({
         type: 'run.finished',
         status: 'done',
+        usage: { cost: null, reporting: 'unavailable' },
+      })
+      expect(listRuns(store, conv.id)[0]!.usage).toMatchObject({
+        cost: null,
+        reporting: 'unavailable',
       })
       expect(await run('second question')).toContainEqual(
         expect.objectContaining({ type: 'text.delta', delta: 'CLI answer' }),

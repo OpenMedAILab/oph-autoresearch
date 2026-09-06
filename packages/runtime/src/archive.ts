@@ -413,14 +413,14 @@ function toMarkdown(bundle: ArchiveBundle, opts: ArchiveOptions): string {
 
   const totals = bundle.runs.reduce(
     (a, r) => ({
-      cost: a.cost + r.usage.cost,
+      cost: a.cost + (r.usage.cost ?? 0),
       input: a.input + r.usage.inputTokens,
       output: a.output + r.usage.outputTokens,
     }),
     { cost: 0, input: 0, output: 0 },
   )
   out.push(
-    `- ${bundle.runs.length} 轮 · 入 ${totals.input} 出 ${totals.output} · $${totals.cost.toFixed(4)}`,
+    `- ${bundle.runs.length} 轮 · 入 ${totals.input} 出 ${totals.output} · ${bundle.runs.some((run) => run.usage.cost === null) ? `$${totals.cost.toFixed(4)} 已知费用 + CLI 费用未知` : `$${totals.cost.toFixed(4)}`}`,
   )
 
   // 压缩过的会话要**在最上面**说清楚：读者看到的历史与模型看到的不是同一份，

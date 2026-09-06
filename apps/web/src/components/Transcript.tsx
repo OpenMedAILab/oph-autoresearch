@@ -670,13 +670,18 @@ function RunStatusBar(props: {
             {(usage) => (
               <>
                 <span class="run-metric" data-tip="输入 / 输出 token">
-                  ↓{compact(usage().inputTokens)} ↑{compact(usage().outputTokens)}
+                  {usage().reporting === 'unavailable'
+                    ? 'CLI 用量未回报'
+                    : `↓${compact(usage().inputTokens)} ↑${compact(usage().outputTokens)}`}
                 </span>
                 {/* 计价为 0 时不显示金额：未知计价冒充免费更误导。 */}
-                <Show when={usage().cost > 0}>
+                <Show when={(usage().cost ?? 0) > 0}>
                   <span class="run-metric run-cost">
-                    {formatMoney(usage().cost, usage().currency)}
+                    {formatMoney(usage().cost!, usage().currency)}
                   </span>
+                </Show>
+                <Show when={usage().cost === null}>
+                  <span class="run-metric run-cost">费用未知</span>
                 </Show>
               </>
             )}

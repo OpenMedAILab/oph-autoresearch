@@ -13,6 +13,7 @@ import {
   markRunRunning,
   type Store,
   setConversationTitle,
+  updateRunUsage,
   workspaceOf,
 } from '@oph-autoresearch/store'
 import { findCli, runCli } from '@oph-autoresearch/team'
@@ -185,15 +186,17 @@ export class CliConversationSession {
     finishRun(store, run.id, { status, stopReason, ...(failure ? { errorMessage: failure } : {}) })
     // CLI 账单由其自身管理；不伪造 API 计费明细。
     const usage: RunUsage = {
+      reporting: 'unavailable',
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: null,
       cacheWriteTokens: null,
       reasoningTokens: 0,
-      cost: 0,
+      cost: null,
       currency: 'USD',
       turns: [],
     }
+    updateRunUsage(store, run.id, usage)
     yield { type: 'run.finished', runId: run.id, status, stopReason, usage, fileChanges: [] }
   }
 }

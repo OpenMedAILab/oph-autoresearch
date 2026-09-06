@@ -173,7 +173,9 @@ export async function startSyntheticRunBackground(
 ): Promise<SyntheticRunResult> {
   const claimed = await claimSyntheticRun(input, hooks)
   if ('result' in claimed) return claimed.result
-  void completeClaimedSyntheticRun(input, hooks, claimed).catch(() => undefined)
+  void completeClaimedSyntheticRun(input, hooks, claimed).catch(() => {
+    console.error('research background completion failed to persist', claimed.attempt.id)
+  })
   return {
     ok: true,
     campaign: claimed.claim.campaign,

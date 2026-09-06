@@ -628,21 +628,22 @@ export class Session {
           // 账本在**收尾时记一次**。中途的 usage 是累计值，每次都记会把同一笔钱
           // 记很多遍；而 run 上那份 usage 会随会话删除一起消失，答不了
           // 「这个月花了多少」。
-          recordUsage(store, {
-            kind: 'run',
-            runId: run.id,
-            conversationId,
-            workspaceId: this.workspaceId,
-            model,
-            provider: this.resolveProfile(target).kind,
-            inputTokens: ev.usage.inputTokens,
-            outputTokens: ev.usage.outputTokens,
-            cachedTokens: ev.usage.cachedTokens,
-            cacheWriteTokens: ev.usage.cacheWriteTokens,
-            reasoningTokens: ev.usage.reasoningTokens,
-            cost: ev.usage.cost,
-            currency: ev.usage.currency,
-          })
+          if (ev.usage.cost !== null)
+            recordUsage(store, {
+              kind: 'run',
+              runId: run.id,
+              conversationId,
+              workspaceId: this.workspaceId,
+              model,
+              provider: this.resolveProfile(target).kind,
+              inputTokens: ev.usage.inputTokens,
+              outputTokens: ev.usage.outputTokens,
+              cachedTokens: ev.usage.cachedTokens,
+              cacheWriteTokens: ev.usage.cacheWriteTokens,
+              reasoningTokens: ev.usage.reasoningTokens,
+              cost: ev.usage.cost,
+              currency: ev.usage.currency,
+            })
         }
         yield ev
       }
