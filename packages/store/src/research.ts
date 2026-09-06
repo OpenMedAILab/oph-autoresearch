@@ -167,6 +167,16 @@ function bundleHash(campaign: ResearchCampaign): string {
   return digest(canonicalResearchBundle(campaign))
 }
 
+function cliPreparationConfigHash(command: Extract<ResearchCommand, { kind: 'proposeCliPreparation' }>) {
+  return digest(canonicalJson({
+    preparationId: command.preparationId, taskRevisionId: command.taskRevisionId,
+    dispatchKey: command.dispatchKey, candidateId: command.candidateId,
+    adapterId: command.adapterId, model: command.model, instructions: command.instructions,
+    inputHash: command.inputHash, deviceId: command.deviceId,
+    maxRuntimeMs: command.maxRuntimeMs, maxCost: command.maxCost,
+  }))
+}
+
 function invalidateChangedApprovals(campaign: ResearchCampaign, now: number): ResearchCampaign {
   return {
     ...campaign,
@@ -615,6 +625,7 @@ function nextCampaign(
           : null) ??
         (!SHA256.test(command.inputHash) ? 'inputHash 无效' : null) ??
         (!SHA256.test(command.configHash) ? 'configHash 无效' : null) ??
+        (command.configHash !== cliPreparationConfigHash(command) ? 'configHash 未绑定完整准备规格' : null) ??
         (!Number.isSafeInteger(command.maxRuntimeMs) ||
         command.maxRuntimeMs < 1 ||
         command.maxRuntimeMs > 600_000
@@ -628,12 +639,12 @@ function nextCampaign(
       if (
         error ||
         !task ||
-        task.status === 'stale' ||
+        withDerivedTaskStatuses(campaign).taskRevisions.find((candidate) => candidate.id === task.id)?.status === 'stale' ||
         task.inputHash !== command.inputHash ||
         (campaign.cliPreparations ?? []).some(
           (candidate) =>
             candidate.id === command.preparationId || candidate.dispatchKey === command.dispatchKey,
-        )
+        ) || campaign.attempts.some((attempt) => attempt.dispatchKey === command.dispatchKey)
       )
         return invalid('invalid_cli_preparation_proposal', error ?? '任务版本或 dispatchKey 不可用')
       const preparation: ResearchCliPreparation = {
@@ -668,6 +679,7 @@ function nextCampaign(
       if (
         !preparation ||
         !task ||
+        withDerivedTaskStatuses(campaign).taskRevisions.find((candidate) => candidate.id === task.id)?.status === 'stale' ||
         preparation.status !== 'proposed' ||
         approval?.status !== 'active' ||
         approval.consumedBy ||
@@ -680,6 +692,7 @@ function nextCampaign(
         approval.scope.maxCost !== preparation.maxCost ||
         approval.scope.executionLimits?.maxRuntimeMs !== preparation.maxRuntimeMs ||
         approval.scope.executionLimits?.inputHash !== preparation.inputHash
+        || campaign.attempts.some((attempt) => attempt.dispatchKey === preparation.dispatchKey)
       )
         return invalid('cli_preparation_approval_required', '准备任务需要精确且未消费的人类审批')
       const attempt: ResearchAttempt = {
