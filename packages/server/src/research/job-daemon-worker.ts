@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, realpathSync } from 'node:fs'
 import { unlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
+import { Worker } from 'node:worker_threads'
 import { prepareCliDraft } from './cli-preparation.ts'
 import { candidateReceipt } from './cli-preparation-candidate.ts'
 import {
@@ -13,7 +14,7 @@ import {
   isCliPreparationJob,
 } from './cli-preparation-job.ts'
 import { type FormalOciJobSpec, isFormalOciJob } from './formal-job.ts'
-import { FormalOciAdapter, type FormalOciAdministratorConfig } from './formal-oci.ts'
+import type { FormalOciAdministratorConfig } from './formal-oci.ts'
 import {
   captureRunnerTracking,
   collectRunnerTracking,
@@ -37,6 +38,37 @@ function formalOciConfig(): FormalOciAdministratorConfig | null {
   } catch {
     return null
   }
+}
+
+type FormalThreadResult = {
+  ok: boolean
+  error?: string
+  result?: { exitCode: number; stdout: Uint8Array; stderr: Uint8Array; cleanupConfirmed: boolean }
+  receipt?: Uint8Array | null
+}
+
+/** Keeps daemon lease renewal on this event loop while Podman and dataset hashing run elsewhere. */
+function runFormalOciInThread(
+  config: FormalOciAdministratorConfig,
+  job: FormalOciJobSpec,
+  directory: string,
+): Promise<FormalThreadResult> {
+  return new Promise((resolveResult) => {
+    const worker = new Worker(new URL('./formal-oci-worker.ts', import.meta.url), {
+      workerData: { config, job, directory },
+    })
+    let settled = false
+    const settle = (result: FormalThreadResult) => {
+      if (settled) return
+      settled = true
+      resolveResult(result)
+    }
+    worker.once('message', (message: FormalThreadResult) => settle(message))
+    worker.once('error', () => settle({ ok: false, error: 'formal OCI worker crashed' }))
+    worker.once('exit', (code) => {
+      if (code !== 0) settle({ ok: false, error: 'formal OCI worker exited unexpectedly' })
+    })
+  })
 }
 
 function cliPreparationConfig(): CliPreparationAdministratorConfig | null {
@@ -176,16 +208,17 @@ export async function runResearchJobWorker(args: readonly string[]) {
       const config = formalOciConfig()
       if (!config) return 10
       const directory = safeOutputDirectory(root, dispatchKey)
-      let adapter: FormalOciAdapter
       try {
-        adapter = new FormalOciAdapter(config)
-        const result = adapter.run(job.spec, directory)
+        const completed = await runFormalOciInThread(config, job.spec, directory)
+        if (!completed.ok || !completed.result) return 12
+        const result = completed.result
         // Podman output is diagnostic only.  Keep both streams bounded by the
         // adapter and never feed worker-reported metrics into the evaluator.
         await writeFile(join(directory, 'formal-stdout.log'), result.stdout, { flag: 'wx' })
         await writeFile(join(directory, 'formal-stderr.log'), result.stderr, { flag: 'wx' })
         if (result.exitCode !== 0 || !result.cleanupConfirmed || terminationRequested) return 11
-        const receipt = Buffer.from(`${JSON.stringify(adapter.evaluate(job.spec, directory))}\n`)
+        if (!completed.receipt) return 12
+        const receipt = Buffer.from(completed.receipt)
         const path = join(directory, 'formal-receipt.json')
         await writeFile(path, receipt, { flag: 'wx' })
         await heartbeatInFlight
