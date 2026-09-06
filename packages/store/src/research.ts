@@ -315,6 +315,12 @@ function reservationForSubject(
         ?.reservedCost ?? null
     )
   }
+  if (subject.kind === 'formal_execution') {
+    return (
+      (campaign.formalExecutionDispatches ?? []).find((item) => item.id === subject.id)
+        ?.reservedMaxCost ?? null
+    )
+  }
   const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
   return review ? review.reservedCost : null
 }
@@ -404,6 +410,10 @@ function committedCost(campaign: ResearchCampaign): number {
       kind: 'formal_review' as const,
       id: review.id,
     })),
+    ...(campaign.formalExecutionDispatches ?? []).map((dispatch) => ({
+      kind: 'formal_execution' as const,
+      id: dispatch.id,
+    })),
     ...(campaign.controllerReservations ?? []).map((reservation) => ({
       kind: 'controller' as const,
       id: reservation.id,
@@ -450,6 +460,10 @@ export function researchCostSummary(campaign: ResearchCampaign) {
       kind: 'formal_review' as const,
       id: review.id,
     })),
+    ...(campaign.formalExecutionDispatches ?? []).map((dispatch) => ({
+      kind: 'formal_execution' as const,
+      id: dispatch.id,
+    })),
     ...(campaign.controllerReservations ?? []).map((reservation) => ({
       kind: 'controller' as const,
       id: reservation.id,
@@ -495,6 +509,7 @@ function validCostSubject(
     (value.kind !== 'cli_preparation' &&
       value.kind !== 'model_review' &&
       value.kind !== 'formal_review' &&
+      value.kind !== 'formal_execution' &&
       value.kind !== 'controller') ||
     typeof value.id !== 'string' ||
     value.id !== value.id.trim() ||
@@ -512,7 +527,9 @@ function costSubjectLabel(campaign: ResearchCampaign, subject: ResearchCostSubje
         ? (campaign.modelReviews ?? [])
         : subject.kind === 'formal_review'
           ? (campaign.formalReviewDispatches ?? [])
-          : (campaign.controllerReservations ?? [])
+          : subject.kind === 'formal_execution'
+            ? (campaign.formalExecutionDispatches ?? [])
+            : (campaign.controllerReservations ?? [])
   const index = entries.findIndex((entry) => entry.id === subject.id)
   if (index < 0) return null
   return `第 ${index + 1} 次${
@@ -522,7 +539,9 @@ function costSubjectLabel(campaign: ResearchCampaign, subject: ResearchCostSubje
         ? '独立复核'
         : subject.kind === 'formal_review'
           ? '正式代码审阅'
-          : '有界主控'
+          : subject.kind === 'formal_execution'
+            ? '正式执行'
+            : '有界主控'
   }`
 }
 
@@ -550,6 +569,14 @@ function subjectExecutionIsTerminal(
   if (subject.kind === 'formal_review') {
     const dispatch = (campaign.formalReviewDispatches ?? []).find((item) => item.id === subject.id)
     return Boolean(dispatch && ['done', 'failed', 'unknown'].includes(dispatch.status))
+  }
+  if (subject.kind === 'formal_execution') {
+    const dispatch = (campaign.formalExecutionDispatches ?? []).find(
+      (item) => item.id === subject.id,
+    )
+    return Boolean(
+      dispatch && ['completed', 'failed', 'unknown', 'cancelled'].includes(dispatch.status),
+    )
   }
   const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
   return Boolean(
@@ -1008,6 +1035,35 @@ function currentCliObserver(
   if (!binding) return true
   return Boolean(
     observer &&
+      binding.observer?.instanceId === observer.instanceId &&
+      binding.observer.generation === observer.generation &&
+      binding.observer.expiresAt > now,
+  )
+}
+
+function formalAuthorityMatches(
+  attempt: ResearchAttempt,
+  expectedEpoch: string,
+  expectedJobSpecHash: string,
+) {
+  const binding = attempt.formalExecutionAuthority
+  return Boolean(
+    binding &&
+      binding.epoch === expectedEpoch &&
+      binding.jobSpecHash === expectedJobSpecHash &&
+      binding.jobSpecHash === attempt.formalExecutionJobSpecHash,
+  )
+}
+
+function currentFormalObserver(
+  attempt: ResearchAttempt,
+  observer: { instanceId: string; generation: number } | undefined,
+  now: number,
+) {
+  const binding = attempt.formalExecutionAuthority
+  return Boolean(
+    binding &&
+      observer &&
       binding.observer?.instanceId === observer.instanceId &&
       binding.observer.generation === observer.generation &&
       binding.observer.expiresAt > now,
@@ -2072,6 +2128,307 @@ function nextCampaign(
         formalExecutionPlans: [...(campaign.formalExecutionPlans ?? []), cloneJson(plan)],
         approvals: campaign.approvals.map((item) =>
           item.id === approval.id ? { ...item, consumedBy: `formal-plan:${plan.planId}` } : item,
+        ),
+      }
+      break
+    }
+    case 'reserveFormalExecution': {
+      const plan = (campaign.formalExecutionPlans ?? []).find(
+        (item) => item.planId === command.planId,
+      )
+      const approval = campaign.approvals.find((item) => item.id === command.approvalId)
+      const scope = approval?.scope
+      if (
+        progressControl(campaign).state !== 'active' ||
+        !plan ||
+        formalExecutionPlanHash(plan) !== command.planHash ||
+        plan.workspaceBindingHash !== command.workspaceBindingHash ||
+        !approval ||
+        approval.status !== 'active' ||
+        approval.consumedBy ||
+        scope?.kind !== 'formal_execution' ||
+        scope.expiresAt <= now ||
+        scope.formalPlanHash !== command.planHash ||
+        scope.formalEvaluatorId !== plan.trustedEvaluatorId ||
+        canonicalJson(scope.formalResources) !== canonicalJson(plan.resources) ||
+        scope.maxCost < command.reservedMaxCost ||
+        scope.currency !== campaign.budget.currency ||
+        ![command.routeId, command.profileId, command.remoteRoot, command.authorityId].every(
+          (item) => typeof item === 'string' && item.trim().length > 0,
+        ) ||
+        ![
+          command.connectionHash,
+          command.workspaceBindingHash,
+          command.admissionEvidenceHash,
+        ].every((item) => SHA256.test(item)) ||
+        !Number.isFinite(command.reservedMaxCost) ||
+        command.reservedMaxCost < 0 ||
+        (campaign.formalExecutionDispatches ?? []).some((item) => item.planId === plan.planId) ||
+        saturatedCostSum([committedCost(campaign), command.reservedMaxCost]) > campaign.budget.limit
+      )
+        return invalid(
+          'formal_execution_approval_required',
+          'Formal execution requires the frozen exact plan, current approval and reserved budget',
+        )
+      const id = randomId('fed')
+      next = {
+        ...campaign,
+        formalExecutionDispatches: [
+          ...(campaign.formalExecutionDispatches ?? []),
+          {
+            id,
+            planId: plan.planId,
+            planHash: command.planHash,
+            attemptId: null,
+            approvalId: approval.id,
+            routeId: command.routeId,
+            profileId: command.profileId,
+            workspaceBindingHash: command.workspaceBindingHash,
+            connectionHash: command.connectionHash,
+            remoteRoot: command.remoteRoot,
+            authorityId: command.authorityId,
+            admissionEvidenceHash: command.admissionEvidenceHash,
+            reservedMaxCost: command.reservedMaxCost,
+            status: 'reserved' as const,
+          },
+        ],
+        approvals: campaign.approvals.map((item) =>
+          item.id === approval.id ? { ...item, consumedBy: `formal-execution:${id}` } : item,
+        ),
+      }
+      break
+    }
+    case 'claimFormalExecution': {
+      const dispatch = (campaign.formalExecutionDispatches ?? []).find(
+        (item) => item.id === command.dispatchId,
+      )
+      const plan = dispatch
+        ? (campaign.formalExecutionPlans ?? []).find((item) => item.planId === dispatch.planId)
+        : undefined
+      if (
+        progressControl(campaign).state !== 'active' ||
+        !dispatch ||
+        !plan ||
+        dispatch.status !== 'reserved' ||
+        dispatch.attemptId !== null
+      )
+        return invalid(
+          'formal_execution_claim_denied',
+          'Formal execution dispatch is not available',
+        )
+      const attemptId = randomId('rat')
+      const attempt: ResearchAttempt = {
+        id: attemptId,
+        taskRevisionId: plan.taskRevisionId,
+        dispatchKey: attemptId,
+        backend: 'ssh-daemon',
+        ownerPid: process.pid,
+        status: 'running',
+        executionStartedAt: now,
+        endedAt: null,
+        artifactVersionId: null,
+        error: null,
+        cancelRequestedAt: null,
+      }
+      next = {
+        ...campaign,
+        attempts: [...campaign.attempts, attempt],
+        formalExecutionDispatches: campaign.formalExecutionDispatches!.map((item) =>
+          item.id === dispatch.id ? { ...item, attemptId, status: 'bound' as const } : item,
+        ),
+      }
+      break
+    }
+    case 'bindFormalExecutionJob': {
+      const dispatch = (campaign.formalExecutionDispatches ?? []).find(
+        (item) => item.id === command.dispatchId,
+      )
+      const attempt = attemptById(campaign, command.attemptId)
+      const plan = dispatch
+        ? (campaign.formalExecutionPlans ?? []).find((item) => item.planId === dispatch.planId)
+        : undefined
+      const specHash = command.spec ? digest(canonicalJson(command.spec)) : ''
+      if (
+        !dispatch ||
+        !plan ||
+        !attempt ||
+        dispatch.attemptId !== attempt.id ||
+        attempt.status !== 'running' ||
+        attempt.formalExecutionJobSpec ||
+        !command.spec ||
+        command.spec.version !== 4 ||
+        command.spec.campaignId !== campaign.id ||
+        command.spec.taskRevisionId !== plan.taskRevisionId ||
+        command.spec.dispatchKey !== attempt.id ||
+        command.spec.formalPlanHash !== dispatch.planHash ||
+        canonicalJson(command.spec.formalPlan) !== canonicalJson(plan) ||
+        command.spec.execution.authorityEpoch !== command.authority?.epoch ||
+        !AUTHORITY_EPOCH.test(command.authority?.epoch ?? '') ||
+        command.authority?.schema !== 'formal-execution-authority-binding-v1' ||
+        command.authority.routeId !== dispatch.routeId ||
+        command.authority.profileId !== dispatch.profileId ||
+        command.authority.workspaceBindingHash !== dispatch.workspaceBindingHash ||
+        command.authority.connectionHash !== dispatch.connectionHash ||
+        command.authority.remoteRoot !== dispatch.remoteRoot ||
+        command.authority.authorityId !== dispatch.authorityId ||
+        command.authority.admissionEvidenceHash !== dispatch.admissionEvidenceHash ||
+        command.authority.jobSpecHash !== specHash ||
+        command.authority.dispatchState !== 'not_sent'
+      )
+        return invalid(
+          'invalid_formal_execution_binding',
+          'Formal job must bind the reserved route and exact plan',
+        )
+      next = {
+        ...campaign,
+        attempts: campaign.attempts.map((item) =>
+          item.id === attempt.id
+            ? {
+                ...item,
+                formalExecutionJobSpec: cloneJson(command.spec),
+                formalExecutionJobSpecHash: specHash,
+                formalExecutionAuthority: cloneJson(command.authority),
+              }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'claimFormalExecutionDispatch':
+    case 'acquireFormalExecutionObservation': {
+      const attempt = attemptById(campaign, command.attemptId)
+      const binding = attempt?.formalExecutionAuthority
+      const prior = binding?.observer
+      const renewal = prior?.instanceId === command.instanceId && prior.expiresAt > now
+      const first = command.kind === 'claimFormalExecutionDispatch'
+      if (
+        !attempt ||
+        !binding ||
+        !validObserverLease(command, now) ||
+        !formalAuthorityMatches(attempt, command.expectedEpoch, command.expectedJobSpecHash) ||
+        !['running', 'unknown'].includes(attempt.status) ||
+        (first ? binding.dispatchState !== 'not_sent' : binding.dispatchState === 'not_sent') ||
+        (!first && prior !== undefined && prior.expiresAt > now && !renewal) ||
+        (!first && renewal && command.leaseExpiresAt < prior.expiresAt)
+      )
+        return invalid(
+          'invalid_formal_execution_observer',
+          'Formal execution observer lease is not current',
+        )
+      next = {
+        ...campaign,
+        attempts: campaign.attempts.map((item) =>
+          item.id === attempt.id
+            ? {
+                ...item,
+                formalExecutionAuthority: {
+                  ...binding,
+                  dispatchState: first ? 'sending' : binding.dispatchState,
+                  observer: {
+                    instanceId: command.instanceId,
+                    generation: first
+                      ? 1
+                      : renewal
+                        ? prior!.generation
+                        : (prior?.generation ?? 0) + 1,
+                    expiresAt: command.leaseExpiresAt,
+                  },
+                },
+              }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'acknowledgeFormalExecutionDispatch':
+    case 'markFormalExecutionObservationUnknown': {
+      const attempt = attemptById(campaign, command.attemptId)
+      const binding = attempt?.formalExecutionAuthority
+      if (
+        !attempt ||
+        !binding ||
+        binding.epoch !== command.expectedEpoch ||
+        !currentFormalObserver(
+          attempt,
+          { instanceId: command.instanceId, generation: command.generation },
+          now,
+        )
+      )
+        return invalid('stale_formal_execution_observer', 'Formal execution observer is stale')
+      const acknowledge = command.kind === 'acknowledgeFormalExecutionDispatch'
+      if (acknowledge && binding.dispatchState !== 'sending')
+        return invalid(
+          'invalid_formal_execution_acknowledgement',
+          'Formal execution was not sending',
+        )
+      next = {
+        ...campaign,
+        attempts: campaign.attempts.map((item) =>
+          item.id === attempt.id
+            ? {
+                ...item,
+                status: acknowledge ? item.status : 'unknown',
+                error: acknowledge ? item.error : 'Authority observation is unknown',
+                formalExecutionAuthority: {
+                  ...binding,
+                  dispatchState: acknowledge ? 'acknowledged' : 'observation_unknown',
+                },
+              }
+            : item,
+        ),
+        formalExecutionDispatches: (campaign.formalExecutionDispatches ?? []).map((item) =>
+          item.attemptId === attempt.id && !acknowledge
+            ? { ...item, status: 'unknown' as const }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'finishFormalExecution': {
+      const attempt = attemptById(campaign, command.attemptId)
+      const dispatch = (campaign.formalExecutionDispatches ?? []).find(
+        (item) => item.attemptId === attempt?.id,
+      )
+      if (
+        !attempt ||
+        !dispatch ||
+        !currentFormalObserver(attempt, command.observer, now) ||
+        attempt.cancelRequestedAt !== null ||
+        !SHA256.test(command.contentHash) ||
+        !SHA256.test(command.receiptHash) ||
+        command.contentHash !== command.receiptHash ||
+        textError(command.uri, 'uri')
+      )
+        return invalid(
+          'invalid_formal_execution_finish',
+          'Formal execution receipt is not admissible',
+        )
+      const artifact: ArtifactVersion = {
+        id: randomId('rav'),
+        artifactId: dispatch.planId,
+        version: 1,
+        uri: command.uri.trim(),
+        kind: 'formal_execution_receipt',
+        contentHash: command.contentHash,
+        createdAt: now,
+        mediaType: 'application/json',
+        dataClass: 'restricted-reference',
+        schemaId: 'research-formal-oci-receipt-v1',
+        producerAttemptId: attempt.id,
+        producerTaskRevisionId: attempt.taskRevisionId,
+      }
+      next = {
+        ...campaign,
+        artifactVersions: [...campaign.artifactVersions, artifact],
+        attempts: campaign.attempts.map((item) =>
+          item.id === attempt.id
+            ? { ...item, status: 'completed', endedAt: now, artifactVersionId: artifact.id }
+            : item,
+        ),
+        formalExecutionDispatches: campaign.formalExecutionDispatches!.map((item) =>
+          item.id === dispatch.id
+            ? { ...item, status: 'completed', receiptHash: command.receiptHash }
+            : item,
         ),
       }
       break

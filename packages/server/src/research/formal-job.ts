@@ -1,28 +1,12 @@
 import { createHash } from 'node:crypto'
-import type { FormalExecutionPlan } from '@oph-autoresearch/core'
+import type { FormalExecutionJobSpec, FormalExecutionPlan } from '@oph-autoresearch/core'
 import { canonicalFormalExecutionPlan, validFormalExecutionPlan } from '@oph-autoresearch/core'
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const SHA256 = /^sha256:[a-f0-9]{64}$/
 
-export interface FormalOciJobSpec {
-  version: 4
-  dispatchKey: string
-  campaignId: string
-  taskRevisionId: string
-  /** Immutable human-approved plan; no command or host path is admitted here. */
-  formalPlan: FormalExecutionPlan
-  formalPlanHash: string
-  lease: { ownerId: string; token: string; fence: number; expiresAt: number }
-  execution: {
-    adapter: 'formal-rootless-oci-v1'
-    /** Keeps legacy JobSpec discriminated consumers source-compatible; always absent on v4. */
-    codeHash?: undefined
-    /** Deterministic durable identity used for inspect/recovery, never --replace. */
-    containerName: string
-    authorityEpoch: string
-  }
-}
+/** Server name retained for callers; core owns the durable v4 schema. */
+export type FormalOciJobSpec = FormalExecutionJobSpec
 
 export function formalExecutionPlanHash(plan: FormalExecutionPlan) {
   return `sha256:${createHash('sha256').update(canonicalFormalExecutionPlan(plan)).digest('hex')}`

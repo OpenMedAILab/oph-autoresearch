@@ -35,13 +35,20 @@ export {
   FORMAL_ENTRY_ARGV,
   FORMAL_EXECUTION_SCHEMA,
   FORMAL_OUTPUT_TARGET,
-  validFormalCodeReviewResult,
-  validFormalExecutionPlan,
   type FormalCodeReviewResult,
   type FormalExecutionPlan,
   type FormalExecutionResources,
   type FormalReviewDecision,
+  validFormalCodeReviewResult,
+  validFormalExecutionPlan,
 } from './domain/formal-execution.ts'
+export type {
+  FormalExecutionAuthorityBinding,
+  FormalExecutionDispatch,
+  FormalExecutionDispatchState,
+  FormalExecutionJobSpec,
+  FormalExecutionObserverLease,
+} from './domain/formal-execution-dispatch.ts'
 export {
   type ConversationId,
   type GoalId,

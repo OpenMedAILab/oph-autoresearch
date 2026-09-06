@@ -12,6 +12,11 @@ import type {
   FormalExecutionPlan,
   FormalExecutionResources,
 } from './formal-execution.ts'
+import type {
+  FormalExecutionAuthorityBinding,
+  FormalExecutionDispatch,
+  FormalExecutionJobSpec,
+} from './formal-execution-dispatch.ts'
 import type { LabelSetReference } from './labelset.ts'
 import type {
   ResearchControllerLimits,
@@ -236,6 +241,7 @@ export interface ResearchJobSpec {
 
 export interface ResearchAttempt {
   cliPreparationAuthority?: CliPreparationAuthorityBinding
+  formalExecutionAuthority?: FormalExecutionAuthorityBinding
   /** Actual execution fact can differ from the user's cancellation request. */
   executionOutcome?: 'completed'
   /** Late results after a stop request remain historical and never gain admission. */
@@ -247,6 +253,8 @@ export interface ResearchAttempt {
   jobSpecHash?: string
   cliPreparationJobSpec?: CliPreparationJobSpec
   cliPreparationJobSpecHash?: string
+  formalExecutionJobSpec?: FormalExecutionJobSpec
+  formalExecutionJobSpecHash?: string
   id: string
   taskRevisionId: string
   dispatchKey: string
@@ -384,6 +392,7 @@ export interface ResearchCampaign {
   formalCodeReviews?: FormalCodeReviewResult[]
   /** Admission-ready plans. Recording one never submits it to a backend. */
   formalExecutionPlans?: FormalExecutionPlan[]
+  formalExecutionDispatches?: FormalExecutionDispatch[]
   labelSets?: LabelSetReference[]
   id: string
   workspaceId: string
@@ -571,6 +580,51 @@ export type ResearchCommand =
       plan: FormalExecutionPlan
       planHash: string
       approvalId: string
+    }
+  | {
+      kind: 'reserveFormalExecution'
+      planId: string
+      planHash: string
+      approvalId: string
+      routeId: string
+      profileId: string
+      workspaceBindingHash: string
+      connectionHash: string
+      remoteRoot: string
+      authorityId: string
+      admissionEvidenceHash: string
+      reservedMaxCost: number
+    }
+  | { kind: 'claimFormalExecution'; dispatchId: string }
+  | {
+      kind: 'bindFormalExecutionJob'
+      dispatchId: string
+      attemptId: string
+      spec: FormalExecutionJobSpec
+      authority: FormalExecutionAuthorityBinding
+    }
+  | {
+      kind: 'claimFormalExecutionDispatch' | 'acquireFormalExecutionObservation'
+      attemptId: string
+      instanceId: string
+      expectedEpoch: string
+      expectedJobSpecHash: string
+      leaseExpiresAt: number
+    }
+  | {
+      kind: 'acknowledgeFormalExecutionDispatch' | 'markFormalExecutionObservationUnknown'
+      attemptId: string
+      instanceId: string
+      generation: number
+      expectedEpoch: string
+    }
+  | {
+      kind: 'finishFormalExecution'
+      attemptId: string
+      observer: { instanceId: string; generation: number }
+      uri: string
+      contentHash: string
+      receiptHash: string
     }
   | { kind: 'release'; approvalId: string; artifactVersionIds: string[] }
   | { kind: 'revokeApproval'; approvalId: string; reviewer: TrustedHumanReviewerProof }
