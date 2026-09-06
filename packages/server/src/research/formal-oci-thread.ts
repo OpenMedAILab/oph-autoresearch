@@ -46,3 +46,36 @@ export function runFormalOciInThread(
     )
   })
 }
+
+export function verifyFormalReceiptInThread(
+  config: FormalOciAdministratorConfig,
+  job: FormalOciJobSpec,
+  directory: string,
+  receipt: Uint8Array,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const worker = new Worker(new URL('./formal-oci-worker.ts', import.meta.url), {
+      workerData: { config, job, directory, receipt },
+    })
+    let settled = false
+    const done = (value: boolean) => {
+      if (!settled) {
+        settled = true
+        void worker.terminate().catch(() => {})
+        resolve(value)
+      }
+    }
+    worker.once('message', (message: unknown) =>
+      done(
+        Boolean(
+          message &&
+            typeof message === 'object' &&
+            (message as { ok?: unknown; valid?: unknown }).ok === true &&
+            (message as { valid?: unknown }).valid === true,
+        ),
+      ),
+    )
+    worker.once('error', () => done(false))
+    worker.once('exit', () => done(false))
+  })
+}

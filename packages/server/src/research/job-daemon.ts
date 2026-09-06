@@ -20,6 +20,7 @@ import {
 } from './cli-preparation-job.ts'
 import { type FormalOciJobSpec, isFormalOciJob } from './formal-job.ts'
 import { FormalOciAdapter, type FormalOciAdministratorConfig } from './formal-oci.ts'
+import { verifyFormalReceiptInThread } from './formal-oci-thread.ts'
 import {
   captureRunnerTracking,
   type RunnerTrackingConfig,
@@ -866,7 +867,7 @@ export class JobDaemon implements JobDaemonPort {
       .run(key)
     return this.query(key)
   }
-  private verifiedOutput(
+  private async verifiedOutput(
     job: DurableJob,
     result: unknown,
   ): { contentHash: string; outputPath: string } | null {
@@ -908,7 +909,7 @@ export class JobDaemon implements JobDaemonPort {
       if (isCliPreparationJob(baseSpec)) {
         if (!verifyCandidateReceipt(JSON.parse(bytes.toString()), baseSpec)) return null
       } else if (formal) {
-        if (!this.formalOci?.verifyReceipt(job.spec as FormalOciJobSpec, directory, bytes))
+        if (!(await this.verifyFormalReceipt(job.spec as FormalOciJobSpec, directory, bytes)))
           return null
       } else {
         fixedResearchTemplate(baseSpec.templateId).verify(bytes)
@@ -919,7 +920,24 @@ export class JobDaemon implements JobDaemonPort {
       return null
     }
   }
-  private finish(key: string, lease: unknown, result: unknown): DurableJob | null {
+  async verifyFormalReceipt(
+    job: FormalOciJobSpec,
+    directory: string,
+    bytes: Uint8Array,
+  ): Promise<boolean> {
+    if (!this.formalOciConfigJson) return false
+    try {
+      return await verifyFormalReceiptInThread(
+        JSON.parse(this.formalOciConfigJson) as FormalOciAdministratorConfig,
+        job,
+        directory,
+        bytes,
+      )
+    } catch {
+      return false
+    }
+  }
+  private async finish(key: string, lease: unknown, result: unknown): Promise<DurableJob | null> {
     const job = this.query(key)
     if (
       !job ||
@@ -929,8 +947,17 @@ export class JobDaemon implements JobDaemonPort {
       !leaseMatches(job.runtimeLease ?? job.spec.lease, lease)
     )
       return null
-    const verified = this.verifiedOutput(job, result)
+    const verified = await this.verifiedOutput(job, result)
     if (!verified) return null
+    const current = this.query(key)
+    if (
+      !current ||
+      current.status !== 'running' ||
+      Date.now() >= (current.executionDeadlineAt ?? current.spec.lease.expiresAt) ||
+      Date.now() >= (current.runtimeLease ?? current.spec.lease).expiresAt ||
+      !leaseMatches(current.runtimeLease ?? current.spec.lease, lease)
+    )
+      return null
     this.db
       .query(
         "UPDATE local_jobs SET status='completion_requested', content_hash=?, output_path=? WHERE dispatch_key=? AND status='running'",
@@ -1113,7 +1140,7 @@ export class JobDaemon implements JobDaemonPort {
             : url.pathname.startsWith('/renew/')
               ? this.renew(key, lease)
               : url.pathname.startsWith('/finish/')
-                ? this.finish(key, lease, isRecord(body) ? body.result : null)
+                ? await this.finish(key, lease, isRecord(body) ? body.result : null)
                 : url.pathname.startsWith('/cancelled/')
                   ? this.cancelAcknowledged(key, lease)
                   : null
