@@ -549,12 +549,14 @@ export class JobDaemon implements JobDaemonPort {
       runtime_lease: string | null
     }[]
     for (const candidate of candidates) {
+      // A verified receipt is durable authority state. Its group still needs
+      // reaping, but an elapsed execution budget cannot rewrite it into a cancel.
       if (
+        candidate.status === 'running' &&
         candidate.execution_deadline_at !== null &&
         Date.now() >= candidate.execution_deadline_at
-      ) {
+      )
         this.cancel(candidate.dispatch_key)
-      }
       if (candidate.status === 'cancel_requested' || candidate.status === 'completion_requested')
         this.recoverCleanup(candidate.dispatch_key)
       if (!candidate.worker_pid || !candidate.worker_start_identity) continue
@@ -780,9 +782,9 @@ export class JobDaemon implements JobDaemonPort {
     for (const job of this.pendingJobs()) {
       const deadline = job.executionDeadlineAt ?? job.spec.lease.expiresAt
       const lease = job.runtimeLease ?? job.spec.lease
-      if (Date.now() >= deadline || (job.status === 'queued' && Date.now() >= lease.expiresAt))
+      if (job.status === 'queued' && (Date.now() >= deadline || Date.now() >= lease.expiresAt))
         this.cancel(job.spec.dispatchKey)
-      if (job.status === 'running' && Date.now() >= lease.expiresAt)
+      if (job.status === 'running' && (Date.now() >= deadline || Date.now() >= lease.expiresAt))
         this.cancel(job.spec.dispatchKey)
     }
   }

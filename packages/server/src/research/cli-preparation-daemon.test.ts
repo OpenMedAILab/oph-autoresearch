@@ -1,3 +1,4 @@
+import { Database } from 'bun:sqlite'
 import { expect, test } from 'bun:test'
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -323,6 +324,13 @@ test('a restarted authority completes a durable receipt after lost completion cl
     const grandchildPid = await waitForPid(join(root, 'recovery-completion-grandchild.pid'))
     await waitFor(daemon, job.dispatchKey, 'completion_requested')
     expect(daemon.query(job.dispatchKey)?.cleanupStartedAt).toBeNumber()
+    // A receipt accepted before its approved execution deadline remains accepted
+    // across restart even if recovery observes that deadline as expired.
+    const persisted = new Database(join(root, 'jobs.sqlite'))
+    persisted
+      .query('UPDATE local_jobs SET execution_deadline_at=? WHERE dispatch_key=?')
+      .run(Date.now() - 1, job.dispatchKey)
+    persisted.close()
     // The receipt is already verified and durable. Simulate a crash before its
     // transient TERM→KILL callback can complete the group cleanup.
     daemon.close({ terminateWorkers: false })
