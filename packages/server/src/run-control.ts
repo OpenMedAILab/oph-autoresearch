@@ -52,6 +52,8 @@ import type { GoalArm } from './runs.ts'
  * 而定时触发没有发起方的连接。它本来也没用过 `ws`——事件全部走 bus 广播，
  * 因为同一个会话可能同时开在桌面端和手机上。
  */
+const startingControllers = new WeakMap<CommandDeps['runs'], Map<ConversationId, AbortController>>()
+
 export async function startRun(
   conversationId: ConversationId,
   content: string,
@@ -115,6 +117,25 @@ export async function startRun(
         runId: '' as RunId,
         code: 'internal_error',
         message: '这个会话找不到对应的项目目录，无法执行',
+      },
+      conversationId,
+    )
+    return
+  }
+
+  if (
+    listResearchCampaigns(deps.store, ws.id, conversationId).some(
+      (campaign) => campaign.progressControl?.state === 'held',
+    )
+  ) {
+    deps.runs.disarm(conversationId)
+    deps.runs.release(conversationId)
+    deps.bus.publish(
+      {
+        type: 'run.error',
+        runId: '' as RunId,
+        code: 'internal_error',
+        message: '本会话的研究推进已暂停，请先在研究进度中恢复手动推进。',
       },
       conversationId,
     )
@@ -217,6 +238,13 @@ export async function startRun(
   let stopReason: StopReason | null = null
   let failure: string | null = null
 
+  let starting = startingControllers.get(deps.runs)
+  if (!starting) {
+    starting = new Map()
+    startingControllers.set(deps.runs, starting)
+  }
+  starting.set(conversationId, controller)
+
   // 后台跑，不阻塞 WebSocket 消息循环——否则一轮 agent 跑十分钟，
   // 这十分钟里连中断指令都收不到。
   void (async () => {
@@ -279,6 +307,7 @@ export async function startRun(
         conversationId,
       )
     } finally {
+      if (starting?.get(conversationId) === controller) starting.delete(conversationId)
       // register 过就走 unregister，没跑起来的由 release 收——两者都不做的话
       // 这个会话会被永久占住，之后每一条消息都被回绝「已有任务在执行」。
       if (currentRunId) deps.runs.unregister(currentRunId)
@@ -566,6 +595,37 @@ export function setGoal(
  * **它自己发起一轮**，不等下一次别的 run 收尾——那时候用户已经等了不知道多久，
  * 而界面上什么都没发生。走的是与自动续起同一个 `queueGoalRound`。
  */
+/** Persist pause before interrupting, including the gap between consecutive model runs. */
+export function pauseGoal(
+  conversationId: ConversationId,
+  deps: Pick<CommandDeps, 'store' | 'runs' | 'bus'>,
+): { ok: true } | { ok: false; message: string } {
+  try {
+    const goal = currentGoal(deps.store, conversationId)
+    if (goal?.status === 'active') {
+      const paused = updateGoal(deps.store, {
+        conversationId,
+        goalId: goal.id,
+        revision: goal.revision,
+        action: 'pause',
+      })
+      if (!paused.ok) return { ok: false, message: paused.message }
+      deps.runs.disarm(conversationId)
+      deps.bus.publish({ type: 'goal', goal: paused.goal }, conversationId)
+    } else deps.runs.disarm(conversationId)
+    startingControllers
+      .get(deps.runs)
+      ?.get(conversationId)
+      ?.abort({ source: 'user', observedAt: Date.now() })
+    for (const run of deps.runs.listActive()) {
+      if (run.conversationId === conversationId) deps.runs.interrupt(run.runId)
+    }
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : '暂停失败' }
+  }
+}
+
 export function resumeGoal(
   conversationId: ConversationId,
   deps: Omit<CommandDeps, 'ws'>,

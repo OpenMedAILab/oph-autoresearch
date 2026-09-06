@@ -6,6 +6,7 @@ import type {
 } from '@oph-autoresearch/core'
 import { compileResearchPattern } from './pattern.ts'
 import { compileResearchFlow, projectResearchFlow } from './research-flow.ts'
+import { canonicalJson } from './skill-lock.ts'
 
 const hash = (label: string) =>
   `sha256:${new Bun.CryptoHasher('sha256').update(label).digest('hex')}`
@@ -396,4 +397,100 @@ test('existing fixed evaluation receipts map to planned experiment and evaluatio
     legacyEvidence: 'current_receipt_mapping',
   })
   expect(experimentNode.explanation).toContain('映射既有固定合成评估回执')
+})
+
+test('release readiness uses the ledger review context and exact approved artifact set', () => {
+  const campaign = baseCampaign()
+  campaign.artifactVersions.push(studyArtifact())
+  const evaluation = task('evaluation-ready', 'evaluation', 'verified')
+  campaign.taskRevisions.push(evaluation)
+  const artifact = scientificEvidence(campaign, evaluation)
+  const text = JSON.stringify({
+    decision: 'supported',
+    claims: [{ claim: 'bounded fixture', artifactVersionIds: [artifact.id] }],
+    limitations: [],
+  })
+  campaign.modelReviews = [
+    {
+      id: 'review',
+      dispatchKey: 'review',
+      approvalId: 'approval',
+      evidencePackHash: hash('pack'),
+      configHash: hash('config'),
+      artifactVersionIds: [artifact.id],
+      currency: 'USD',
+      reservedCost: 1,
+      maxRequests: 2,
+      maxOutputTokens: 1024,
+      requestCount: 1,
+      status: 'done',
+      ownerPid: 1,
+      sourceValidity: 'current',
+      text,
+      contentHash: hash(text),
+    },
+  ]
+  expect(node(campaign, 'release').state).toBe('blocked')
+  campaign.modelReviews[0]!.sourceContextHash = hash(
+    canonicalJson({
+      context: hash(
+        canonicalJson({
+          policy: campaign.policy,
+          inputs: campaign.inputs,
+          budget: campaign.budget,
+        }),
+      ),
+      literatureCitations: [],
+    }),
+  )
+  expect(node(campaign, 'release').state).toBe('waiting_human')
+  campaign.approvals = [
+    {
+      id: 'approval',
+      bundleHash: campaign.bundleHash,
+      reviewerId: 'fixture',
+      reviewerProofId: 'proof',
+      reviewedAt: 1,
+      status: 'active',
+      revokedAt: null,
+      revokedByReviewerId: null,
+      invalidatedAt: null,
+      scope: {
+        kind: 'release',
+        expiresAt: 1000,
+        currency: 'USD',
+        maxCost: 0,
+        artifactVersionIds: ['wrong-artifact'],
+      },
+    },
+  ]
+  expect(node(campaign, 'release').state).toBe('waiting_human')
+  campaign.approvals[0]!.scope!.artifactVersionIds = [artifact.id]
+  expect(node(campaign, 'release').state).toBe('ready')
+})
+
+test('an unknown older revision blocks new scientific stages even when a later revision has evidence', () => {
+  const campaign = baseCampaign()
+  campaign.artifactVersions.push(studyArtifact())
+  const oldTask = task('old-evaluation', 'evaluation', 'stale')
+  const nextTask = { ...task('next-evaluation', 'evaluation', 'verified'), revision: 2 }
+  campaign.taskRevisions.push(oldTask, nextTask)
+  scientificEvidence(campaign, oldTask)
+  campaign.attempts[0]!.status = 'unknown'
+  scientificEvidence(campaign, nextTask)
+  for (const stage of ['experiment', 'evaluation']) {
+    const value = node(campaign, stage)
+    expect(value.state).toBe('in_flight')
+    expect(value.nextActions.map((action) => action.op)).toEqual([
+      'observe_attempt',
+      'cancel_attempt',
+    ])
+  }
+  campaign.cliPreparations = [
+    { attemptId: campaign.attempts[0]!.id } as NonNullable<
+      ResearchCampaign['cliPreparations']
+    >[number],
+  ]
+  expect(node(campaign, 'experiment').explanation).toContain('代码准备状态待核对')
+  expect(node(campaign, 'evaluation').explanation).toContain('尚未执行正式实验')
 })

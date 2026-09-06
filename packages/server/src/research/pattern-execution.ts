@@ -1,5 +1,10 @@
 import type { ResearchCampaign, ResearchCommand, ResearchJsonObject } from '@oph-autoresearch/core'
-import { getResearchCampaign, mutateResearchCampaign, type Store } from '@oph-autoresearch/store'
+import {
+  getResearchCampaign,
+  hasSupportedReleaseReview,
+  mutateResearchCampaign,
+  type Store,
+} from '@oph-autoresearch/store'
 import { compileResearchPattern } from './pattern.ts'
 import { sha256 } from './skill-lock.ts'
 import { syntheticProtocol } from './synthetic-protocol.ts'
@@ -61,7 +66,7 @@ export function researchPatternStatus(campaign: ResearchCampaign) {
   const review = campaign.modelReviews?.find(
     (review) =>
       review.status === 'done' &&
-      review.sourceValidity === 'current' &&
+      hasSupportedReleaseReview(campaign, review.artifactVersionIds) &&
       review.artifactVersionIds.some((id) =>
         campaign.artifactVersions.some(
           (a) => a.id === id && a.producerTaskRevisionId === evaluation?.id,

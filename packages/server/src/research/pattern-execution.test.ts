@@ -19,6 +19,7 @@ import {
   applyResearchPattern,
   researchPatternStatus,
 } from './pattern-execution.ts'
+import { installSupportedReviewFixture } from './supported-review.fixture.ts'
 import { startSyntheticRun } from './synthetic-runner.ts'
 
 test('a new Pattern reopens a released campaign without erasing the prior release', async () => {
@@ -49,7 +50,10 @@ test('a new Pattern reopens a released campaign without erasing the prior releas
       dispatchKey: 'run',
     })
     if (!run.ok) throw new Error(run.error)
-    const campaign = getResearchCampaign(store, created.campaign.id)!
+    const campaign = installSupportedReviewFixture(
+      store,
+      getResearchCampaign(store, created.campaign.id)!,
+    )
     const ids = campaign.artifactVersions.map((a) => a.id)
     const approval = mutateResearchCampaign(store, campaign.id, {
       expectedVersion: campaign.version,

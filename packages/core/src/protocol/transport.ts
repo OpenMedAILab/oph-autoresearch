@@ -199,6 +199,7 @@ export type ClientCommand =
   | SetModelCommand
   | CompactCommand
   | GoalResumeCommand
+  | GoalPauseCommand
   | GoalSetCommand
   | FollowUpSteerCommand
   | FollowUpDropCommand
@@ -281,10 +282,13 @@ export interface CompactCommand {
  * 才动：那时候用户已经等了不知道多久，而界面上什么都没发生。
  * 服务端因此走的是与自动续起完全同一个排队入口（`run-control.ts`）。
  *
- * **没有对应的「暂停」指令。** 循环跑起来之后停它的动作就是中断这一轮
- * （`run.interrupt`），run 收尾时会把目标置回 `paused` 并解除续起标记——
- * 再开一条指令等于给同一件事开第二个入口。
+ * `goal.pause` 在两轮之间也会先持久暂停，再中断当前主控。
  */
+export interface GoalPauseCommand {
+  type: 'goal.pause'
+  conversationId: ConversationId
+}
+
 export interface GoalResumeCommand {
   type: 'goal.resume'
   conversationId: ConversationId

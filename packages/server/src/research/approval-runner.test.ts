@@ -11,6 +11,7 @@ import {
   upsertWorkspace,
 } from '@oph-autoresearch/store'
 import fixture from '../../../../fixtures/synthetic-summary.json'
+import { installSupportedReviewFixture } from './supported-review.fixture.ts'
 import { startSyntheticRun } from './synthetic-runner.ts'
 import { SYNTHETIC_SKILL_BINDING } from './synthetic-skill.ts'
 
@@ -237,7 +238,7 @@ describe('approval-gated synthetic runner', () => {
     })
     expect(completed.ok).toBe(true)
     if (!completed.ok) return
-    const current = getResearchCampaign(store, campaign.id)!
+    const current = installSupportedReviewFixture(store, getResearchCampaign(store, campaign.id)!)
     const artifactId = current.artifactVersions[0]!.id
     const releaseScope: ResearchApprovalScope = {
       kind: 'release',

@@ -1,4 +1,4 @@
-import type { ResearchCommand, ResearchWriteResult } from '@oph-autoresearch/core'
+import type { ConversationId, ResearchCommand, ResearchWriteResult } from '@oph-autoresearch/core'
 import { isResearchTemplateId, validateLabelSetReference } from '@oph-autoresearch/core'
 import {
   createResearchCampaign,
@@ -16,6 +16,8 @@ import {
   applyResearchPattern,
   researchPatternStatus,
 } from '../research/pattern-execution.ts'
+import { readResearchDocuments } from '../research/research-documents.ts'
+import { projectResearchFlow } from '../research/research-flow.ts'
 import { executeEvidenceReview, quoteEvidenceReview } from '../research/review-execution.ts'
 import { syntheticProtocol } from '../research/synthetic-protocol.ts'
 import {
@@ -26,6 +28,7 @@ import {
 } from '../research/synthetic-runner.ts'
 import { fixedResearchTemplate, researchTemplateCatalog } from '../research/template-registry.ts'
 import { publishResearchEvents } from '../research-events.ts'
+import { pauseGoal } from '../run-control.ts'
 import { type ApiHandler, json } from './types.ts'
 
 const proposals = new Set([
@@ -47,7 +50,7 @@ function respond(result: ResearchWriteResult): Response {
 /** Bearer access permits proposals. It does not attest a human reviewer. */
 export const handleResearchApi: ApiHandler = async (url, req, d) => {
   const match =
-    /^\/api\/research\/campaigns(?:\/([^/]+)(?:\/(events|notifications|proposals|approve|revoke|release|labelsets|literature|pattern(?:\/(?:preview|advance))?|review(?:\/quote)?|synthetic(?:\/(?:cancel|status|receipt|reconcile))?))?)?$/.exec(
+    /^\/api\/research\/campaigns(?:\/([^/]+)(?:\/(events|notifications|progress|next_actions|proposals|approve|revoke|release|labelsets|literature|pattern(?:\/(?:preview|advance))?|review(?:\/quote)?|synthetic(?:\/(?:cancel|status|receipt|reconcile))?))?)?$/.exec(
       url.pathname,
     )
   if (!match) return null
@@ -109,6 +112,12 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
   if (id && req.method === 'GET' && action === 'notifications') {
     return json({ notifications: d.researchNotifications?.list(id) ?? [] })
   }
+  if (id && campaign && req.method === 'GET' && action === 'next_actions') {
+    const documents = await readResearchDocuments(d.store, d.workspaceRoot, id)
+    if (getResearchCampaign(d.store, id)?.version !== campaign.version)
+      return json({ error: '研究依据已更新，请刷新后重试。' }, 409)
+    return json({ projection: projectResearchFlow(campaign, { documents }, Date.now()) })
+  }
   if (id && campaign && req.method === 'GET' && action === 'pattern') {
     try {
       return json({ pattern: campaign.pattern, state: researchPatternStatus(campaign) })
@@ -132,6 +141,48 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
     } catch {
       return json({ error: 'synthetic_evidence_unavailable' }, 409)
     }
+  }
+  if (id && campaign && req.method === 'POST' && action === 'progress') {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).sort().join(',') !==
+        'expectedGeneration,expectedVersion,idempotencyKey,state' ||
+      (body.state !== 'active' && body.state !== 'held') ||
+      typeof body.expectedGeneration !== 'number' ||
+      !Number.isSafeInteger(body.expectedGeneration) ||
+      typeof body.expectedVersion !== 'number' ||
+      !Number.isSafeInteger(body.expectedVersion) ||
+      typeof body.idempotencyKey !== 'string'
+    ) {
+      return json({ error: 'invalid_progress_request' }, 400)
+    }
+    const result = mutateResearchCampaign(d.store, id, {
+      expectedVersion: body.expectedVersion,
+      idempotencyKey: body.idempotencyKey,
+      command: {
+        kind: 'setResearchProgress',
+        state: body.state,
+        expectedGeneration: body.expectedGeneration,
+      },
+    })
+    if (!result.ok) return json(result, 409)
+    if (!result.replayed) changed()
+    const current = getResearchCampaign(d.store, id)!
+    // A replay of an older hold must not interrupt a controller started after resume.
+    // Holding new controller actions does not cancel already approved remote jobs.
+    if (
+      body.state === 'held' &&
+      current.progressControl?.state === 'held' &&
+      current.progressControl.generation === result.campaign.progressControl?.generation
+    ) {
+      const paused = pauseGoal(campaign.parentConversationId as ConversationId, d)
+      if (!paused.ok)
+        return json({ campaign: current, error: '推进已暂停，但主控中断需重试。' }, 409)
+    }
+    return json({ ...result, campaign: current, controllerScope: 'conversation' })
   }
   if (
     req.method !== 'POST' ||
@@ -203,6 +254,7 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
       if (
         Object.keys(body).some((key) => !['expectedVersion', 'approvalId'].includes(key)) ||
         typeof body.approvalId !== 'string' ||
+        typeof body.expectedVersion !== 'number' ||
         !Number.isSafeInteger(body.expectedVersion)
       )
         return json({ error: 'invalid_pattern_advance' }, 400)
@@ -271,6 +323,7 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
       (action === 'review' &&
         (typeof body.approvalId !== 'string' ||
           typeof body.dispatchKey !== 'string' ||
+          typeof body.expectedVersion !== 'number' ||
           !Number.isSafeInteger(body.expectedVersion)))
     )
       return json({ error: 'invalid_review_request' }, 400)
@@ -343,6 +396,7 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
         : ['approvalId', 'expectedVersion', 'idempotencyKey']
     if (
       Object.keys(body).some((key) => !allowed.includes(key)) ||
+      typeof body.expectedVersion !== 'number' ||
       !Number.isSafeInteger(body.expectedVersion) ||
       (action === 'approve' && !body.scope)
     )
@@ -370,6 +424,7 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
           !['approvalId', 'artifactVersionIds', 'expectedVersion', 'idempotencyKey'].includes(key),
       ) ||
       !Array.isArray(body.artifactVersionIds) ||
+      typeof body.expectedVersion !== 'number' ||
       !Number.isSafeInteger(body.expectedVersion)
     )
       return json({ error: 'invalid_release' }, 400)
@@ -426,6 +481,7 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
         (typeof body.taskRevisionId !== 'string' || !body.taskRevisionId.trim())) ||
       typeof body.dispatchKey !== 'string' ||
       !body.dispatchKey.trim() ||
+      typeof body.expectedVersion !== 'number' ||
       !Number.isSafeInteger(body.expectedVersion) ||
       (body.expectedVersion as number) < 1
     ) {
@@ -515,7 +571,11 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
   if (!command || typeof command.kind !== 'string' || !proposals.has(command.kind)) {
     return json({ error: 'proposal_command_required' }, 400)
   }
-  if (!Number.isSafeInteger(body.expectedVersion) || (body.expectedVersion as number) < 1) {
+  if (
+    typeof body.expectedVersion !== 'number' ||
+    !Number.isSafeInteger(body.expectedVersion) ||
+    (body.expectedVersion as number) < 1
+  ) {
     return json({ error: 'expected_version_required' }, 400)
   }
   if (

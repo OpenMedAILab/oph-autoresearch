@@ -16,6 +16,7 @@ import {
 import { ResearchCliPreparationPanel } from './ResearchCliPreparationPanel.tsx'
 import { ResearchDocumentsPanel } from './ResearchDocumentsPanel.tsx'
 import { ResearchExperimentResult } from './ResearchExperimentResult.tsx'
+import { ResearchFlowPanel } from './ResearchFlowPanel.tsx'
 import { ResearchNotificationsPanel } from './ResearchNotificationsPanel.tsx'
 import { ResearchPatternPanel } from './ResearchPatternPanel.tsx'
 
@@ -588,6 +589,7 @@ export function ResearchCampaignPanel() {
                   )}
                 </For>
               </fieldset>
+              <ResearchFlowPanel campaign={campaign} busy={busy()} act={act} />
               <ResearchPatternPanel campaign={campaign} busy={busy()} act={act} />
               <ResearchCliPreparationPanel
                 campaign={campaign}

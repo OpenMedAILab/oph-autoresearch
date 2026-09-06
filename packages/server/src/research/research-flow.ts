@@ -3,6 +3,7 @@ import type {
   ResearchCampaign,
   ResearchTaskRevision,
 } from '@oph-autoresearch/core'
+import { hasSupportedReleaseReview } from '@oph-autoresearch/store'
 import { parseModelReview } from './review-contract.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
 
@@ -281,13 +282,20 @@ function studyCurrent(campaign: ResearchCampaign, evidence: ProjectionEvidenceIn
     )
   })
 }
-function activeApproval(campaign: ResearchCampaign, kind: 'model_review' | 'release', now: number) {
+function activeApproval(
+  campaign: ResearchCampaign,
+  kind: 'model_review' | 'release',
+  now: number,
+  artifactIds: readonly string[],
+) {
   return campaign.approvals.some(
     (approval) =>
       approval.status === 'active' &&
       !approval.consumedBy &&
       approval.bundleHash === campaign.bundleHash &&
       approval.scope?.kind === kind &&
+      canonicalJson([...approval.scope.artifactVersionIds].sort()) ===
+        canonicalJson([...artifactIds].sort()) &&
       approval.scope.expiresAt > now,
   )
 }
@@ -329,8 +337,16 @@ function reviewState(campaign: ResearchCampaign, evaluation: ArtifactVersion | n
       if (!map.claims.some((claim) => claim.artifactVersionIds.includes(evaluation.id))) {
         continue
       }
-      if (map.decision === 'supported')
-        return { kind: 'supported' as const, supported: true, reasons: [] }
+      if (
+        map.decision === 'supported' &&
+        hasSupportedReleaseReview(campaign, review.artifactVersionIds)
+      )
+        return {
+          kind: 'supported' as const,
+          supported: true,
+          reasons: [],
+          artifactVersionIds: review.artifactVersionIds,
+        }
       insufficient = true
     } catch {}
   }
@@ -400,6 +416,53 @@ export function projectResearchFlow(
       match.legacyEvidence === 'current_receipt_mapping' && task?.status === 'stale'
         ? ('stale_receipt_mapping' as const)
         : match.legacyEvidence
+    const active = campaign.attempts.find(
+      (attempt) =>
+        campaign.taskRevisions.some(
+          (candidate) =>
+            candidate.id === attempt.taskRevisionId &&
+            (candidate.stageId === id ||
+              (id === 'experiment' && candidate.stageId === 'evaluation')),
+        ) && ['running', 'unknown'].includes(attempt.status),
+    )
+    if (active) {
+      const unknown = active.status === 'unknown'
+      const preparation = campaign.cliPreparations?.some((item) => item.attemptId === active.id)
+      const reasons = [unknown ? '尝试状态未知，仍占用该任务' : '尝试正在运行']
+      return projected(
+        campaign,
+        id,
+        'in_flight',
+        campaign.taskRevisions.find((candidate) => candidate.id === active.taskRevisionId)
+          ?.status === 'stale'
+          ? 'stale'
+          : 'current',
+        legacyEvidence,
+        title,
+        preparation
+          ? unknown
+            ? '代码准备状态待核对，只允许观察或请求取消；尚未执行正式实验。'
+            : '代码准备进行中，完成后仅保存候选；尚未执行正式实验。'
+          : unknown
+            ? '状态未知时只允许观察或请求取消，不能重派。'
+            : '等待当前尝试形成可验证结果。',
+        [
+          action(campaign, id, 'observe_attempt', `合成研究/${title}`, reasons, '观察当前尝试'),
+          ...(unknown
+            ? [
+                action(
+                  campaign,
+                  id,
+                  'cancel_attempt',
+                  `合成研究/${title}`,
+                  reasons,
+                  '请求取消未知尝试',
+                ),
+              ]
+            : []),
+        ],
+      )
+    }
     if (!priorReady)
       return projected(
         campaign,
@@ -432,38 +495,6 @@ export function projectResearchFlow(
             reasons,
             '完善受控执行规格',
           ),
-        ],
-      )
-    }
-    const active = campaign.attempts.find(
-      (attempt) =>
-        attempt.taskRevisionId === task.id && ['running', 'unknown'].includes(attempt.status),
-    )
-    if (active) {
-      const unknown = active.status === 'unknown'
-      const reasons = [unknown ? '尝试状态未知，仍占用该任务' : '尝试正在运行']
-      return projected(
-        campaign,
-        id,
-        'in_flight',
-        task.status === 'stale' ? 'stale' : 'current',
-        legacyEvidence,
-        title,
-        unknown ? '状态未知时只允许观察或请求取消，不能重派。' : '等待当前尝试形成可验证结果。',
-        [
-          action(campaign, id, 'observe_attempt', `合成研究/${title}`, reasons, '观察当前尝试'),
-          ...(unknown
-            ? [
-                action(
-                  campaign,
-                  id,
-                  'cancel_attempt',
-                  `合成研究/${title}`,
-                  reasons,
-                  '请求取消未知尝试',
-                ),
-              ]
-            : []),
         ],
       )
     }
@@ -552,7 +583,13 @@ export function projectResearchFlow(
                 ),
               ],
             )
-          : review.kind === 'missing' && !activeApproval(campaign, 'model_review', now)
+          : review.kind === 'missing' &&
+              !activeApproval(
+                campaign,
+                'model_review',
+                now,
+                evaluationArtifact ? [evaluationArtifact.id] : [],
+              )
             ? projected(
                 campaign,
                 'review',
@@ -602,7 +639,12 @@ export function projectResearchFlow(
             '结果发布',
             '证据不足或复核不当前，不能发布。',
           )
-        : !activeApproval(campaign, 'release', now)
+        : !activeApproval(
+              campaign,
+              'release',
+              now,
+              'artifactVersionIds' in review ? review.artifactVersionIds : [],
+            )
           ? projected(
               campaign,
               'release',

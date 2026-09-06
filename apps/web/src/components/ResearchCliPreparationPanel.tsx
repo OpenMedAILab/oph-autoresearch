@@ -428,7 +428,7 @@ function CandidateContent(props: { endpoint: string }) {
       <Show when={candidate.error}>
         <p role="alert">候选内容暂不可核验，请刷新账本后重试。</p>
       </Show>
-      <Show when={candidate()}>
+      <Show when={!candidate.error && candidate()}>
         {(value) => (
           <>
             <p>

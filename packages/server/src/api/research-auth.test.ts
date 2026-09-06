@@ -7,6 +7,7 @@ import { createConversation, Store, upsertWorkspace } from '@oph-autoresearch/st
 import { EventBus } from '../bus.ts'
 import { createHumanAuthVerifier, HUMAN_PROOF_HEADER } from '../research/human-auth.ts'
 import { canonicalJson, sha256 } from '../research/skill-lock.ts'
+import { installSupportedReviewFixture } from '../research/supported-review.fixture.ts'
 import { SYNTHETIC_SKILL_BINDING } from '../research/synthetic-skill.ts'
 import { handleResearchApi } from './research.ts'
 import type { ApiRequestDeps } from './types.ts'
@@ -132,6 +133,7 @@ test('signed scoped HTTP approval is consumed by dispatch and verified release; 
     })
     expect(result.status).toBe(200)
     campaign = result.data.campaign
+    campaign = installSupportedReviewFixture(store, campaign)
     const artifactVersionIds = [campaign.artifactVersions[0]!.id]
     result = await call(
       `${path}/approve`,

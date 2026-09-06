@@ -15,7 +15,7 @@ import type {
 import { getConversation, setConversationModel } from '@oph-autoresearch/store'
 import type { ServerWebSocket } from 'bun'
 import type { CommandDeps, SocketData } from './deps.ts'
-import { compactConversation, resumeGoal, setGoal, startRun } from './run-control.ts'
+import { compactConversation, pauseGoal, resumeGoal, setGoal, startRun } from './run-control.ts'
 
 export async function handleCommand(cmd: ClientCommand, deps: CommandDeps): Promise<void> {
   if (!deps.ws.data.authed) return
@@ -145,10 +145,15 @@ export async function handleCommand(cmd: ClientCommand, deps: CommandDeps): Prom
       return
     }
 
+    case 'goal.pause': {
+      const result = pauseGoal(cmd.conversationId, deps)
+      if (!result.ok) reject(deps.ws, cmd.type, 'conflict', result.message)
+      return
+    }
+
     case 'goal.resume': {
       // 停下来的目标重新跑起来，并**当场**发起一轮——不能等下一次别的 run 收尾。
-      // 没有对应的 pause 指令：跑起来之后要停它就是中断这一轮（`run.interrupt`），
-      // run 收尾时会把目标置回 paused。
+      // goal.pause 也覆盖两轮之间的间隙。
       const result = resumeGoal(cmd.conversationId, deps)
       if (!result.ok) reject(deps.ws, cmd.type, 'conflict', result.message)
       return
