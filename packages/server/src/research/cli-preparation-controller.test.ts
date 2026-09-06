@@ -39,6 +39,9 @@ class FakeAuthority {
   queried: string[] = []
   current: DurableJob | null = null
   unavailable = false
+  loseSubmitResponse = false
+  switchEpochAfterQuery = false
+  closeRequests: { expectedEpoch: string; dispatchKey: string; specHash: string }[] = []
   cancelKeepsRemoteState = false
   receiptBytes = new Uint8Array()
   receiptBlock: Promise<void> | null = null
@@ -48,17 +51,21 @@ class FakeAuthority {
   identity() {
     return { schema: 'research-authority-identity-v1' as const, epoch: this.epoch }
   }
-  closeUnstarted(_request: { expectedEpoch: string; dispatchKey: string; specHash: string }) {
+  closeUnstarted(request: { expectedEpoch: string; dispatchKey: string; specHash: string }) {
+    this.closeRequests.push(request)
+    if (request.expectedEpoch !== this.epoch) throw new Error('wrong authority epoch')
     return { outcome: 'not_started' }
   }
   submit(spec: CliPreparationJobSpec) {
     this.submitted.push(spec)
     this.current = job(spec, 'queued')
+    if (this.loseSubmitResponse) throw new Error('response lost after durable submit')
     return this.current
   }
   query(key: string) {
     this.queried.push(key)
     if (this.unavailable) throw new Error('transport unavailable')
+    if (this.switchEpochAfterQuery) this.epoch = 'fixture_authority_epoch_0002'
     return this.current?.spec.dispatchKey === key ? this.current : null
   }
   cancel(key: string) {
@@ -466,6 +473,7 @@ test('reconcile observes the original attempt after an unknown transport state w
     const { workspace, campaign, task } = setup(store, root)
     const authority = new FakeAuthority()
     authority.unavailable = true
+    authority.loseSubmitResponse = true
     const controller = new CliPreparationController(store, [route(authority)], () => {})
     const scope = { workspaceId: workspace.id, workspaceRoot: root, campaignId: campaign.id }
     const proposed = controller.propose(scope, {
@@ -506,7 +514,7 @@ test('reconcile observes the original attempt after an unknown transport state w
       getResearchCampaign(store, campaign.id)?.attempts[0]?.cliPreparationAuthority,
     ).toMatchObject({
       epoch: authority.epoch,
-      dispatchState: 'observation_unknown',
+      dispatchState: 'sending',
     })
     const changedRoute = new CliPreparationController(
       store,

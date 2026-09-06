@@ -518,6 +518,16 @@ export class CliPreparationController {
           return
         }
         const job = await route.authority.query(attemptId)
+        if (!(await this.hasExpectedEpoch(route, held.epoch))) {
+          this.markObservationUnknown(
+            scope,
+            attemptId,
+            held.epoch,
+            held.observer,
+            '查询返回后 authority epoch 已变化；不能接受该观察结果',
+          )
+          return
+        }
         if (!job) {
           const current = this.campaign(scope)
           const currentBinding = current.attempts.find(
