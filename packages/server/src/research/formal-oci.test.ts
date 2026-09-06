@@ -41,6 +41,9 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
   const calls: string[][] = []
   let runExitCode = 0
   let containerStopped = false
+  let inspectExitCode = 0
+  let inspectStatus: string | undefined
+  let inspectDigest = `sha256:${'a'.repeat(64)}`
   const command: PodmanCommand = {
     run(argv) {
       calls.push([...argv])
@@ -54,9 +57,9 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
         }
       if (argv[0] === 'inspect')
         return {
-          exitCode: 0,
+          exitCode: inspectExitCode,
           stdout: Buffer.from(
-            `sha256:${'a'.repeat(64)} ${runExitCode && !containerStopped ? 'running' : 'exited'}`,
+            `${inspectDigest} ${inspectStatus ?? (runExitCode && !containerStopped ? 'running' : 'exited')}`,
           ),
           stderr: new Uint8Array(),
         }
@@ -136,6 +139,17 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
     expect(adapter.run(job, output)).toMatchObject({ exitCode: 1, cleanupConfirmed: true })
     expect(calls.at(-2)).toEqual(['stop', '--time', '1', job.execution.containerName])
     runExitCode = 0
+    inspectStatus = 'stopping'
+    expect(adapter.stopAndConfirm(job)).toBe(false)
+    inspectStatus = 'unknown'
+    expect(adapter.stopAndConfirm(job)).toBe(false)
+    inspectExitCode = 125
+    expect(adapter.stopAndConfirm(job)).toBe(false)
+    inspectExitCode = 0
+    inspectDigest = `sha256:${'b'.repeat(64)}`
+    expect(adapter.stopAndConfirm(job)).toBe(false)
+    inspectDigest = `sha256:${'a'.repeat(64)}`
+    inspectStatus = undefined
 
     await writeFile(
       `${output}/predictions.json`,
@@ -169,6 +183,37 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
     await writeFile(labels, originalLabels)
     await writeFile(labels, '')
     expect(() => adapter.evaluate(job, output)).toThrow('unsafe or exceeds its bound')
+    await writeFile(labels, originalLabels)
+    const emptyLabels = '[]'
+    const emptyPlan = { ...plan, labelSetContentHash: hash(emptyLabels) }
+    const emptyJob = {
+      ...job,
+      formalPlan: emptyPlan,
+      formalPlanHash: formalExecutionPlanHash(emptyPlan),
+    }
+    await writeFile(labels, emptyLabels)
+    const emptyTruthAdapter = new FormalOciAdapter(
+      {
+        podmanExecutable: podman,
+        podmanBinaryHash: cliPreparationExecutableHash(podman),
+        candidates: [{ candidateArtifactId: plan.candidateArtifactId, mainPy, candidateReceipt }],
+        datasets: [{ dataManifestHash: plan.dataManifestHash, manifest, root: dataset }],
+        labels: [{ labelSetContentHash: emptyPlan.labelSetContentHash, path: labels }],
+        evaluators: [{ id: 'binary-classification-v1', hash: plan.trustedEvaluatorHash }],
+      },
+      command,
+      'linux',
+    )
+    await writeFile(
+      `${output}/predictions.json`,
+      JSON.stringify([
+        { id: 'case-a', probability: 0.9 },
+        { id: 'case-b', probability: 0.2 },
+      ]),
+    )
+    expect(() => emptyTruthAdapter.evaluate(emptyJob, output)).toThrow(
+      'invalid formal evaluator fixture',
+    )
     await writeFile(labels, originalLabels)
     await writeFile(dataFile, 'mutated dataset bytes\n')
     expect(() => adapter.argv(job, output)).toThrow('dataset snapshot does not match its manifest')

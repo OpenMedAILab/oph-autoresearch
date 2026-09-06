@@ -323,12 +323,10 @@ export class FormalOciAdapter {
     )
       throw new Error('formal candidate bytes changed')
     verifyDatasetSnapshot(dataset)
-    if (
-      bytesHash(readBoundedRegular(safeFile(labels.path), MAX_PREDICTIONS_BYTES, true)) !==
-      plan.labelSetContentHash
-    )
+    const truthBytes = readBoundedRegular(safeFile(labels.path), MAX_PREDICTIONS_BYTES, true)
+    if (bytesHash(truthBytes) !== plan.labelSetContentHash)
       throw new Error('formal truth registry changed')
-    return { candidate, dataset, labels, evaluator }
+    return { candidate, dataset, labels, evaluator, truthBytes }
   }
   validate(job: FormalOciJobSpec) {
     if (job.formalPlanHash !== formalExecutionPlanHash(job.formalPlan))
@@ -385,19 +383,20 @@ export class FormalOciAdapter {
   }
   stopAndConfirm(job: FormalOciJobSpec) {
     const before = this.inspect(job.execution.containerName)
-    if (before.exitCode === 0) {
-      const state = new TextDecoder().decode(before.stdout).trim().split(/\s+/)
-      if (state[0] !== job.formalPlan.ociImageDigest) return false
-      if (!['running', 'created', 'paused'].includes(state[1] ?? '')) return true
-    }
+    if (before.exitCode !== 0) return false
+    const state = new TextDecoder().decode(before.stdout).trim().split(/\s+/)
+    if (state.length !== 2 || state[0] !== job.formalPlan.ociImageDigest) return false
+    if (['exited', 'stopped'].includes(state[1]!)) return true
+    if (!['running', 'created', 'paused'].includes(state[1]!)) return false
     const stopped = this.command.run(['stop', '--time', '1', job.execution.containerName], 10_000)
     if (stopped.exitCode !== 0) return false
     const inspected = this.inspect(job.execution.containerName)
-    if (inspected.exitCode !== 0) return true // Removed is also a confirmed stopped state.
-    const state = new TextDecoder().decode(inspected.stdout).trim().split(/\s+/)
+    if (inspected.exitCode !== 0) return false
+    const after = new TextDecoder().decode(inspected.stdout).trim().split(/\s+/)
     return (
-      state[0] === job.formalPlan.ociImageDigest &&
-      !['running', 'created', 'paused'].includes(state[1] ?? '')
+      after.length === 2 &&
+      after[0] === job.formalPlan.ociImageDigest &&
+      ['exited', 'stopped'].includes(after[1]!)
     )
   }
   run(job: FormalOciJobSpec, outputDirectory: string) {
@@ -418,14 +417,12 @@ export class FormalOciAdapter {
   }
   /** Outside OCI: labels are the only truth source and worker-supplied metrics are ignored. */
   evaluate(job: FormalOciJobSpec, outputDirectory: string) {
-    const { labels } = this.bindings(job.formalPlan)
+    const { truthBytes } = this.bindings(job.formalPlan)
     const predictionsPath = mountedPath(safeDirectory(outputDirectory), 'predictions.json')
     const bytes = readBoundedRegular(predictionsPath, MAX_PREDICTIONS_BYTES, true)
-    const truth = JSON.parse(
-      readBoundedRegular(labels.path, MAX_PREDICTIONS_BYTES, true).toString(),
-    ) as unknown
+    const truth = JSON.parse(truthBytes.toString()) as unknown
     const predictions = JSON.parse(bytes.toString()) as unknown
-    if (!Array.isArray(truth) || !Array.isArray(predictions))
+    if (!Array.isArray(truth) || truth.length === 0 || !Array.isArray(predictions))
       throw new Error('invalid formal evaluator fixture')
     const labelsById = new Map<string, 0 | 1>()
     for (const row of truth) {
