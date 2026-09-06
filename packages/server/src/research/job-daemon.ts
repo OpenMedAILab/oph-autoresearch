@@ -937,10 +937,12 @@ export class JobDaemon implements JobDaemonPort {
     clearInterval(this.watchdog)
     if (options.terminateWorkers !== false) {
       for (const [key, child] of this.workers) {
-        this.stopWorkerTree(key)
-        // These are children launched by this exact daemon, so close may clean
-        // them up even when platform identity inspection is unavailable.
-        child.kill()
+        // Shutdown cannot rely on an escalation timer after its database closes.
+        // A confirmed group leader authorizes an immediate whole-tree KILL.
+        const identity = this.persistedWorkerIdentity(key)
+        if (identity) this.signalOwnedWorker(identity, 'SIGKILL')
+        // This exact child is also safe to kill as the platform fallback.
+        child.kill('SIGKILL')
       }
     }
     this.workers.clear()

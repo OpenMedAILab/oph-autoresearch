@@ -267,6 +267,7 @@ export async function runResearchJobWorker(args: readonly string[]) {
     })
     return finish.ok ? 0 : 6
   } finally {
+    if (isCliPreparationJob(job.spec)) await awaitCancellationEscalation()
     await done()
     if (isCliPreparationJob(job.spec)) process.off('SIGTERM', onTermination)
   }

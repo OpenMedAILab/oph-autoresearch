@@ -59,10 +59,12 @@ function spec(
   }
 }
 
-async function fixture(script: string): Promise<{ root: string; daemon: JobDaemon; cli: string }> {
+async function fixture(
+  script: string | ((root: string) => string),
+): Promise<{ root: string; daemon: JobDaemon; cli: string }> {
   const root = await mkdtemp(join(tmpdir(), 'oph-cli-prep-daemon-'))
   const cli = join(root, 'fake-cli')
-  await writeFile(cli, script)
+  await writeFile(cli, typeof script === 'function' ? script(root) : script)
   await chmod(cli, 0o755)
   const daemon = new JobDaemon({
     dbPath: join(root, 'jobs.sqlite'),
@@ -120,6 +122,14 @@ function processExists(pid: number) {
   } catch {
     return false
   }
+}
+
+async function waitForExit(pid: number) {
+  for (let i = 0; i < 300; i++) {
+    if (!processExists(pid)) return
+    await Bun.sleep(10)
+  }
+  throw new Error(`process did not exit: ${pid}`)
 }
 
 test('JobDaemon runs an admitted fake CLI and verifies the complete v3 candidate receipt', async () => {
@@ -229,6 +239,46 @@ while :; do sleep 1; done
   } finally {
     daemon?.close()
     restarted?.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('normal daemon close synchronously kills a started CLI group and its grandchild', async () => {
+  let daemon: JobDaemon | undefined
+  const {
+    root,
+    daemon: first,
+    cli,
+  } = await fixture((fixtureRoot) => {
+    const cliPidMarker = join(fixtureRoot, 'close-cli.pid')
+    const grandchildPidMarker = join(fixtureRoot, 'close-grandchild.pid')
+    return `#!/bin/sh
+echo $$ > '${cliPidMarker}'
+/bin/sh -c 'trap "" TERM; while :; do sleep 1; done' &
+echo $! > '${grandchildPidMarker}'
+trap '' TERM
+while :; do sleep 1; done
+`
+  })
+  daemon = first
+  try {
+    const job = spec('prep-close')
+    bindAdmittedAdapter(job, cli)
+    daemon.submit(job)
+    const worker = await daemon.launchWorker(job.dispatchKey)
+    await waitFor(daemon, job.dispatchKey, 'running')
+    const cliPid = await waitForPid(join(root, 'close-cli.pid'))
+    const grandchildPid = await waitForPid(join(root, 'close-grandchild.pid'))
+    daemon.close()
+    daemon = undefined
+    await worker.exited
+    await waitForExit(cliPid)
+    await waitForExit(grandchildPid)
+    expect(await Bun.file(join(root, 'output', job.dispatchKey, 'candidate.json')).exists()).toBe(
+      false,
+    )
+  } finally {
+    daemon?.close()
     await rm(root, { recursive: true, force: true })
   }
 })
