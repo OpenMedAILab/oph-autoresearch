@@ -245,7 +245,20 @@ test('reconcile observes the original attempt after an unknown transport state w
     authority.unavailable = false
     await controller.reconcile(scope, accepted.attemptId)
     expect(authority.submitted).toHaveLength(1)
-    expect(authority.queried.at(-1)).toBe(accepted.attemptId)
+    await waitFor(
+      () => (authority.queried.includes(accepted.attemptId) ? accepted.attemptId : undefined),
+      'recovery query',
+    )
+    const spec = authority.submitted[0]!
+    authority.receiptBytes = Buffer.from(JSON.stringify(candidateReceipt(spec, draft(spec))))
+    authority.current = job(spec, 'completed')
+    await waitFor(
+      () =>
+        getResearchCampaign(store, campaign.id)?.cliPreparations?.[0]?.status === 'candidate'
+          ? true
+          : undefined,
+      'recovered candidate completion',
+    )
     expect(() =>
       controller.propose(
         { ...scope, workspaceId: 'other' },
@@ -269,6 +282,65 @@ test('reconcile observes the original attempt after an unknown transport state w
     await expect(changedRoute.reconcile(scope, accepted.attemptId)).rejects.toThrow('已变化')
     controller.close()
     changedRoute.close()
+  } finally {
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('rolls back a consumed approval and claimed attempt when binding fails before commit', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'oph-cli-controller-'))
+  const store = new SqlStore({ path: ':memory:' })
+  try {
+    const { workspace, campaign, task } = setup(store, root)
+    const authority = new FakeAuthority()
+    let changed = 0
+    const controller = new CliPreparationController(
+      store,
+      [route(authority)],
+      () => changed++,
+      () => {
+        throw new Error('bind fault')
+      },
+    )
+    const scope = { workspaceId: workspace.id, workspaceRoot: root, campaignId: campaign.id }
+    const proposed = controller.propose(scope, {
+      expectedVersion: campaign.version,
+      idempotencyKey: 'proposal-fault',
+      routeId: 'fixture-route',
+      taskRevisionId: task.id,
+      instructions: 'candidate only',
+      maxRuntimeMs: 1_000,
+      maxCost: 1,
+      acknowledgeUnknownCost: true,
+    })
+    const approval = controller.approval(scope, proposed.preparationId)
+    const approved = mutateResearchCampaign(store, campaign.id, {
+      expectedVersion: approval.expectedVersion,
+      idempotencyKey: approval.idempotencyKey,
+      command: {
+        kind: 'approve',
+        bundleHash: approval.bundleHash,
+        scope: approval.scope,
+        reviewer: { reviewerId: 'human', proofId: 'proof', verifiedAt: Date.now() },
+      },
+    })
+    if (!approved.ok) throw new Error(approved.message)
+    changed = 0
+    await expect(
+      controller.submit(scope, {
+        preparationId: proposed.preparationId,
+        approvalId: approved.campaign.approvals[0]!.id,
+        expectedVersion: approved.campaign.version,
+      }),
+    ).rejects.toThrow('bind fault')
+    const rolledBack = getResearchCampaign(store, campaign.id)!
+    expect(rolledBack.attempts).toEqual([])
+    expect(rolledBack.cliPreparations?.[0]).toMatchObject({ status: 'proposed', attemptId: null })
+    expect(rolledBack.approvals[0]?.consumedBy).toBeUndefined()
+    expect(changed).toBe(0)
+    expect(authority.submitted).toEqual([])
+    controller.close()
   } finally {
     store.close()
     await rm(root, { recursive: true, force: true })

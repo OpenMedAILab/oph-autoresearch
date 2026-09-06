@@ -54,6 +54,7 @@ export class CliPreparationController {
     private readonly store: Store,
     routes: readonly CliPreparationRoute[],
     private readonly changed: () => void,
+    private readonly beforeBind?: () => void,
   ) {
     if (
       new Set(routes.map((route) => route.id)).size !== routes.length ||
@@ -88,6 +89,7 @@ export class CliPreparationController {
     key: string,
     command: ResearchCommand,
     version = this.campaign(scope).version,
+    notify = true,
   ) {
     const result = mutateResearchCampaign(this.store, scope.campaignId, {
       expectedVersion: version,
@@ -95,8 +97,16 @@ export class CliPreparationController {
       command,
     })
     if (!result.ok) throw new CliPreparationControlError(result.message)
-    this.changed()
+    if (notify) this.notifyAfterCommit()
     return result
+  }
+  private notifyAfterCommit() {
+    try {
+      this.changed()
+    } catch (error) {
+      // The ledger is already committed. Preserve that result and leave a visible diagnostic.
+      console.error('CLI preparation change notification failed after commit', error)
+    }
   }
   propose(
     scope: CliPreparationScope,
@@ -188,52 +198,65 @@ export class CliPreparationController {
     if (preparation.attemptId)
       return { campaign: before, attemptId: preparation.attemptId, replayed: true }
     const route = this.routeFor(preparation)
-    const claimed = this.mutate(
-      scope,
-      `claim-cli:${preparation.id}`,
-      { kind: 'claimCliPreparation', preparationId: preparation.id, approvalId: input.approvalId },
-      input.expectedVersion,
-    )
-    const attemptId = claimed.campaign.cliPreparations!.find((item) => item.id === preparation.id)!
-      .attemptId!
-    const task = claimed.campaign.taskRevisions.find(
-      (item) => item.id === preparation.taskRevisionId,
-    )!
-    const spec: CliPreparationJobSpec = {
-      version: 3,
-      dispatchKey: attemptId,
-      campaignId: scope.campaignId,
-      taskRevisionId: task.id,
-      templateId: task.templateId,
-      inputHash: preparation.inputHash,
-      backendPolicyHash: preparation.backendPolicyHash,
-      resource: { cpu: 1, memoryMb: 256 },
-      lease: {
-        ownerId: `process-${process.pid}`,
-        token: crypto.randomUUID(),
-        fence: 1,
-        expiresAt: Date.now() + 60_000,
-      },
-      execution: {
-        adapter: 'cli-preparation-v1',
-        preparationId: preparation.id,
-        candidateId: preparation.candidateId,
-        clientDispatchKey: preparation.dispatchKey,
-        adapterId: preparation.adapterId,
-        adapterConfigHash: preparation.adapterConfigHash,
-        model: preparation.model,
-        instructions: preparation.instructions,
-        configHash: preparation.configHash,
-        deviceId: preparation.deviceId,
-        maxRuntimeMs: preparation.maxRuntimeMs,
-        maxCost: preparation.maxCost,
-      },
-    }
-    const bound = this.mutate(scope, `bind-cli:${attemptId}`, {
-      kind: 'bindCliPreparationJob',
-      attemptId,
-      spec,
+    const { bound, attemptId } = this.store.tx(() => {
+      const claimed = this.mutate(
+        scope,
+        `claim-cli:${preparation.id}`,
+        {
+          kind: 'claimCliPreparation',
+          preparationId: preparation.id,
+          approvalId: input.approvalId,
+        },
+        input.expectedVersion,
+        false,
+      )
+      const attemptId = claimed.campaign.cliPreparations!.find(
+        (item) => item.id === preparation.id,
+      )!.attemptId!
+      const task = claimed.campaign.taskRevisions.find(
+        (item) => item.id === preparation.taskRevisionId,
+      )!
+      const spec: CliPreparationJobSpec = {
+        version: 3,
+        dispatchKey: attemptId,
+        campaignId: scope.campaignId,
+        taskRevisionId: task.id,
+        templateId: task.templateId,
+        inputHash: preparation.inputHash,
+        backendPolicyHash: preparation.backendPolicyHash,
+        resource: { cpu: 1, memoryMb: 256 },
+        lease: {
+          ownerId: `process-${process.pid}`,
+          token: crypto.randomUUID(),
+          fence: 1,
+          expiresAt: Date.now() + 60_000,
+        },
+        execution: {
+          adapter: 'cli-preparation-v1',
+          preparationId: preparation.id,
+          candidateId: preparation.candidateId,
+          clientDispatchKey: preparation.dispatchKey,
+          adapterId: preparation.adapterId,
+          adapterConfigHash: preparation.adapterConfigHash,
+          model: preparation.model,
+          instructions: preparation.instructions,
+          configHash: preparation.configHash,
+          deviceId: preparation.deviceId,
+          maxRuntimeMs: preparation.maxRuntimeMs,
+          maxCost: preparation.maxCost,
+        },
+      }
+      this.beforeBind?.()
+      const bound = this.mutate(
+        scope,
+        `bind-cli:${attemptId}`,
+        { kind: 'bindCliPreparationJob', attemptId, spec },
+        undefined,
+        false,
+      )
+      return { bound, attemptId }
     })
+    this.notifyAfterCommit()
     void this.observe(scope, attemptId, route, true).catch(() =>
       console.error('CLI preparation observation could not persist'),
     )
@@ -258,8 +281,29 @@ export class CliPreparationController {
     const campaign = this.campaign(scope)
     const preparation = campaign.cliPreparations?.find((item) => item.attemptId === attemptId)
     if (!preparation) throw new CliPreparationControlError('准备运行不存在', 404)
-    await this.observe(scope, attemptId, this.routeFor(preparation), false, true)
+    const attempt = campaign.attempts.find((item) => item.id === attemptId)
+    if (!attempt?.cliPreparationJobSpec) {
+      if (attempt?.status === 'running')
+        this.mutate(scope, `unknown-unbound-cli:${attemptId}`, {
+          kind: 'markSyntheticUnknown',
+          attemptId,
+          reason: '旧准备尝试缺少冻结作业规格，必须人工核对；不会重新批准或投递',
+        })
+      return { campaign: this.campaign(scope), attemptId }
+    }
+    void this.observe(scope, attemptId, this.routeFor(preparation), false).catch(() =>
+      console.error('CLI preparation recovery observation could not persist'),
+    )
     return { campaign: this.campaign(scope), attemptId }
+  }
+  /** Startup hook: resume only already-bound durable remote jobs; never submit a replacement. */
+  recover(scope: CliPreparationScope) {
+    const campaign = this.campaign(scope)
+    const attemptIds = (campaign.cliPreparations ?? [])
+      .map((preparation) => preparation.attemptId)
+      .filter((attemptId): attemptId is string => attemptId !== null)
+    for (const attemptId of attemptIds) void this.reconcile(scope, attemptId)
+    return { attemptIds }
   }
   async cancel(scope: CliPreparationScope, attemptId: string) {
     const campaign = this.campaign(scope)
@@ -277,7 +321,6 @@ export class CliPreparationController {
     attemptId: string,
     route: CliPreparationRoute,
     submit: boolean,
-    once = false,
   ) {
     if (this.observing.has(attemptId)) return
     this.observing.add(attemptId)
@@ -361,7 +404,6 @@ export class CliPreparationController {
           })
           return
         }
-        if (once) return
         await Bun.sleep(250)
       } while (Date.now() < deadline)
       throw new Error('Observation time limit reached')
