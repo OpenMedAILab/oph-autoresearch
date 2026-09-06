@@ -569,6 +569,10 @@ export function canonicalResearchBundle(campaign: ResearchCampaign): string {
       workspaceId: campaign.workspaceId,
       parentConversationId: campaign.parentConversationId,
       goal: campaign.goal,
+      ...((campaign.costEvidence ?? []).length ? { costEvidence: campaign.costEvidence } : {}),
+      ...((campaign.costSettlements ?? []).length
+        ? { costSettlements: campaign.costSettlements }
+        : {}),
       ...(campaign.pattern ? { pattern: campaign.pattern } : {}),
       ...(campaign.patternHistory ? { patternHistory: campaign.patternHistory } : {}),
       ...(campaign.literatureCitations === undefined
