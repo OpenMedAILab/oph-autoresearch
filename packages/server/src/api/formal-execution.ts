@@ -14,8 +14,10 @@ import {
   mutateResearchCampaign,
 } from '@oph-autoresearch/store'
 import { readCliCandidateView } from '../research/cli-candidate-view.ts'
+import type { IsolatedFormalCodeReviewer } from '../research/formal-review-runner.ts'
 import { HUMAN_PROOF_HEADER } from '../research/human-auth.ts'
 import { publishResearchEvents } from '../research-events.ts'
+import { resolveWorkspaceServerBinding } from '../workspace-binding.ts'
 import { type ApiHandler, json } from './types.ts'
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/
@@ -121,10 +123,14 @@ async function buildPlan(
 ): Promise<{ plan: FormalExecutionPlan; code: string } | null> {
   const campaign = getResearchCampaign(deps.store, campaignId)
   const workspace = getWorkspace(deps.store, deps.workspaceId as never)
-  const binding = workspace?.serverBinding
+  // Re-resolve the saved SSH profile at every formal boundary.  A saved hash by
+  // itself is historical metadata and must not silently authorize profile drift.
+  const resolved = workspace ? await resolveWorkspaceServerBinding(workspace) : null
+  const binding = resolved?.binding
   if (
     !campaign ||
     !binding ||
+    resolved?.profile.root !== binding.remoteRoot ||
     binding.version !== 1 ||
     !SHA256.test(binding.connectionHash) ||
     typeof binding.remoteRoot !== 'string' ||
@@ -225,18 +231,21 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
     'pidsLimit',
   ]
   if (action === 'quote') {
-    if (
-      !required([...baseKeys, 'reviewMaxCost', 'expiresAt']) ||
-      !Number.isFinite(body.reviewMaxCost) ||
-      (body.reviewMaxCost as number) <= 0 ||
-      !Number.isSafeInteger(body.expiresAt)
-    )
+    if (!required([...baseKeys, 'expiresAt']) || !Number.isSafeInteger(body.expiresAt))
       return json({ error: 'invalid_quote_request' }, 400)
     const parsedQuote = planInput(Object.fromEntries(baseKeys.map((key) => [key, body[key]])))
     if (!parsedQuote) return json({ error: 'invalid_plan_input' }, 400)
     const built = await buildPlan(deps, campaignId, parsedQuote).catch(() => null)
     if (!built) return json({ error: 'candidate_or_binding_unavailable' }, 409)
     const planHash = formalExecutionPlanHash(built.plan)
+    if (!deps.researchFormalCodeReviewer)
+      return json({ error: 'isolated_reviewer_unavailable' }, 409)
+    let quote: ReturnType<IsolatedFormalCodeReviewer['quote']>
+    try {
+      quote = deps.researchFormalCodeReviewer.quote(campaign.budget.currency)
+    } catch {
+      return json({ error: 'formal_reviewer_price_unavailable' }, 409)
+    }
     return json({
       plan: built.plan,
       planHash,
@@ -247,7 +256,8 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
         formalResources: built.plan.resources,
         artifactVersionIds: [built.plan.candidateArtifactId],
         currency: campaign.budget.currency,
-        maxCost: body.reviewMaxCost,
+        configHash: quote.configHash,
+        maxCost: quote.reservedCost,
         expiresAt: body.expiresAt,
       },
     })
@@ -311,15 +321,88 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       return json({ error: 'invalid_review_request' }, 400)
     if (!deps.researchFormalCodeReviewer)
       return json({ error: 'isolated_reviewer_unavailable' }, 409)
-    const reviewed = await deps.researchFormalCodeReviewer.review({
-      code: built.code,
-      plan: built.plan,
+    let quote: ReturnType<IsolatedFormalCodeReviewer['quote']>
+    try {
+      quote = deps.researchFormalCodeReviewer.quote(campaign.budget.currency)
+    } catch {
+      return json({ error: 'formal_reviewer_price_unavailable' }, 409)
+    }
+    const planHash = formalExecutionPlanHash(built.plan)
+    const reviewId = `fcr_${crypto.randomUUID()}`
+    const reserve = mutateResearchCampaign(deps.store, campaignId, {
+      expectedVersion: body.expectedVersion as number,
+      idempotencyKey: `formal-review-reserve:${body.idempotencyKey as string}`,
+      command: {
+        kind: 'reserveFormalReview',
+        spec: {
+          dispatchKey: body.idempotencyKey as string,
+          approvalId: body.approvalId as string,
+          formalPlanHash: planHash,
+          configHash: quote.configHash,
+          currency: campaign.budget.currency,
+          reservedCost: quote.reservedCost,
+          maxRequests: 1,
+          maxInputCharacters: quote.maxInputCharacters,
+          maxOutputTokens: quote.maxOutputTokens,
+          reviewId,
+        },
+      },
     })
+    if (!reserve.ok) return result(reserve)
+    const dispatch = reserve.campaign.formalReviewDispatches!.find(
+      (item) => item.dispatchKey === body.idempotencyKey,
+    )!
+    // A replay after a lost response or crash is read-only.  Its reservation remains
+    // committed and a human can reconcile the unknown in-flight state.
+    if (reserve.replayed || dispatch.status !== 'reserved')
+      return json({ ...reserve, dispatch, replayed: true }, 202)
+    const started = mutateResearchCampaign(deps.store, campaignId, {
+      expectedVersion: reserve.campaign.version,
+      idempotencyKey: `formal-review-send:${dispatch.id}`,
+      command: {
+        kind: 'startFormalReviewRequest',
+        dispatchId: dispatch.id,
+        requestId: crypto.randomUUID(),
+      },
+    })
+    if (!started.ok) return result(started)
+    let reviewed: Awaited<ReturnType<IsolatedFormalCodeReviewer['review']>>
+    try {
+      reviewed = await deps.researchFormalCodeReviewer.review({
+        code: built.code,
+        plan: built.plan,
+        configHash: quote.configHash,
+        currency: campaign.budget.currency,
+      })
+    } catch {
+      const current = getResearchCampaign(deps.store, campaignId)!
+      const failed = mutateResearchCampaign(deps.store, campaignId, {
+        expectedVersion: current.version,
+        idempotencyKey: `formal-review-finish:${dispatch.id}`,
+        command: {
+          kind: 'finishFormalReview',
+          dispatchId: dispatch.id,
+          status: 'unknown',
+          actualCost: null,
+        },
+      })
+      return failed.ok
+        ? json(
+            {
+              ...failed,
+              dispatch: failed.campaign.formalReviewDispatches!.find(
+                (item) => item.id === dispatch.id,
+              ),
+            },
+            502,
+          )
+        : result(failed)
+    }
     if (!SHA256.test(reviewed.runnerReceiptHash))
       return json({ error: 'untrusted_isolated_reviewer' }, 409)
     const formal: FormalCodeReviewResult = {
       schema: 'research-formal-code-review-v1',
-      reviewId: `fcr_${crypto.randomUUID()}`,
+      reviewId,
       reviewKind: 'isolated-api',
       candidateArtifactId: built.plan.candidateArtifactId,
       taskRevisionId: built.plan.taskRevisionId,
@@ -331,15 +414,29 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       labelSetContentHash: built.plan.labelSetContentHash,
       trustedEvaluatorId: built.plan.trustedEvaluatorId,
       trustedEvaluatorHash: built.plan.trustedEvaluatorHash,
+      formalPlanHash: planHash,
       decision: reviewed.decision,
       findings: reviewed.findings,
       reviewedAt: Date.now(),
       reviewerId: reviewed.reviewerId,
       runnerReceiptHash: reviewed.runnerReceiptHash,
     }
+    const current = getResearchCampaign(deps.store, campaignId)!
+    const finished = mutateResearchCampaign(deps.store, campaignId, {
+      expectedVersion: current.version,
+      idempotencyKey: `formal-review-finish:${dispatch.id}`,
+      command: {
+        kind: 'finishFormalReview',
+        dispatchId: dispatch.id,
+        status: 'done',
+        result: formal,
+        actualCost: null,
+      },
+    })
+    if (!finished.ok) return result(finished)
     const written = mutateResearchCampaign(deps.store, campaignId, {
-      expectedVersion: body.expectedVersion as number,
-      idempotencyKey: body.idempotencyKey as string,
+      expectedVersion: finished.campaign.version,
+      idempotencyKey: `formal-review-record:${dispatch.id}`,
       command: {
         kind: 'recordFormalCodeReview',
         plan: built.plan,
@@ -389,6 +486,7 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       labelSetContentHash: built.plan.labelSetContentHash,
       trustedEvaluatorId: built.plan.trustedEvaluatorId,
       trustedEvaluatorHash: built.plan.trustedEvaluatorHash,
+      formalPlanHash: formalExecutionPlanHash(built.plan),
       decision: body.decision as FormalCodeReviewResult['decision'],
       findings: body.findings as FormalCodeReviewResult['findings'],
       reviewedAt: proof.verifiedAt,

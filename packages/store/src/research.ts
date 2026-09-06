@@ -309,6 +309,12 @@ function reservationForSubject(
         ?.reservedCost ?? null
     )
   }
+  if (subject.kind === 'formal_review') {
+    return (
+      (campaign.formalReviewDispatches ?? []).find((item) => item.id === subject.id)
+        ?.reservedCost ?? null
+    )
+  }
   const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
   return review ? review.reservedCost : null
 }
@@ -319,12 +325,18 @@ function knownActualCost(campaign: ResearchCampaign, subject: ResearchCostSubjec
     subject.kind === 'model_review'
       ? (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
       : undefined
+  const formalReview =
+    subject.kind === 'formal_review'
+      ? (campaign.formalReviewDispatches ?? []).find((item) => item.id === subject.id)
+      : undefined
   const controller =
     subject.kind === 'controller'
       ? (campaign.controllerReservations ?? []).find((item) => item.id === subject.id)
       : undefined
   if (review?.actualCost !== null && review?.actualCost !== undefined)
     amounts.push(review.actualCost)
+  if (formalReview?.actualCost !== null && formalReview?.actualCost !== undefined)
+    amounts.push(formalReview.actualCost)
   if (controller?.actualCost !== null && controller?.actualCost !== undefined)
     amounts.push(controller.actualCost)
   // A controller may know individual request charges before every request has a charge.
@@ -360,7 +372,9 @@ function knownActualSource(
         campaign.costSettlements?.some((settlement) => settlement.evidenceId === item.id)),
   )
   if (evidence) return evidence.source
-  return subject.kind === 'model_review' ? 'review-reported' : null
+  return subject.kind === 'model_review' || subject.kind === 'formal_review'
+    ? 'review-reported'
+    : null
 }
 
 function saturatedCostSum(values: readonly number[]): number {
@@ -384,6 +398,10 @@ function committedCost(campaign: ResearchCampaign): number {
       .map((preparation) => ({ kind: 'cli_preparation' as const, id: preparation.id })),
     ...(campaign.modelReviews ?? []).map((review) => ({
       kind: 'model_review' as const,
+      id: review.id,
+    })),
+    ...(campaign.formalReviewDispatches ?? []).map((review) => ({
+      kind: 'formal_review' as const,
       id: review.id,
     })),
     ...(campaign.controllerReservations ?? []).map((reservation) => ({
@@ -426,6 +444,10 @@ export function researchCostSummary(campaign: ResearchCampaign) {
       .map((preparation) => ({ kind: 'cli_preparation' as const, id: preparation.id })),
     ...(campaign.modelReviews ?? []).map((review) => ({
       kind: 'model_review' as const,
+      id: review.id,
+    })),
+    ...(campaign.formalReviewDispatches ?? []).map((review) => ({
+      kind: 'formal_review' as const,
       id: review.id,
     })),
     ...(campaign.controllerReservations ?? []).map((reservation) => ({
@@ -472,6 +494,7 @@ function validCostSubject(
   if (
     (value.kind !== 'cli_preparation' &&
       value.kind !== 'model_review' &&
+      value.kind !== 'formal_review' &&
       value.kind !== 'controller') ||
     typeof value.id !== 'string' ||
     value.id !== value.id.trim() ||
@@ -487,7 +510,9 @@ function costSubjectLabel(campaign: ResearchCampaign, subject: ResearchCostSubje
       ? (campaign.cliPreparations ?? [])
       : subject.kind === 'model_review'
         ? (campaign.modelReviews ?? [])
-        : (campaign.controllerReservations ?? [])
+        : subject.kind === 'formal_review'
+          ? (campaign.formalReviewDispatches ?? [])
+          : (campaign.controllerReservations ?? [])
   const index = entries.findIndex((entry) => entry.id === subject.id)
   if (index < 0) return null
   return `第 ${index + 1} 次${
@@ -495,7 +520,9 @@ function costSubjectLabel(campaign: ResearchCampaign, subject: ResearchCostSubje
       ? '代码准备'
       : subject.kind === 'model_review'
         ? '独立复核'
-        : '有界主控'
+        : subject.kind === 'formal_review'
+          ? '正式代码审阅'
+          : '有界主控'
   }`
 }
 
@@ -519,6 +546,10 @@ function subjectExecutionIsTerminal(
         ['completed', 'exhausted'].includes(reservation.status) &&
         reservation.requests.every((request) => request.status === 'done'),
     )
+  }
+  if (subject.kind === 'formal_review') {
+    const dispatch = (campaign.formalReviewDispatches ?? []).find((item) => item.id === subject.id)
+    return Boolean(dispatch && ['done', 'failed', 'unknown'].includes(dispatch.status))
   }
   const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
   return Boolean(
@@ -688,6 +719,7 @@ function formalReviewMatchesPlan(
   plan: import('@oph-autoresearch/core').FormalExecutionPlan,
 ): boolean {
   return (
+    review.formalPlanHash === formalExecutionPlanHash(plan) &&
     review.candidateArtifactId === plan.candidateArtifactId &&
     review.taskRevisionId === plan.taskRevisionId &&
     review.codeHash === plan.codeHash &&
@@ -1773,6 +1805,116 @@ function nextCampaign(
       }
       break
     }
+    case 'reserveFormalReview': {
+      const spec = command.spec
+      const approval = campaign.approvals.find((item) => item.id === spec?.approvalId)
+      const scope = approval?.scope
+      if (
+        !spec ||
+        !approval ||
+        approval.status !== 'active' ||
+        approval.consumedBy ||
+        approval.bundleHash !== campaign.bundleHash ||
+        scope?.kind !== 'formal_code_review' ||
+        scope.expiresAt <= now ||
+        scope.formalPlanHash !== spec.formalPlanHash ||
+        scope.configHash !== spec.configHash ||
+        scope.currency !== spec.currency ||
+        scope.currency !== campaign.budget.currency ||
+        scope.maxCost < spec.reservedCost ||
+        spec.maxRequests !== 1 ||
+        !Number.isSafeInteger(spec.maxInputCharacters) ||
+        spec.maxInputCharacters < 1 ||
+        !Number.isSafeInteger(spec.maxOutputTokens) ||
+        spec.maxOutputTokens < 1 ||
+        !SHA256.test(spec.formalPlanHash) ||
+        !SHA256.test(spec.configHash) ||
+        !Number.isFinite(spec.reservedCost) ||
+        spec.reservedCost <= 0 ||
+        !spec.dispatchKey ||
+        !spec.reviewId ||
+        (campaign.formalReviewDispatches ?? []).some(
+          (item) => item.dispatchKey === spec.dispatchKey,
+        ) ||
+        saturatedCostSum([committedCost(campaign), spec.reservedCost]) > campaign.budget.limit
+      )
+        return invalid(
+          'formal_review_approval_required',
+          'Formal review requires exact approved plan, configuration and reserved budget',
+        )
+      const id = randomId('fdr')
+      next = {
+        ...campaign,
+        formalReviewDispatches: [
+          ...(campaign.formalReviewDispatches ?? []),
+          {
+            ...cloneJson(spec),
+            id,
+            ownerPid: process.pid,
+            status: 'reserved',
+          },
+        ],
+        approvals: campaign.approvals.map((item) =>
+          item.id === approval.id ? { ...item, consumedBy: id } : item,
+        ),
+      }
+      break
+    }
+    case 'startFormalReviewRequest': {
+      const review = (campaign.formalReviewDispatches ?? []).find(
+        (item) => item.id === command.dispatchId,
+      )
+      if (
+        !review ||
+        review.ownerPid !== process.pid ||
+        review.status !== 'reserved' ||
+        textError(command.requestId, 'requestId') !== null
+      )
+        return invalid(
+          'formal_review_send_denied',
+          'Formal review dispatch is not available for send',
+        )
+      next = {
+        ...campaign,
+        formalReviewDispatches: campaign.formalReviewDispatches!.map((item) =>
+          item.id === review.id
+            ? { ...item, status: 'sending', requestId: command.requestId }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'finishFormalReview': {
+      const dispatch = (campaign.formalReviewDispatches ?? []).find(
+        (item) => item.id === command.dispatchId,
+      )
+      if (
+        !dispatch ||
+        dispatch.ownerPid !== process.pid ||
+        dispatch.status !== 'sending' ||
+        (command.actualCost !== null &&
+          (!Number.isFinite(command.actualCost) || command.actualCost < 0)) ||
+        (command.status === 'done' && !validFormalCodeReviewResult(command.result))
+      )
+        return invalid(
+          'invalid_formal_review_finish',
+          'Formal review completion does not bind an in-flight dispatch',
+        )
+      next = {
+        ...campaign,
+        formalReviewDispatches: campaign.formalReviewDispatches!.map((item) =>
+          item.id === dispatch.id
+            ? {
+                ...item,
+                status: command.status,
+                ...(command.result ? { result: cloneJson(command.result) } : {}),
+                actualCost: command.actualCost,
+              }
+            : item,
+        ),
+      }
+      break
+    }
     case 'recordFormalCodeReview': {
       const result = command.result
       const plan = command.plan
@@ -1807,10 +1949,17 @@ function nextCampaign(
       if (result.reviewKind === 'isolated-api') {
         const approval = campaign.approvals.find((item) => item.id === command.approvalId)
         const scope = approval?.scope
+        const dispatched = (campaign.formalReviewDispatches ?? []).find(
+          (item) =>
+            item.approvalId === command.approvalId &&
+            item.reviewId === result.reviewId &&
+            item.status === 'done' &&
+            item.result?.runnerReceiptHash === result.runnerReceiptHash,
+        )
         if (
           !approval ||
           approval.status !== 'active' ||
-          approval.consumedBy ||
+          (!dispatched && approval.consumedBy) ||
           approval.bundleHash !== campaign.bundleHash ||
           scope?.kind !== 'formal_code_review' ||
           scope.expiresAt <= now ||
@@ -1820,7 +1969,8 @@ function nextCampaign(
           scope.formalPlanHash !== formalExecutionPlanHash(plan) ||
           canonicalJson(scope.formalResources) !== canonicalJson(plan.resources) ||
           !result.runnerReceiptHash ||
-          command.reviewer !== undefined
+          command.reviewer !== undefined ||
+          (dispatched && dispatched.formalPlanHash !== formalExecutionPlanHash(plan))
         )
           return invalid(
             'formal_review_approval_required',
@@ -1830,7 +1980,7 @@ function nextCampaign(
           ...campaign,
           formalCodeReviews: [...(campaign.formalCodeReviews ?? []), cloneJson(result)],
           approvals: campaign.approvals.map((item) =>
-            item.id === approval.id
+            item.id === approval.id && !item.consumedBy
               ? { ...item, consumedBy: `formal-review:${result.reviewId}` }
               : item,
           ),
@@ -2520,7 +2670,8 @@ function nextCampaign(
               !campaign.artifactVersions.some(
                 (artifact) => artifact.id === scope.artifactVersionIds[0],
               ) ||
-              (scope.kind === 'formal_code_review' && scope.maxCost <= 0)))
+              (scope.kind === 'formal_code_review' &&
+                (scope.maxCost <= 0 || !scope.configHash || !SHA256.test(scope.configHash)))))
         )
           return invalid(
             'invalid_approval_scope',

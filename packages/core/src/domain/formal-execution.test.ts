@@ -67,6 +67,7 @@ describe('formal execution contract', () => {
       labelSetContentHash: hash('f'),
       trustedEvaluatorId: 'binary-classification-v1',
       trustedEvaluatorHash: hash('1'),
+      formalPlanHash: hash('0'),
       decision: 'accepted' as const,
       findings: [],
       reviewedAt: 1,

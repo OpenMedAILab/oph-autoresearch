@@ -1,13 +1,26 @@
 import { createHash } from 'node:crypto'
 import { buildAdapter, type LlmAdapter, type ProviderProfile } from '@oph-autoresearch/ai'
 import type { FormalCodeReviewResult, FormalExecutionPlan } from '@oph-autoresearch/core'
-import { type OphConfig, resolveModel } from '@oph-autoresearch/runtime'
+import { makeResearchRequestGuard, type OphConfig, resolveModel } from '@oph-autoresearch/runtime'
+import { evidenceBudget } from './evidence-budget.ts'
 
 type RunnerOutput = Pick<FormalCodeReviewResult, 'decision' | 'findings'>
 
 /** Narrow paid-review port: it exposes only candidate code and a digest-only plan. */
 export interface IsolatedFormalCodeReviewer {
-  review(input: { code: string; plan: FormalExecutionPlan }): Promise<{
+  /** Deterministic configured-price upper reservation. No provider call. */
+  quote(currency: string): {
+    configHash: string
+    reservedCost: number
+    maxInputCharacters: number
+    maxOutputTokens: number
+  }
+  review(input: {
+    code: string
+    plan: FormalExecutionPlan
+    configHash: string
+    currency: string
+  }): Promise<{
     reviewerId: string
     decision: FormalCodeReviewResult['decision']
     findings: FormalCodeReviewResult['findings']
@@ -65,13 +78,31 @@ export function createIsolatedFormalCodeReviewer(input: {
   adapter: LlmAdapter
   reviewerId: string
   signal?: AbortSignal
+  quote?: {
+    configHash: string
+    reservedCost: number
+    maxInputCharacters: number
+    maxOutputTokens: number
+  }
 }): IsolatedFormalCodeReviewer {
   if (!input.reviewerId || input.reviewerId.length > 128) throw new Error('invalid formal reviewer')
   return {
+    quote(currency) {
+      if (!input.quote) throw new Error(`formal reviewer price unavailable for ${currency}`)
+      return input.quote
+    },
     async review({ code, plan }) {
+      const limits = input.quote ?? { maxInputCharacters: 1_000_000, maxOutputTokens: 1024 }
+      const timeout = AbortSignal.timeout(60_000)
+      const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout
+      const adapter = makeResearchRequestGuard({
+        maxRequests: 1,
+        maxInputCharacters: limits.maxInputCharacters,
+        maxOutputTokens: limits.maxOutputTokens,
+      }).wrap(input.adapter)
       let text = ''
-      for await (const event of input.adapter.stream({
-        model: input.adapter.spec.id,
+      for await (const event of adapter.stream({
+        model: adapter.spec.id,
         system: [
           {
             text: 'You are an isolated code reviewer. You have no tools, conversation history, files, or authority to approve, execute, or release research. Review only supplied code and plan. Return exactly JSON {"decision":"accepted|rejected|needs_changes","findings":[{"severity":"info|warning|error","code":"short-id","message":"brief"}]}.',
@@ -79,9 +110,9 @@ export function createIsolatedFormalCodeReviewer(input: {
         ],
         messages: [{ role: 'user', content: JSON.stringify({ code, plan }) }],
         tools: [],
-        maxOutputTokens: 1024,
+        maxOutputTokens: limits.maxOutputTokens,
         hardOutputLimit: true,
-        ...(input.signal ? { signal: input.signal } : {}),
+        signal,
       })) {
         if (event.type === 'tool_calls') throw new Error('isolated reviewer attempted a tool call')
         if (event.type === 'text_delta') {
@@ -109,6 +140,32 @@ export function createConfiguredIsolatedFormalCodeReviewer(
   config: OphConfig,
 ): IsolatedFormalCodeReviewer {
   return {
+    quote(currency) {
+      const resolved = resolveModel(structuredClone(config))
+      if (!resolved) throw new Error('formal reviewer model is not configured')
+      const profile: ProviderProfile = {
+        kind: resolved.kind,
+        model: resolved.model,
+        apiKey: resolved.apiKey ?? '',
+        ...(resolved.baseUrl ? { baseUrl: resolved.baseUrl } : {}),
+        ...(resolved.headers ? { headers: resolved.headers } : {}),
+        ...(resolved.spec ? { spec: resolved.spec } : {}),
+        ...(resolved.transport ? { transport: resolved.transport } : {}),
+      }
+      const budget = evidenceBudget({
+        profile,
+        spec: buildAdapter(profile).spec,
+        currency,
+        maxRequests: 1,
+        maxOutputTokens: 1024,
+      })
+      return {
+        configHash: budget.configHash,
+        reservedCost: budget.reservedCost,
+        maxInputCharacters: Math.min(1_000_000, Math.floor(budget.maxInputTokens / 4) - 4096),
+        maxOutputTokens: budget.maxOutputTokens,
+      }
+    },
     async review(input) {
       const resolved = resolveModel(structuredClone(config))
       if (!resolved) throw new Error('formal reviewer model is not configured')
@@ -121,9 +178,13 @@ export function createConfiguredIsolatedFormalCodeReviewer(
         ...(resolved.spec ? { spec: resolved.spec } : {}),
         ...(resolved.transport ? { transport: resolved.transport } : {}),
       }
+      const quote = this.quote(input.currency)
+      if (quote.configHash !== input.configHash)
+        throw new Error('formal reviewer configuration changed after approval')
       return createIsolatedFormalCodeReviewer({
         adapter: buildAdapter(profile),
         reviewerId: `formal-api:${resolved.kind}:${resolved.model}`,
+        quote,
       }).review(input)
     },
   }

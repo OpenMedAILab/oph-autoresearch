@@ -60,6 +60,8 @@ export interface FormalCodeReviewResult {
   reviewerId: string
   /** Present only for an isolated API review that actually ran. */
   runnerReceiptHash?: string
+  /** Exact plan digest reviewed; an accepted review cannot authorize another plan. */
+  formalPlanHash: string
 }
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/
@@ -175,6 +177,7 @@ export function validFormalCodeReviewResult(value: unknown): value is FormalCode
         'dataManifestHash',
         'decision',
         'findings',
+        'formalPlanHash',
         'labelSetContentHash',
         'ociImageDigest',
         'reviewId',
@@ -195,6 +198,7 @@ export function validFormalCodeReviewResult(value: unknown): value is FormalCode
         'dataManifestHash',
         'decision',
         'findings',
+        'formalPlanHash',
         'labelSetContentHash',
         'ociImageDigest',
         'reviewId',
@@ -228,6 +232,7 @@ export function validFormalCodeReviewResult(value: unknown): value is FormalCode
     review.reviewerId,
   ]
   const hashes = [
+    review.formalPlanHash,
     review.codeHash,
     review.candidateReceiptHash,
     review.workspaceBindingHash,

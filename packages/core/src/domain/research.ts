@@ -317,6 +317,27 @@ export interface ResearchModelReview {
   actualCost?: number | null
 }
 
+/** A paid formal code-review dispatch.  This is deliberately separate from
+ * evidence/model reviews: accepting code never supplies scientific evidence. */
+export interface FormalReviewDispatch {
+  id: string
+  dispatchKey: string
+  approvalId: string
+  formalPlanHash: string
+  configHash: string
+  currency: string
+  reservedCost: number
+  maxRequests: 1
+  maxInputCharacters: number
+  maxOutputTokens: number
+  status: 'reserved' | 'sending' | 'done' | 'failed' | 'unknown'
+  ownerPid: number
+  reviewId: string
+  requestId?: string
+  result?: FormalCodeReviewResult
+  actualCost?: number | null
+}
+
 export interface ResearchLiteratureCitation {
   id: string
   doi?: string
@@ -355,6 +376,7 @@ export interface ResearchCampaign {
   }>
   literatureCitations?: ResearchLiteratureCitation[]
   modelReviews?: ResearchModelReview[]
+  formalReviewDispatches?: FormalReviewDispatch[]
   /** Immutable accepted/rejected review evidence for candidate code only. */
   formalCodeReviews?: FormalCodeReviewResult[]
   /** Admission-ready plans. Recording one never submits it to a backend. */
@@ -516,6 +538,18 @@ export type ResearchCommand =
       conversationId: string
       text: string
       status: 'done' | 'failed' | 'unknown'
+      actualCost: number | null
+    }
+  | {
+      kind: 'reserveFormalReview'
+      spec: Omit<FormalReviewDispatch, 'id' | 'ownerPid' | 'status'>
+    }
+  | { kind: 'startFormalReviewRequest'; dispatchId: string; requestId: string }
+  | {
+      kind: 'finishFormalReview'
+      dispatchId: string
+      status: 'done' | 'failed' | 'unknown'
+      result?: FormalCodeReviewResult
       actualCost: number | null
     }
   | { kind: 'recordLiteratureCitation'; citation: ResearchLiteratureCitation }
