@@ -953,6 +953,7 @@ function nextCampaign(
         !attempt ||
         !validObserverLease(command, now) ||
         !cliAuthorityMatches(attempt, command.expectedEpoch, command.expectedJobSpecHash) ||
+        !['running', 'unknown'].includes(attempt.status) ||
         attempt.cliPreparationAuthority?.dispatchState !== 'not_sent'
       )
         return invalid(
@@ -990,8 +991,10 @@ function nextCampaign(
         !binding ||
         !validObserverLease(command, now) ||
         !cliAuthorityMatches(attempt, command.expectedEpoch, command.expectedJobSpecHash) ||
+        !['running', 'unknown'].includes(attempt.status) ||
         binding.dispatchState === 'not_sent' ||
-        (prior !== undefined && prior.expiresAt > now && !renewal)
+        (prior !== undefined && prior.expiresAt > now && !renewal) ||
+        (renewal && command.leaseExpiresAt < prior.expiresAt)
       )
         return invalid(
           'invalid_cli_preparation_observer_claim',
@@ -1049,7 +1052,9 @@ function nextCampaign(
                   dispatchState:
                     command.kind === 'acknowledgeCliPreparationDispatch'
                       ? 'acknowledged'
-                      : 'observation_unknown',
+                      : binding.dispatchState === 'sending'
+                        ? 'sending'
+                        : 'observation_unknown',
                 },
               }
             : candidate,

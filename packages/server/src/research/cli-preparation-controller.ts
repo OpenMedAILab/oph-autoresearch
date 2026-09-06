@@ -349,6 +349,10 @@ export class CliPreparationController {
   private jobHash(spec: CliPreparationJobSpec) {
     return sha256(canonicalJson(spec))
   }
+  private async hasExpectedEpoch(route: CliPreparationRoute, epoch: string) {
+    const identity = await route.authority.identity()
+    return identity.schema === 'research-authority-identity-v1' && identity.epoch === epoch
+  }
   private async acquireObserver(
     scope: CliPreparationScope,
     attemptId: string,
@@ -464,11 +468,7 @@ export class CliPreparationController {
         binding.dispatchState === 'not_sent' ? 'first_send' : 'observe',
       )
       if (!held) return
-      const remoteIdentity = await route.authority.identity()
-      if (
-        remoteIdentity.schema !== 'research-authority-identity-v1' ||
-        remoteIdentity.epoch !== held.epoch
-      ) {
+      if (!(await this.hasExpectedEpoch(route, held.epoch))) {
         this.markObservationUnknown(
           scope,
           attemptId,
@@ -506,6 +506,16 @@ export class CliPreparationController {
         if (held.observer.generation > 0 && held.observer.expiresAt <= Date.now() + 10_000) {
           held = (await this.acquireObserver(scope, attemptId, 'observe')) ?? undefined
           if (!held) return
+        }
+        if (!(await this.hasExpectedEpoch(route, held.epoch))) {
+          this.markObservationUnknown(
+            scope,
+            attemptId,
+            held.epoch,
+            held.observer,
+            '远端 authority epoch 已变化；不能接受该实例之前读取的执行状态或回执',
+          )
+          return
         }
         const job = await route.authority.query(attemptId)
         if (!job) {
@@ -561,6 +571,16 @@ export class CliPreparationController {
           await route.authority.cancel(attemptId)
         if (job.status === 'completed') {
           const bytes = await route.authority.receipt(attemptId)
+          if (!(await this.hasExpectedEpoch(route, held.epoch))) {
+            this.markObservationUnknown(
+              scope,
+              attemptId,
+              held.epoch,
+              held.observer,
+              '读取回执期间 authority epoch 已变化；回执不能被接纳',
+            )
+            return
+          }
           if (bytes.byteLength > 1_000_000) throw new Error('Candidate receipt exceeds limit')
           const receipt: unknown = JSON.parse(Buffer.from(bytes).toString('utf8'))
           if (!verifyCandidateReceipt(receipt, spec))
