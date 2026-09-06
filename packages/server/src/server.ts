@@ -1,4 +1,8 @@
 import { refreshCliCatalog } from './cli-catalog.ts'
+import {
+  CliPreparationController,
+  type CliPreparationRoute,
+} from './research/cli-preparation-controller.ts'
 import { captureResearchDeployment } from './research/deployment-governance.ts'
 import { createResearchDevices, quoteResearchDevice } from './research/execution-devices.ts'
 import { createHumanAuthVerifier, type HumanAuthVerifierConfig } from './research/human-auth.ts'
@@ -66,6 +70,8 @@ import { startRun } from './run-control.ts'
 import { RunManager } from './runs.ts'
 
 export interface ServeOptions {
+  researchCliPreparation?: readonly (Omit<CliPreparationRoute, 'authority'> &
+    ({ authority: CliPreparationRoute['authority'] } | { config: SshDaemonConfig }))[]
   /** Explicit administrator-owned external notification configuration. Disabled by default. */
   researchNotifications?: ResearchNotificationConfig
   researchReviewCli?: { workerArgv?: readonly string[] }
@@ -191,6 +197,18 @@ export function serve(opts: ServeOptions) {
     !restricted && opts.researchNotifications
       ? new ResearchNotificationCoordinator(opts.researchNotifications)
       : undefined
+  const cliPreparationRoutes =
+    !restricted && opts.researchCliPreparation
+      ? opts.researchCliPreparation.map((route) => ({
+          ...route,
+          authority: 'authority' in route ? route.authority : createSshDaemonClient(route.config),
+        }))
+      : []
+  const researchCliPreparation = cliPreparationRoutes.length
+    ? new CliPreparationController(opts.store, cliPreparationRoutes, () =>
+        publishResearchEvents(opts.store, bus, researchNotifications),
+      )
+    : undefined
   const researchTemplate =
     restricted || !workspace ? { created: [] } : ensureResearchWorkspace(workspaceRoot)
   if (researchTemplate.created.length > 0) {
@@ -216,7 +234,7 @@ export function serve(opts: ServeOptions) {
    * 异步、不阻塞服务启动——一个慢插件不该让整个服务起不来。
    */
   let pluginTeardown: (() => void) | null = null
-  if (!restricted && workspace)
+  if (!restricted && !researchControllerOnly && workspace)
     void acquireExtensions(workspaceRoot, (line) => process.stderr.write(`${line}\n`))
       .then((ext) => {
         for (const f of ext.mcp.failures) {
@@ -385,6 +403,8 @@ export function serve(opts: ServeOptions) {
     ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
     ...(!restricted && opts.researchReviewCli ? { researchReviewCli: opts.researchReviewCli } : {}),
     ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
+    researchControllerOnly,
+    ...(researchCliPreparation ? { researchCliPreparation } : {}),
     ...(researchNotifications ? { researchNotifications } : {}),
   })
 
@@ -545,6 +565,8 @@ export function serve(opts: ServeOptions) {
               ? { researchReviewCli: opts.researchReviewCli }
               : {}),
             ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
+            researchControllerOnly,
+            ...(researchCliPreparation ? { researchCliPreparation } : {}),
             ...(researchNotifications ? { researchNotifications } : {}),
           })
           if (res) return withCors(res)
@@ -644,6 +666,11 @@ export function serve(opts: ServeOptions) {
     stop() {
       for (const device of researchExecutionDevices ?? []) device.authority.close()
       researchDaemonBackend?.daemon.close()
+      researchCliPreparation?.close()
+      for (const route of cliPreparationRoutes) {
+        if ('close' in route.authority && typeof route.authority.close === 'function')
+          route.authority.close()
+      }
       researchNotifications?.close()
       clearInterval(schedulerTimer)
       gitWatch.stop()

@@ -10,6 +10,12 @@ export type ResearchControlOperation =
   | 'request_review'
   | 'documents/read'
   | 'record_document/write'
+  | 'cli_preparation/propose'
+  | 'cli_preparation/submit'
+  | 'cli_preparation/status'
+  | 'cli_preparation/cancel'
+  | 'cli_preparation/reconcile'
+  | 'cli_preparation/catalog'
 
 /** Model-facing capability: it deliberately contains no approval, signing, or release action. */
 export interface ResearchControlPort {

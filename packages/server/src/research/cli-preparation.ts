@@ -232,7 +232,7 @@ export async function prepareCliDraft(input: {
       typeof raw.code !== 'string' ||
       !raw.code ||
       raw.code.length > LIMIT ||
-      (raw.patch !== undefined && typeof raw.patch !== 'string')
+      (raw.patch !== undefined && raw.patch !== null && typeof raw.patch !== 'string')
     )
       throw new Error('CLI preparation returned an invalid draft')
     const patch = typeof raw.patch === 'string' ? raw.patch : null,

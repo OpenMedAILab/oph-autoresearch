@@ -13,6 +13,7 @@ import {
   state,
   workspace,
 } from '../lib/store/index.ts'
+import { ResearchCliPreparationPanel } from './ResearchCliPreparationPanel.tsx'
 import { ResearchDocumentsPanel } from './ResearchDocumentsPanel.tsx'
 import { ResearchExperimentResult } from './ResearchExperimentResult.tsx'
 import { ResearchNotificationsPanel } from './ResearchNotificationsPanel.tsx'
@@ -70,6 +71,7 @@ const reviewStatuses = {
   unknown: '状态待核对',
 }
 const approvalKinds = {
+  cli_preparation: '远端代码准备审批',
   execution: '实验执行审批',
   protocol: '研究方案审批',
   model_review: '独立复核审批',
@@ -126,13 +128,22 @@ const backendLabels = {
   'ssh-daemon': 'SSH 远端守护进程',
 }
 
+function isCodePreparation(campaign: ResearchCampaign, attemptId: string) {
+  return (campaign.cliPreparations ?? []).some((preparation) => preparation.attemptId === attemptId)
+}
 function campaignProgress(campaign: ResearchCampaign) {
   if (campaign.status === 'completed') return '研究输出已发布'
-  if ((campaign.attempts ?? []).some((attempt) => attempt.status === 'running')) return '实验执行中'
-  if ((campaign.attempts ?? []).some((attempt) => attempt.status === 'unknown'))
-    return '实验状态待核对'
-  if ((campaign.attempts ?? []).some((attempt) => attempt.status === 'completed'))
+  const experiments = (campaign.attempts ?? []).filter(
+    (attempt) => !isCodePreparation(campaign, attempt.id),
+  )
+  if (experiments.some((attempt) => attempt.status === 'running')) return '实验执行中'
+  if (experiments.some((attempt) => attempt.status === 'unknown')) return '实验状态待核对'
+  if (experiments.some((attempt) => attempt.status === 'completed'))
     return '实验结果已核验 · 待独立复核'
+  if ((campaign.cliPreparations ?? []).some((item) => item.status === 'candidate'))
+    return '候选代码已保存 · 待审阅'
+  if ((campaign.cliPreparations ?? []).some((item) => item.status === 'claimed'))
+    return '代码准备进行中 · 状态以运行记录为准'
   return `${stageLabels[campaign.stage]} · ${statusLabels[campaign.status]}`
 }
 
@@ -422,7 +433,9 @@ export function ResearchCampaignPanel() {
   }
   function completedAttemptIds(campaign: ResearchCampaign) {
     return (campaign.attempts ?? [])
-      .filter((attempt) => attempt.status === 'completed')
+      .filter(
+        (attempt) => attempt.status === 'completed' && !isCodePreparation(campaign, attempt.id),
+      )
       .map((attempt) => attempt.id)
   }
   async function quoteReview(campaign: ResearchCampaign) {
@@ -576,6 +589,13 @@ export function ResearchCampaignPanel() {
                 </For>
               </fieldset>
               <ResearchPatternPanel campaign={campaign} busy={busy()} act={act} />
+              <ResearchCliPreparationPanel
+                campaign={campaign}
+                approvalUrl={approvalChannel()}
+                busy={busy()}
+                act={act}
+                taskName={templateName}
+              />
               <ResearchDocumentsPanel campaign={campaign} busy={busy()} act={act} />
               <ResearchNotificationsPanel
                 campaignId={campaign.id}
@@ -642,10 +662,13 @@ export function ResearchCampaignPanel() {
                     <div>
                       <p>
                         第 {index() + 1} 次运行 ·{' '}
-                        {templateName(
-                          campaign.taskRevisions.find((task) => task.id === attempt.taskRevisionId)
-                            ?.templateId ?? '',
-                        )}{' '}
+                        {isCodePreparation(campaign, attempt.id)
+                          ? '远端代码准备'
+                          : templateName(
+                              campaign.taskRevisions.find(
+                                (task) => task.id === attempt.taskRevisionId,
+                              )?.templateId ?? '',
+                            )}{' '}
                         ·{' '}
                         {attempt.cancelRequestedAt && attempt.status === 'running'
                           ? '取消请求中，等待执行者确认'
@@ -662,12 +685,22 @@ export function ResearchCampaignPanel() {
                           attemptId={attempt.id}
                         />
                       </Show>
-                      <Show when={attempt.status === 'running' && !attempt.cancelRequestedAt}>
+                      <Show
+                        when={
+                          attempt.status === 'running' &&
+                          !attempt.cancelRequestedAt &&
+                          !isCodePreparation(campaign, attempt.id)
+                        }
+                      >
                         <button type="button" onClick={() => void cancel(campaign, attempt.id)}>
                           请求取消
                         </button>
                       </Show>
-                      <Show when={attempt.status === 'unknown'}>
+                      <Show
+                        when={
+                          attempt.status === 'unknown' && !isCodePreparation(campaign, attempt.id)
+                        }
+                      >
                         <button type="button" onClick={() => void reconcile(campaign, attempt.id)}>
                           核对状态
                         </button>
@@ -681,17 +714,30 @@ export function ResearchCampaignPanel() {
                 <For each={campaign.artifactVersions}>
                   {(artifact) => (
                     <p>
-                      {templateName(artifact.schemaId ?? '')}结果 · 版本 {artifact.version} ·{' '}
+                      {artifact.kind === 'cli_preparation_candidate'
+                        ? '候选代码'
+                        : `${templateName(artifact.schemaId ?? '')}结果`}{' '}
+                      · 版本 {artifact.version} ·{' '}
                       {artifact.dataClass === 'synthetic'
                         ? '合成数据'
                         : artifact.dataClass === 'public'
                           ? '公开数据'
                           : '研究数据'}{' '}
                       ·{' '}
-                      {artifact.validation
-                        ? `已核验（${(artifact.validation.byteLength / 1024).toFixed(1)} KB）`
-                        : '未提供核验元数据'}{' '}
-                      · 来源：{runName(campaign, artifact.producerAttemptId)}
+                      {artifact.kind === 'cli_preparation_candidate'
+                        ? '已保存，待独立代码审阅'
+                        : artifact.validation
+                          ? `已核验（${(artifact.validation.byteLength / 1024).toFixed(1)} KB）`
+                          : '未提供核验元数据'}{' '}
+                      · 来源：
+                      {runName(
+                        campaign,
+                        artifact.producerAttemptId ??
+                          campaign.cliPreparations?.find(
+                            (item) => item.artifactVersionId === artifact.id,
+                          )?.attemptId ??
+                          undefined,
+                      )}
                     </p>
                   )}
                 </For>

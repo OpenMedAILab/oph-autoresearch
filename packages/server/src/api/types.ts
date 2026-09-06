@@ -1,3 +1,4 @@
+import type { CliPreparationController } from '../research/cli-preparation-controller.ts'
 import type { ResearchDaemonBackend } from '../research/daemon-execution.ts'
 import type { ResearchDevice } from '../research/execution-devices.ts'
 import type { HumanAuthVerifier } from '../research/human-auth.ts'
@@ -23,6 +24,8 @@ import type { ResearchNotificationCoordinator } from '../research-notifications.
 import type { RunManager } from '../runs.ts'
 
 export interface ApiDeps {
+  researchCliPreparation?: CliPreparationController
+  researchControllerOnly?: boolean
   researchApprovalUrl?: string
   researchNotifications?: Pick<ResearchNotificationCoordinator, 'list' | 'publish'>
   researchExecutionDevices?: readonly ResearchDevice[]

@@ -78,6 +78,8 @@ export async function copyPluginDir(
 
 export const handlePluginsApi: ApiHandler = async (url, req, d) => {
   const p = url.pathname
+  if (d.researchControllerOnly && p.startsWith('/api/plugins'))
+    return json({ error: '研究控制模式不加载或管理扩展工具。' }, 403)
 
   if (p === '/api/plugins') {
     const { loadExtensions } = await import('@oph-autoresearch/runtime')

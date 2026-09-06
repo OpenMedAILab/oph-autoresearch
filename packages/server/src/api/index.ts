@@ -1,3 +1,4 @@
+import { handleCliPreparationsApi } from './cli-preparations.ts'
 /**
  * HTTP API 的派发器。
  *
@@ -78,6 +79,7 @@ const HANDLERS: ApiHandler[] = [
   handleUsageApi,
   handleResearchControlApi,
   handleResearchDocumentsApi,
+  handleCliPreparationsApi,
   handleResearchApi,
   handleConversationsApi,
   handleWorkspaceFsApi,

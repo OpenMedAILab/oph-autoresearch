@@ -11,6 +11,12 @@ const OPERATIONS = new Set([
   'request_review',
   'documents/read',
   'record_document/write',
+  'cli_preparation/propose',
+  'cli_preparation/submit',
+  'cli_preparation/status',
+  'cli_preparation/cancel',
+  'cli_preparation/reconcile',
+  'cli_preparation/catalog',
 ])
 
 export async function runResearchControl(args: string[]): Promise<number> {

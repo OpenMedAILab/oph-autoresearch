@@ -1,3 +1,4 @@
+import { handleCliPreparationsApi } from '../api/cli-preparations.ts'
 /**
  * Narrow adapter over the existing research HTTP boundary.
  *
@@ -22,6 +23,12 @@ export type ResearchControlOperation =
   | 'request_review'
   | 'documents/read'
   | 'record_document/write'
+  | 'cli_preparation/propose'
+  | 'cli_preparation/submit'
+  | 'cli_preparation/status'
+  | 'cli_preparation/cancel'
+  | 'cli_preparation/reconcile'
+  | 'cli_preparation/catalog'
 
 export interface ResearchControlRequest {
   operation: ResearchControlOperation
@@ -42,6 +49,12 @@ export const RESEARCH_CONTROL_OPERATIONS = new Set<ResearchControlOperation>([
   'request_review',
   'documents/read',
   'record_document/write',
+  'cli_preparation/propose',
+  'cli_preparation/submit',
+  'cli_preparation/status',
+  'cli_preparation/cancel',
+  'cli_preparation/reconcile',
+  'cli_preparation/catalog',
 ])
 
 const paths: Record<Exclude<ResearchControlOperation, 'prepare'>, string> = {
@@ -55,6 +68,12 @@ const paths: Record<Exclude<ResearchControlOperation, 'prepare'>, string> = {
   request_review: 'review',
   'documents/read': 'documents',
   'record_document/write': 'documents',
+  'cli_preparation/propose': 'cli-preparations/propose',
+  'cli_preparation/submit': 'cli-preparations/submit',
+  'cli_preparation/status': 'cli-preparations',
+  'cli_preparation/cancel': 'cli-preparations/cancel',
+  'cli_preparation/reconcile': 'cli-preparations/reconcile',
+  'cli_preparation/catalog': 'cli-preparations/catalog',
 }
 
 /**
@@ -83,7 +102,14 @@ export class ResearchControlApiAdapter {
       }
     } else {
       const suffix = paths[request.operation]
-      method = ['status', 'events', 'receipt', 'documents/read'].includes(request.operation)
+      method = [
+        'status',
+        'events',
+        'receipt',
+        'documents/read',
+        'cli_preparation/status',
+        'cli_preparation/catalog',
+      ].includes(request.operation)
         ? 'GET'
         : 'POST'
       path += `/${encodeURIComponent(campaignId!)}${suffix ? `/${suffix}` : ''}`
@@ -105,6 +131,7 @@ export class ResearchControlApiAdapter {
         : {}),
     })
     return (
+      (await handleCliPreparationsApi(url, req, this.deps)) ??
       (await handleResearchDocumentsApi(url, req, this.deps)) ??
       (await handleResearchApi(url, req, this.deps)) ??
       jsonError('research_route_unavailable', 404)

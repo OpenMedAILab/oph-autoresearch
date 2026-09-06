@@ -33,6 +33,8 @@ function writableScope(raw: string | null): 'project' | 'global' | null {
 
 export const handleMcpApi: ApiHandler = async (url, req, d) => {
   const p = url.pathname
+  if (d.researchControllerOnly && p.startsWith('/api/mcp'))
+    return json({ error: '研究控制模式不加载或管理扩展工具。' }, 403)
 
   /**
    * 已连上的 server 与它们给出的工具。

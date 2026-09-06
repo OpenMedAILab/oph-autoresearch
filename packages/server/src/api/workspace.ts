@@ -342,7 +342,17 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
     )
 
     const registry = new ToolRegistry()
-    registerBuiltinTools(registry, { mcpConfig: true })
+    registerBuiltinTools(registry, {
+      mcpConfig: true,
+      researchControl: d.researchControllerOnly === true,
+    })
+    if (d.researchControllerOnly)
+      return json({
+        tools: registry
+          .list()
+          .filter((spec) => spec.name === 'research_control')
+          .map((spec) => toolRow(spec, 'builtin')),
+      })
     /*
      * `load_tool` 要手动补一行：它只在会话建待加载池时注册，不在 `registerBuiltinTools`
      * 里，这个裸注册表列不出它。**不要在这里重算一遍分档**（量 schema 总量、超阈值才列）

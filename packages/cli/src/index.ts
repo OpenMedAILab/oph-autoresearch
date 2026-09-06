@@ -68,6 +68,7 @@ const USAGE = `oph —— oph-autoresearch 编码 agent
     --port <端口>         默认 7717，0 = 随机可用端口
     --host <地址>         默认 0.0.0.0（手机可连）；仅本机用 127.0.0.1
     --research-daemon-root <dir> 固定合成模板的本地受控子进程与持久账本
+    --research-cli-preparations <file>  远端 CLI 准入与固定 SSH authority 配置
     --research-controller-only  API 主控仅使用研究账本工具；本机 CLI 主控暂不可用
     --research-human-auth <file> 启动时固定的人类签名公钥/审查人配置，启用研究派发审批
     --research-tracking <file> 合成 Runner 的固定跟踪配置，须配合 --research-daemon-root
@@ -359,6 +360,9 @@ async function runServe(args: string[]): Promise<number> {
         }
       : {}),
     ...(researchHumanAuth ? { researchHumanAuth, researchRequireApproval: true } : {}),
+    ...(flags.researchCliPreparation
+      ? { researchCliPreparation: await Bun.file(resolve(flags.researchCliPreparation)).json() }
+      : {}),
     researchControllerOnly: flags.researchControllerOnly === true,
     researchBoundary: flags.restrictedClinical ? 'restricted-clinical' : 'standard',
     store,
@@ -478,6 +482,7 @@ function renderHuman(ev: AgentEvent): void {
 // ───────────────────────── 小工具 ─────────────────────────
 
 interface Flags {
+  researchCliPreparation?: string
   researchControllerOnly?: boolean
   researchReviewCli?: boolean
   researchSshDevices?: string
@@ -534,6 +539,12 @@ function parseFlags(args: string[]): Flags {
       const [v, ni] = takeValue(i)
       if (!v) throw new Error('--research-tracking requires an explicit startup configuration file')
       out.researchTracking = v
+      i = ni
+    } else if (a === '--research-cli-preparations') {
+      const [v, ni] = takeValue(i)
+      if (!v)
+        throw new Error('--research-cli-preparations requires an admitted administrator catalog')
+      out.researchCliPreparation = v
       i = ni
     } else if (a === '--research-controller-only') {
       out.researchControllerOnly = true

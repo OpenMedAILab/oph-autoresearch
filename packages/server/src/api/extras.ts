@@ -31,6 +31,10 @@ export interface ExtraRow {
 export const handleExtrasApi: ApiHandler = async (url, req, d) => {
   const m = /^\/api\/conversations\/([^/]+)\/extras$/.exec(url.pathname)
   if (!m) return null
+  if (d.researchControllerOnly)
+    return req.method === 'GET'
+      ? json({ extras: [] })
+      : json({ error: '研究控制模式仅允许研究账本工具。' }, 403)
   const conversationId = m[1] as ConversationId
   if (!getConversation(d.store, conversationId)) return json({ error: 'not found' }, 404)
 
