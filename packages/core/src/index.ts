@@ -30,6 +30,19 @@ export type {
   CliPreparationObserverLease,
 } from './domain/cli-preparation-dispatch.ts'
 export {
+  canonicalFormalExecutionPlan,
+  FORMAL_DATASET_TARGET,
+  FORMAL_ENTRY_ARGV,
+  FORMAL_EXECUTION_SCHEMA,
+  FORMAL_OUTPUT_TARGET,
+  validFormalCodeReviewResult,
+  validFormalExecutionPlan,
+  type FormalCodeReviewResult,
+  type FormalExecutionPlan,
+  type FormalExecutionResources,
+  type FormalReviewDecision,
+} from './domain/formal-execution.ts'
+export {
   type ConversationId,
   type GoalId,
   type MessageId,

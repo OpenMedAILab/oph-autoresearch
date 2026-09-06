@@ -17,6 +17,7 @@ import type {
   ResearchCostSettlement,
   ResearchCostSubject,
 } from './research-cost.ts'
+import type { FormalCodeReviewResult, FormalExecutionPlan } from './formal-execution.ts'
 export const RESEARCH_STAGES = [
   'question',
   'data_audit',
@@ -132,6 +133,8 @@ export interface ResearchApprovalScope {
     | 'release'
     | 'cost_settlement'
     | 'controller'
+    | 'formal_code_review'
+    | 'formal_execution'
   controllerLimits?: ResearchControllerLimits
   costEvidenceId?: string
   costEvidenceHash?: string
@@ -149,6 +152,9 @@ export interface ResearchApprovalScope {
   maxCost: number
   taskRevisionId?: string
   dispatchKey?: string
+  /** Exact frozen-plan bytes, never a mutable host execution description. */
+  formalPlanHash?: string
+  formalEvaluatorId?: string
   artifactVersionIds: string[]
 }
 
@@ -344,6 +350,10 @@ export interface ResearchCampaign {
   }>
   literatureCitations?: ResearchLiteratureCitation[]
   modelReviews?: ResearchModelReview[]
+  /** Immutable accepted/rejected review evidence for candidate code only. */
+  formalCodeReviews?: FormalCodeReviewResult[]
+  /** Admission-ready plans. Recording one never submits it to a backend. */
+  formalExecutionPlans?: FormalExecutionPlan[]
   labelSets?: LabelSetReference[]
   id: string
   workspaceId: string
@@ -505,6 +515,16 @@ export type ResearchCommand =
     }
   | { kind: 'recordLiteratureCitation'; citation: ResearchLiteratureCitation }
   | { kind: 'recordLabelSet'; reference: LabelSetReference; reviewer: TrustedHumanReviewerProof }
+  | {
+      kind: 'recordFormalCodeReview'
+      plan: FormalExecutionPlan
+      result: FormalCodeReviewResult
+      /** Required only for the paid isolated API reviewer path. */
+      approvalId?: string
+      /** Required only for the no-cost independently signed human path. */
+      reviewer?: TrustedHumanReviewerProof
+    }
+  | { kind: 'freezeFormalExecutionPlan'; plan: FormalExecutionPlan; planHash: string; approvalId: string }
   | { kind: 'release'; approvalId: string; artifactVersionIds: string[] }
   | { kind: 'revokeApproval'; approvalId: string; reviewer: TrustedHumanReviewerProof }
   | {
@@ -638,6 +658,12 @@ export function canonicalResearchBundle(campaign: ResearchCampaign): string {
               .map(({ sourceValidity: _derived, ...review }) => review),
           }
         : {}),
+      ...(campaign.formalCodeReviews === undefined
+        ? {}
+        : { formalCodeReviews: campaign.formalCodeReviews }),
+      ...(campaign.formalExecutionPlans === undefined
+        ? {}
+        : { formalExecutionPlans: campaign.formalExecutionPlans }),
       ...(campaign.labelSets === undefined ? {} : { labelSets: campaign.labelSets }),
       ...((campaign.cliPreparations ?? []).length
         ? {
