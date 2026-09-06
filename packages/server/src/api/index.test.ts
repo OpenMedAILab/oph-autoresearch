@@ -20,7 +20,11 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ConversationHistoryPageResponse, MessageId } from '@oph-autoresearch/core'
+import type {
+  ConversationHistoryPageResponse,
+  MessageId,
+  WorkspaceId,
+} from '@oph-autoresearch/core'
 import {
   appendMessage,
   appendStep,
@@ -44,7 +48,7 @@ import { canonicalJson, sha256 } from '../research/skill-lock.ts'
 import type { ModelsResponse } from './conversations.ts'
 import { type ApiDeps, handleApi } from './index.ts'
 
-function deps(root = 'C:/ws/demo'): ApiDeps & { wsId: string } {
+function deps(root = 'C:/ws/demo'): ApiDeps & { wsId: WorkspaceId } {
   let lan = false
   const store = new Store({ path: ':memory:' })
   const ws = upsertWorkspace(store, root, root.split(/[/]/).filter(Boolean).pop() ?? root)
@@ -75,7 +79,7 @@ function deps(root = 'C:/ws/demo'): ApiDeps & { wsId: string } {
     // upsert 项目那条路会调它把分支监听指过去。真的监听在 `server.ts` 装配，
     // 这里只要不是 undefined。
     watchGit: () => {},
-  } as unknown as ApiDeps & { wsId: string }
+  } as unknown as ApiDeps & { wsId: WorkspaceId }
 }
 
 const call = (path: string, init?: RequestInit, d: ApiDeps = deps()) =>
@@ -1262,7 +1266,7 @@ describe('会话诊断导出接口', () => {
 })
 
 describe('会话的重命名 / 归档 / 删除', () => {
-  const conv = (d: ApiDeps & { wsId: string }) =>
+  const conv = (d: ApiDeps & { wsId: WorkspaceId }) =>
     createConversation(d.store, { workspaceId: d.wsId as never, provider: 'p', model: 'm' })
 
   test('PATCH 改标题，回的是改完那一行', async () => {

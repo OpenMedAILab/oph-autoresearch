@@ -13,7 +13,9 @@ import {
   state,
   workspace,
 } from '../lib/store/index.ts'
+import { ResearchDocumentsPanel } from './ResearchDocumentsPanel.tsx'
 import { ResearchExperimentResult } from './ResearchExperimentResult.tsx'
+import { ResearchNotificationsPanel } from './ResearchNotificationsPanel.tsx'
 import { ResearchPatternPanel } from './ResearchPatternPanel.tsx'
 
 const stageLabels = {
@@ -329,6 +331,7 @@ export function ResearchCampaignPanel() {
                 }
               : {}),
             taskRevisionId: task.id,
+            display: { title: current.goal, task: templateId, revision: task.revision },
             dispatchKey: key,
             artifactVersionIds: task.artifactVersionIds ?? [],
             currency: current.budget.currency,
@@ -347,11 +350,6 @@ export function ResearchCampaignPanel() {
             campaignId: current.id,
             action: 'approve',
             body,
-            display: {
-              title: current.goal,
-              task: templateName(templateId),
-              revision: task.revision,
-            },
           },
           popup,
         )
@@ -577,6 +575,12 @@ export function ResearchCampaignPanel() {
                 </For>
               </fieldset>
               <ResearchPatternPanel campaign={campaign} busy={busy()} act={act} />
+              <ResearchDocumentsPanel campaign={campaign} busy={busy()} act={act} />
+              <ResearchNotificationsPanel
+                campaignId={campaign.id}
+                workspaceId={campaign.workspaceId}
+                version={campaign.version}
+              />
               <fieldset>
                 <legend>公开文献元数据</legend>
                 <label for={`research-doi-${campaign.id}`}>DOI</label>

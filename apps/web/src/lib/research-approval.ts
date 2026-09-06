@@ -6,7 +6,6 @@ export async function requestHumanApproval(
     campaignId: string
     action: 'approve' | 'revoke'
     body: unknown
-    display?: { title: string; task: string; revision: number }
   },
   popup: Window,
 ): Promise<string> {
