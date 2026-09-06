@@ -456,7 +456,7 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
         dispatchId: dispatch.id,
         status: 'done',
         result: formal,
-        actualCost: null,
+        actualCost: reviewed.actualCost ?? null,
       },
     })
     if (!finished.ok) return result(finished)

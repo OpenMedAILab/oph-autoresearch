@@ -173,6 +173,7 @@ test('formal review reserves before provider, replays safely, and binds the acce
         decision: 'accepted' as const,
         findings: [],
         runnerReceiptHash: hash('receipt'),
+        actualCost: 0.25,
       }
     },
   }
@@ -341,6 +342,9 @@ test('formal review reserves before provider, replays safely, and binds the acce
           campaign: getResearchCampaign(store, campaign.id),
         }),
       )
+    expect(getResearchCampaign(store, campaign.id)?.formalReviewDispatches?.[0]?.actualCost).toBe(
+      0.25,
+    )
     const accepted = getResearchCampaign(store, campaign.id)!
     const executionQuote = await post(d, workspace.id, campaign.id, 'approval', {
       ...base,

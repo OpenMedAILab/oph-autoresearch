@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto'
-import { buildAdapter, type LlmAdapter, type ProviderProfile } from '@oph-autoresearch/ai'
+import {
+  buildAdapter,
+  computeCost,
+  type LlmAdapter,
+  type ProviderProfile,
+  type ProviderUsage,
+} from '@oph-autoresearch/ai'
 import type { FormalCodeReviewResult, FormalExecutionPlan } from '@oph-autoresearch/core'
 import { makeResearchRequestGuard, type OphConfig, resolveModel } from '@oph-autoresearch/runtime'
 import { evidenceBudget } from './evidence-budget.ts'
@@ -25,6 +31,7 @@ export interface IsolatedFormalCodeReviewer {
     decision: FormalCodeReviewResult['decision']
     findings: FormalCodeReviewResult['findings']
     runnerReceiptHash: string
+    actualCost: number | null
   }>
 }
 
@@ -101,6 +108,7 @@ export function createIsolatedFormalCodeReviewer(input: {
         maxOutputTokens: limits.maxOutputTokens,
       }).wrap(input.adapter)
       let text = ''
+      let usage: ProviderUsage | null = null
       for await (const event of adapter.stream({
         model: adapter.spec.id,
         system: [
@@ -114,6 +122,7 @@ export function createIsolatedFormalCodeReviewer(input: {
         hardOutputLimit: true,
         signal,
       })) {
+        if (event.type === 'usage') usage = event.usage
         if (event.type === 'tool_calls') throw new Error('isolated reviewer attempted a tool call')
         if (event.type === 'text_delta') {
           text += event.delta
@@ -130,7 +139,13 @@ export function createIsolatedFormalCodeReviewer(input: {
       const output = parseOutput(parsed)
       if (!output) throw new Error('isolated reviewer violated the result contract')
       const runnerReceiptHash = `sha256:${createHash('sha256').update(canonical({ plan, output })).digest('hex')}`
-      return { ...output, reviewerId: input.reviewerId, runnerReceiptHash }
+      const actualCost = usage?.source === 'provider' ? computeCost(adapter.spec, usage) : null
+      return {
+        ...output,
+        reviewerId: input.reviewerId,
+        runnerReceiptHash,
+        actualCost: Number.isFinite(actualCost) && (actualCost ?? 0) >= 0 ? actualCost : null,
+      }
     },
   }
 }
