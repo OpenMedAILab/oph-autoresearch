@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { canonicalResearchBundle, type ResearchCampaign } from '@oph-autoresearch/core'
 import { Store } from './db.ts'
 import { createConversation, upsertWorkspace } from './repos.ts'
 import {
@@ -197,6 +198,117 @@ function created(store: Store) {
   })
   if (!result.ok) throw new Error(result.message)
   return result
+}
+
+function completeReleaseArtifact(store: Store) {
+  const campaign = created(store).campaign
+  const claimed = claim(store, campaign.id, campaign.version, `release-${crypto.randomUUID()}`)
+  if (!claimed.ok) throw new Error(claimed.message)
+  const attempt = claimed.campaign.attempts[0]!
+  const finished = mutateResearchCampaign(store, campaign.id, {
+    idempotencyKey: `finish-release-${attempt.id}`,
+    expectedVersion: claimed.campaign.version,
+    command: {
+      kind: 'finishSynthetic',
+      attemptId: attempt.id,
+      uri: 'research/release-artifact.json',
+      artifactKind: 'synthetic-summary-v1',
+      contentHash: CONTENT_HASH,
+      validation: {
+        inputHash: INPUT_HASH,
+        contentHash: CONTENT_HASH,
+        byteLength: 1,
+        verifiedAt: Date.now(),
+      },
+    },
+  })
+  if (!finished.ok) throw new Error(finished.message)
+  return finished.campaign
+}
+
+function reviewSourceContextHash(campaign: ResearchCampaign) {
+  const taskContextHash = sha256(
+    canonicalJson({ policy: campaign.policy, inputs: campaign.inputs, budget: campaign.budget }),
+  )
+  return sha256(
+    canonicalJson({
+      context: taskContextHash,
+      literatureCitations: campaign.literatureCitations ?? [],
+    }),
+  )
+}
+
+function installReleaseReview(
+  store: Store,
+  campaign: ResearchCampaign,
+  input: {
+    text?: string
+    artifactVersionIds?: string[]
+    sourceContextHash?: string
+    contentHash?: string
+  } = {},
+) {
+  const artifactVersionIds =
+    input.artifactVersionIds ?? campaign.artifactVersions.map((item) => item.id)
+  const text =
+    input.text ??
+    JSON.stringify({
+      decision: 'supported',
+      claims: [
+        { claim: 'The verified artifact supports this bounded release.', artifactVersionIds },
+      ],
+      limitations: ['Synthetic evidence only.'],
+    })
+  const review = {
+    id: `rmr_release_${crypto.randomUUID()}`,
+    dispatchKey: `review-release-${crypto.randomUUID()}`,
+    approvalId: `hap-review-${crypto.randomUUID()}`,
+    evidencePackHash: `sha256:${'d'.repeat(64)}`,
+    configHash: `sha256:${'e'.repeat(64)}`,
+    artifactVersionIds,
+    currency: campaign.budget.currency,
+    reservedCost: 1,
+    maxRequests: 2,
+    maxOutputTokens: 1024,
+    requestCount: 1,
+    status: 'done' as const,
+    ownerPid: process.pid,
+    sourceContextHash: input.sourceContextHash ?? reviewSourceContextHash(campaign),
+    text,
+    contentHash: input.contentHash ?? sha256(text),
+    actualCost: null,
+  }
+  const snapshot = { ...campaign, modelReviews: [review], bundleHash: '' }
+  snapshot.bundleHash = sha256(canonicalResearchBundle(snapshot))
+  store.db
+    .query('UPDATE research_campaigns SET snapshot = ? WHERE id = ?')
+    .run(JSON.stringify(snapshot), snapshot.id)
+  return getResearchCampaign(store, campaign.id)!
+}
+
+function approveRelease(store: Store, campaign: ResearchCampaign, artifactVersionIds: string[]) {
+  const approved = mutateResearchCampaign(store, campaign.id, {
+    idempotencyKey: `approve-release-${crypto.randomUUID()}`,
+    expectedVersion: campaign.version,
+    command: {
+      kind: 'approve',
+      bundleHash: campaign.bundleHash,
+      reviewer: {
+        reviewerId: 'release-reviewer',
+        proofId: crypto.randomUUID(),
+        verifiedAt: Date.now(),
+      },
+      scope: {
+        kind: 'release',
+        artifactVersionIds,
+        currency: campaign.budget.currency,
+        maxCost: 1,
+        expiresAt: Date.now() + 60_000,
+      },
+    },
+  })
+  if (!approved.ok) throw new Error(approved.message)
+  return approved.campaign
 }
 
 describe('research campaign ledger', () => {
@@ -1053,5 +1165,69 @@ describe('CLI preparation authorization ledger', () => {
     } finally {
       store.close()
     }
+  })
+
+  test('release requires a current exact supported claim-evidence map in addition to its signed approval', () => {
+    const release = (review: Parameters<typeof installReleaseReview>[2], key: string) => {
+      const store = fresh()
+      const completed = completeReleaseArtifact(store)
+      const artifactIds = completed.artifactVersions.map((item) => item.id)
+      const reviewed = installReleaseReview(store, completed, review)
+      const approved = approveRelease(store, reviewed, artifactIds)
+      const result = mutateResearchCampaign(store, completed.id, {
+        idempotencyKey: key,
+        expectedVersion: approved.version,
+        command: {
+          kind: 'release',
+          approvalId: approved.approvals.at(-1)!.id,
+          artifactVersionIds: artifactIds,
+        },
+      })
+      store.close()
+      return result
+    }
+
+    const supported = release({}, 'release-supported')
+    expect(supported).toMatchObject({ ok: true, campaign: { status: 'completed' } })
+
+    const insufficient = release(
+      {
+        text: JSON.stringify({ decision: 'insufficient', claims: [], limitations: ['More data.'] }),
+      },
+      'release-insufficient',
+    )
+    expect(insufficient).toMatchObject({ ok: false, code: 'approval_required' })
+
+    const refuted = release(
+      { text: JSON.stringify({ decision: 'refuted', claims: [], limitations: ['Refuted.'] }) },
+      'release-refuted',
+    )
+    expect(refuted).toMatchObject({ ok: false, code: 'approval_required' })
+
+    const doneWithoutMap = release({ text: '' }, 'release-done-without-map')
+    expect(doneWithoutMap).toMatchObject({ ok: false, code: 'approval_required' })
+
+    const stale = release({ sourceContextHash: `sha256:${'f'.repeat(64)}` }, 'release-stale-review')
+    expect(stale).toMatchObject({ ok: false, code: 'approval_required' })
+
+    const differentArtifact = release(
+      { artifactVersionIds: ['rav_different'] },
+      'release-different-artifact',
+    )
+    expect(differentArtifact).toMatchObject({ ok: false, code: 'approval_required' })
+
+    const differentClaim = release(
+      {
+        text: JSON.stringify({
+          decision: 'supported',
+          claims: [
+            { claim: 'A different artifact is supported.', artifactVersionIds: ['rav_other'] },
+          ],
+          limitations: [],
+        }),
+      },
+      'release-different-claim',
+    )
+    expect(differentClaim).toMatchObject({ ok: false, code: 'approval_required' })
   })
 })

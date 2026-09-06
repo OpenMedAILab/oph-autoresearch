@@ -5,6 +5,7 @@ import {
   foldResearchEvents,
   type HumanApproval,
   isResearchTemplateId,
+  parseModelReview,
   type ResearchAttempt,
   type ResearchCampaign,
   type ResearchCampaignInput,
@@ -348,6 +349,38 @@ function reviewSourceContextHash(campaign: ResearchCampaign): string {
       literatureCitations: campaign.literatureCitations ?? [],
     }),
   )
+}
+
+/** A release may cite only the exact, current artifact versions independently reviewed as supported. */
+function hasSupportedReleaseReview(
+  campaign: ResearchCampaign,
+  artifactVersionIds: readonly string[],
+): boolean {
+  const expectedIds = [...artifactVersionIds].sort()
+  const expectedSourceContextHash = reviewSourceContextHash(campaign)
+  const derived = withDerivedTaskStatuses(campaign)
+  return (derived.modelReviews ?? []).some((review) => {
+    if (
+      review.status !== 'done' ||
+      review.sourceValidity !== 'current' ||
+      review.sourceContextHash !== expectedSourceContextHash ||
+      typeof review.text !== 'string' ||
+      review.contentHash !== digest(review.text) ||
+      canonicalJson([...review.artifactVersionIds].sort()) !== canonicalJson(expectedIds)
+    )
+      return false
+    try {
+      const map = parseModelReview(review.text, review.artifactVersionIds)
+      return (
+        map.decision === 'supported' &&
+        expectedIds.every((artifactVersionId) =>
+          map.claims.some((claim) => claim.artifactVersionIds.includes(artifactVersionId)),
+        )
+      )
+    } catch {
+      return false
+    }
+  })
 }
 
 function attemptById(campaign: ResearchCampaign, attemptId: unknown): ResearchAttempt | null {
@@ -1166,21 +1199,11 @@ function nextCampaign(
           ids.length !== 2 ||
           ids.some(
             (id) => !derived.taskRevisions.some((t) => t.id === id && t.status === 'verified'),
-          ) ||
-          !derived.modelReviews?.some(
-            (r) =>
-              r.status === 'done' &&
-              r.sourceValidity === 'current' &&
-              r.artifactVersionIds.some((id) =>
-                campaign.artifactVersions.some(
-                  (a) => a.id === id && a.producerTaskRevisionId === ids.at(-1),
-                ),
-              ),
           )
         )
           return invalid(
             'pattern_review_required',
-            'Pattern release requires current completed steps and evidence review',
+            'Pattern release requires current completed steps',
           )
       }
       const approval = campaign.approvals.find((a) => a.id === command.approvalId)
@@ -1193,6 +1216,7 @@ function nextCampaign(
         approval.scope.expiresAt <= now ||
         !Array.isArray(command.artifactVersionIds) ||
         command.artifactVersionIds.length === 0 ||
+        new Set(command.artifactVersionIds).size !== command.artifactVersionIds.length ||
         canonicalJson([...command.artifactVersionIds].sort()) !==
           canonicalJson([...approval.scope.artifactVersionIds].sort()) ||
         command.artifactVersionIds.some((id) => {
@@ -1204,9 +1228,13 @@ function nextCampaign(
               (t) => t.id === a.producerTaskRevisionId,
             )?.status !== 'verified'
           )
-        })
+        }) ||
+        !hasSupportedReleaseReview(campaign, command.artifactVersionIds)
       )
-        return invalid('approval_required', 'Release requires approved verified current artifacts')
+        return invalid(
+          'approval_required',
+          'Release requires approved verified current artifacts and a supported evidence map',
+        )
       next = {
         ...campaign,
         stage: 'output',
