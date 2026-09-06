@@ -3,6 +3,7 @@ import {
   type CliPreparationObserverIdentity,
   canonicalCliPreparationConfig,
   canonicalResearchBundle,
+  canonicalResearchControllerBasis,
   foldResearchEvents,
   type HumanApproval,
   isResearchTemplateId,
@@ -304,7 +305,12 @@ function knownActualCost(campaign: ResearchCampaign, subject: ResearchCostSubjec
     if (partial.length > 0) amounts.push(saturatedCostSum(partial))
   }
   for (const evidence of campaign.costEvidence ?? []) {
-    if (costSubjectKey(evidence.subject) === costSubjectKey(subject)) amounts.push(evidence.amount)
+    if (
+      costSubjectKey(evidence.subject) === costSubjectKey(subject) &&
+      (evidence.source === 'provider-receipt' ||
+        campaign.costSettlements?.some((settlement) => settlement.evidenceId === evidence.id))
+    )
+      amounts.push(evidence.amount)
   }
   return amounts.length === 0 ? null : Math.max(...amounts)
 }
@@ -316,7 +322,11 @@ function knownActualSource(
   const amount = knownActualCost(campaign, subject)
   if (amount === null) return null
   const evidence = (campaign.costEvidence ?? []).find(
-    (item) => costSubjectKey(item.subject) === costSubjectKey(subject) && item.amount === amount,
+    (item) =>
+      costSubjectKey(item.subject) === costSubjectKey(subject) &&
+      item.amount === amount &&
+      (item.source === 'provider-receipt' ||
+        campaign.costSettlements?.some((settlement) => settlement.evidenceId === item.id)),
   )
   if (evidence) return evidence.source
   return subject.kind === 'model_review' ? 'review-reported' : null
@@ -1119,6 +1129,104 @@ function nextCampaign(
             : {}),
           generation: control.generation + 1,
         },
+      }
+      break
+    }
+    case 'claimControllerRound': {
+      const reservation = campaign.controllerReservations?.find(
+        (item) => item.id === command.reservationId,
+      )
+      const round = reservation?.round
+      if (
+        !reservation ||
+        !canStartControllerRequest(campaign, command.reservationId, command.generation, now) ||
+        textError(command.roundId, 'roundId') ||
+        command.basisHash !== digest(canonicalResearchControllerBasis(campaign)) ||
+        !Number.isSafeInteger(command.expiresAt) ||
+        command.expiresAt <= now ||
+        command.expiresAt > now + 60000 ||
+        (round && !round.finishedAt && round.expiresAt > now) ||
+        (round &&
+          round.generation === command.generation &&
+          round.basisHash === command.basisHash &&
+          reservation.requests.length > round.requestCountAtStart)
+      )
+        return invalid('controller_round_denied', '当前推进轮尚未结束，或研究依据没有变化')
+      next = {
+        ...campaign,
+        controllerReservations: campaign.controllerReservations!.map((item) =>
+          item.id === reservation.id
+            ? (() => {
+                const { waiting: _waiting, ...rest } = item
+                return {
+                  ...rest,
+                  round: {
+                    generation: command.generation,
+                    id: command.roundId,
+                    basisHash: command.basisHash,
+                    requestCountAtStart: item.requests.length,
+                    expiresAt: command.expiresAt,
+                  },
+                }
+              })()
+            : item,
+        ),
+      }
+      break
+    }
+    case 'renewControllerRound':
+    case 'finishControllerRound': {
+      const reservation = campaign.controllerReservations?.find(
+        (item) => item.id === command.reservationId,
+      )
+      const round = reservation?.round
+      if (
+        !reservation ||
+        !round ||
+        round.id !== command.roundId ||
+        round.finishedAt ||
+        (command.kind === 'renewControllerRound' &&
+          (round.expiresAt <= now ||
+            !Number.isSafeInteger(command.expiresAt) ||
+            command.expiresAt < round.expiresAt ||
+            command.expiresAt > now + 60000))
+      )
+        return invalid('controller_round_denied', '主控推进轮已失去持有权')
+      next = {
+        ...campaign,
+        controllerReservations: campaign.controllerReservations!.map((item) =>
+          item.id === reservation.id
+            ? {
+                ...item,
+                round:
+                  command.kind === 'finishControllerRound'
+                    ? { ...round, finishedAt: now }
+                    : { ...round, expiresAt: command.expiresAt },
+              }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'waitController': {
+      const reservation = campaign.controllerReservations?.find(
+        (item) => item.id === command.reservationId,
+      )
+      const control = progressControl(campaign)
+      if (
+        !reservation ||
+        control.mode !== 'bounded' ||
+        control.state !== 'active' ||
+        control.reservationRef !== reservation.id ||
+        control.generation !== command.generation ||
+        !['remote', 'human', 'change', 'unknown'].includes(command.reason)
+      )
+        return invalid('controller_wait_denied', '推进状态已变化')
+      next = {
+        ...campaign,
+        controllerReservations: campaign.controllerReservations!.map((item) =>
+          item.id === reservation.id ? { ...item, waiting: command.reason } : item,
+        ),
       }
       break
     }

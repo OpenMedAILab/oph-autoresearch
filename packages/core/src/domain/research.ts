@@ -375,6 +375,22 @@ export type ResearchCommand =
       limits: ResearchControllerLimits
       expectedGeneration: number
     }
+  | {
+      kind: 'claimControllerRound'
+      reservationId: string
+      generation: number
+      roundId: string
+      basisHash: string
+      expiresAt: number
+    }
+  | { kind: 'renewControllerRound'; reservationId: string; roundId: string; expiresAt: number }
+  | { kind: 'finishControllerRound'; reservationId: string; roundId: string }
+  | {
+      kind: 'waitController'
+      reservationId: string
+      generation: number
+      reason: 'remote' | 'human' | 'change' | 'unknown'
+    }
   | { kind: 'startControllerRequest'; reservationId: string; requestId: string; generation: number }
   | {
       kind: 'finishControllerRequest'
@@ -763,4 +779,40 @@ export function foldResearchEvents(events: readonly ResearchEvent[]): ResearchCa
     campaign = event.campaign
   }
   return campaign
+}
+
+/** Scheduler wake identity includes human gates, excluding observer leases and controller heartbeats. */
+export function canonicalResearchControllerBasis(campaign: ResearchCampaign): string {
+  const scientific = JSON.parse(canonicalResearchBundle(campaign)) as Record<string, unknown>
+  delete scientific.costEvidence
+  delete scientific.costSettlements
+  return JSON.stringify(
+    canonicalValue({
+      schema: 'research-controller-basis-v1',
+      scientific,
+      approvals: campaign.approvals
+        .filter(
+          (item) => item.scope?.kind !== 'controller' && item.scope?.kind !== 'cost_settlement',
+        )
+        .map((item) => ({
+          id: item.id,
+          scope: item.scope,
+          status: item.status,
+          consumedBy: item.consumedBy ?? null,
+          bundleHash: item.bundleHash,
+        }))
+        .sort((a, b) => compareCodeUnits(a.id, b.id)),
+      attempts: campaign.attempts
+        .map((item) => ({
+          id: item.id,
+          status: item.status,
+          artifactVersionId: item.artifactVersionId,
+          cancelRequestedAt: item.cancelRequestedAt,
+        }))
+        .sort((a, b) => compareCodeUnits(a.id, b.id)),
+      preparations: (campaign.cliPreparations ?? [])
+        .map((item) => ({ id: item.id, status: item.status, attemptId: item.attemptId }))
+        .sort((a, b) => compareCodeUnits(a.id, b.id)),
+    }),
+  )
 }

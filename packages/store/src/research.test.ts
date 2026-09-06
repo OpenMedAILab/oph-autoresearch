@@ -1769,9 +1769,9 @@ describe('CLI preparation authorization ledger', () => {
             subject: { kind: 'model_review', id: 'rmr_cost' },
             currency: 'USD',
             amount: 21,
-            description: 'A later human attestation for the same finished review.',
+            description: 'A later trusted provider receipt for the same finished review.',
             sourceHash: `sha256:${'f'.repeat(64)}`,
-            source: 'human-attestation',
+            source: 'provider-receipt',
           },
         },
       })

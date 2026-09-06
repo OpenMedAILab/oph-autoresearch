@@ -4,6 +4,7 @@ export type ResearchControlOperation =
   | 'submit'
   | 'status'
   | 'events'
+  | 'next_actions'
   | 'cancel'
   | 'reconcile'
   | 'receipt'

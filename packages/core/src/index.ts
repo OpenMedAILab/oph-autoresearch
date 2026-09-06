@@ -132,6 +132,7 @@ export {
 export {
   type ArtifactVersion,
   canonicalResearchBundle,
+  canonicalResearchControllerBasis,
   foldResearchEvents,
   type HumanApproval,
   isResearchTemplateId,

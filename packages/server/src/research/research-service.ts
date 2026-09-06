@@ -17,6 +17,7 @@ export type ResearchControlOperation =
   | 'submit'
   | 'status'
   | 'events'
+  | 'next_actions'
   | 'cancel'
   | 'reconcile'
   | 'receipt'
@@ -43,6 +44,7 @@ export const RESEARCH_CONTROL_OPERATIONS = new Set<ResearchControlOperation>([
   'submit',
   'status',
   'events',
+  'next_actions',
   'cancel',
   'reconcile',
   'receipt',
@@ -62,6 +64,7 @@ const paths: Record<Exclude<ResearchControlOperation, 'prepare'>, string> = {
   submit: 'synthetic',
   status: '',
   events: 'events',
+  next_actions: 'next_actions',
   cancel: 'synthetic/cancel',
   reconcile: 'synthetic/reconcile',
   receipt: 'synthetic/receipt',
@@ -105,6 +108,7 @@ export class ResearchControlApiAdapter {
       method = [
         'status',
         'events',
+        'next_actions',
         'receipt',
         'documents/read',
         'cli_preparation/status',

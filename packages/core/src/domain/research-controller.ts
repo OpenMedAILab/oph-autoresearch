@@ -27,4 +27,13 @@ export interface ResearchControllerReservation {
   status: 'active' | 'held' | 'exhausted' | 'completed'
   actualCost: number | null
   createdAt: number
+  round?: {
+    generation: number
+    id: string
+    basisHash: string
+    requestCountAtStart: number
+    expiresAt: number
+    finishedAt?: number
+  }
+  waiting?: 'remote' | 'human' | 'change' | 'unknown'
 }
