@@ -230,7 +230,12 @@ export async function runResearchJobWorker(args: readonly string[]) {
           result: { contentHash: hashBytes(bytes), outputPath: path },
         }),
       })
-      return finish.ok ? 0 : 6
+      if (!finish.ok) return 6
+      // The authority has durably accepted this receipt and begins reaping the
+      // whole job group before marking it completed. Do not race its SIGTERM
+      // delivery: exiting first would strand a stream-closed descendant because
+      // the authority can no longer prove ownership of this group leader.
+      await new Promise<never>(() => {})
     }
     const plan = fixedResearchTemplate(job.spec.templateId)
     await plan.assertSkill()

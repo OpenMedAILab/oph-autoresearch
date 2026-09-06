@@ -194,6 +194,10 @@ printf '%s\\n' '${event}'
     const worker = await daemon.launchWorker(job.dispatchKey)
     const grandchildPid = await waitForPid(join(root, 'completion-grandchild.pid'))
     expect(processExists(grandchildPid)).toBe(true)
+    await waitFor(daemon, job.dispatchKey, 'completion_requested')
+    expect(
+      await Promise.race([worker.exited.then(() => true), Bun.sleep(5).then(() => false)]),
+    ).toBe(false)
     await worker.exited
     await waitFor(daemon, job.dispatchKey, 'completed')
     await waitForExit(grandchildPid)
