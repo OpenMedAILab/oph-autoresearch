@@ -182,6 +182,162 @@ describe('durable research notifications', () => {
     coordinator.close()
   })
 
+  test('skips a removed channel and delivers the next eligible channel', async () => {
+    const path = await dbPath()
+    const removed = new ResearchNotificationCoordinator({
+      ownDbPath: path,
+      adapters: [{ channel: 'removed', recipient: 'old', enabled: true, deliver: async () => {} }],
+    })
+    removed.record(event())
+    removed.close()
+    let delivered = 0
+    const active = new ResearchNotificationCoordinator({
+      ownDbPath: path,
+      pollIntervalMs: 60_000,
+      adapters: [
+        {
+          channel: 'active',
+          recipient: 'new',
+          enabled: true,
+          deliver: async () => {
+            delivered++
+          },
+        },
+      ],
+    })
+    active.record(event('requestCancelSynthetic', 'event-2'))
+    await active.deliverDue()
+    expect(delivered).toBe(1)
+    expect(active.list('campaign-1')).toMatchObject([
+      { eventId: 'event-1', channel: 'removed', status: 'pending' },
+      { eventId: 'event-2', channel: 'active', status: 'delivered' },
+    ])
+    active.close()
+  })
+
+  test('times out and aborts a hung delivery, and close aborts an active delivery promptly', async () => {
+    const path = await dbPath()
+    let timedOutAbort = false
+    const timed = new ResearchNotificationCoordinator({
+      ownDbPath: path,
+      deliveryTimeoutMs: 10,
+      maxAttempts: 1,
+      pollIntervalMs: 60_000,
+      adapters: [
+        {
+          channel: 'admin',
+          recipient: 'ops',
+          enabled: true,
+          deliver: async ({ signal }) => {
+            signal.addEventListener('abort', () => {
+              timedOutAbort = true
+            })
+            await new Promise(() => {})
+          },
+        },
+      ],
+    })
+    timed.record(event())
+    await timed.deliverDue()
+    expect(timedOutAbort).toBe(true)
+    expect(timed.list('campaign-1')).toMatchObject([{ status: 'failed', attempts: 1 }])
+    timed.close()
+
+    const closePath = await dbPath()
+    const started = Promise.withResolvers<void>()
+    const aborted = Promise.withResolvers<void>()
+    const closing = new ResearchNotificationCoordinator({
+      ownDbPath: closePath,
+      deliveryTimeoutMs: 60_000,
+      pollIntervalMs: 60_000,
+      adapters: [
+        {
+          channel: 'admin',
+          recipient: 'ops',
+          enabled: true,
+          deliver: async ({ signal }) => {
+            started.resolve()
+            signal.addEventListener('abort', () => aborted.resolve(), { once: true })
+            await new Promise(() => {})
+          },
+        },
+      ],
+    })
+    closing.record(event())
+    const inFlight = closing.deliverDue()
+    await started.promise
+    closing.close()
+    await Promise.all([inFlight, aborted.promise])
+  })
+
+  test('uses the same delivery key when an external acknowledgement is lost before the receipt commit', async () => {
+    const path = await dbPath()
+    let now = 1
+    const keys: string[] = []
+    const coordinator = new ResearchNotificationCoordinator({
+      ownDbPath: path,
+      now: () => now,
+      retryBaseMs: 1,
+      pollIntervalMs: 60_000,
+      adapters: [
+        {
+          channel: 'admin',
+          recipient: 'ops',
+          enabled: true,
+          deliver: async ({ deliveryKey }) => {
+            keys.push(deliveryKey)
+            if (keys.length === 1)
+              throw new Error('external provider accepted but response was lost')
+          },
+        },
+      ],
+    })
+    coordinator.record(event())
+    await coordinator.deliverDue()
+    now = 2
+    await coordinator.deliverDue()
+    expect(keys).toHaveLength(2)
+    expect(keys[1]).toBe(keys[0])
+    expect(coordinator.list('campaign-1')).toMatchObject([{ status: 'delivered', attempts: 2 }])
+    coordinator.close()
+  })
+
+  test('classifies only a valid completed insufficient review as review_insufficient', async () => {
+    const path = await dbPath()
+    const coordinator = new ResearchNotificationCoordinator({
+      ownDbPath: path,
+      adapters: [{ channel: 'admin', recipient: 'ops', enabled: true, deliver: async () => {} }],
+    })
+    const review = {
+      ...event('finishModelReview', 'review-insufficient'),
+      command: {
+        kind: 'finishModelReview',
+        reviewId: 'review-1',
+        runId: 'run-1',
+        conversationId: 'conversation-1',
+        text: JSON.stringify({ decision: 'insufficient', claims: [], limitations: [] }),
+        status: 'done',
+        actualCost: null,
+      },
+      campaign: {
+        ...event().campaign,
+        modelReviews: [{ id: 'review-1', artifactVersionIds: [] }],
+      },
+    } as ResearchEvent
+    const failed = {
+      ...review,
+      id: 'review-failed',
+      command: { ...review.command, status: 'failed' },
+    } as ResearchEvent
+    expect(coordinator.record(review)).toBe(1)
+    expect(coordinator.record(failed)).toBe(1)
+    expect(coordinator.list('campaign-1')).toMatchObject([
+      { eventId: 'review-insufficient', kind: 'review_insufficient' },
+      { eventId: 'review-failed', kind: 'review_failed' },
+    ])
+    coordinator.close()
+  })
+
   test('records notification candidates from publishResearchEvents after internal outbox delivery', async () => {
     const path = await dbPath()
     const store = new Store({ path: ':memory:' })

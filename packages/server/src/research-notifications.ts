@@ -1,5 +1,7 @@
 import { Database } from 'bun:sqlite'
+import { createHash } from 'node:crypto'
 import type { ResearchEvent } from '@oph-autoresearch/core'
+import { parseModelReview } from './research/review-contract.ts'
 
 export type ResearchNotificationKind =
   | 'approval_needed'
@@ -8,9 +10,12 @@ export type ResearchNotificationKind =
   | 'cancel_pending'
   | 'completed'
   | 'review_insufficient'
+  | 'review_failed'
 
 export interface ResearchNotificationPayload {
   schema: 'research-notification-v1'
+  /** Stable external idempotency key for this event/channel/recipient delivery. */
+  deliveryKey: string
   eventId: string
   campaignId: string
   campaignSeq: number
@@ -28,7 +33,15 @@ export interface ResearchNotificationAdapter {
   channel: string
   recipient: string
   enabled?: boolean
-  deliver(payload: ResearchNotificationPayload): Promise<void>
+  /**
+   * Delivery is at-least-once. Persist deliveryKey at the external provider so
+   * a provider acknowledgement lost before our local receipt commit is deduped.
+   */
+  deliver(input: {
+    deliveryKey: string
+    payload: ResearchNotificationPayload
+    signal: AbortSignal
+  }): Promise<void>
 }
 
 export interface ResearchNotificationConfig {
@@ -38,6 +51,7 @@ export interface ResearchNotificationConfig {
   maxAttempts?: number
   retryBaseMs?: number
   retryMaxMs?: number
+  deliveryTimeoutMs?: number
   pollIntervalMs?: number
   now?: () => number
 }
@@ -71,12 +85,23 @@ function notificationKind(event: ResearchEvent): ResearchNotificationKind | null
       return 'cancel_pending'
     case 'finishSynthetic':
       return 'completed'
-    case 'finishModelReview':
-      return event.command?.kind === 'finishModelReview' && event.command.status === 'failed'
-        ? 'review_insufficient'
-        : event.command?.kind === 'finishModelReview' && event.command.status === 'unknown'
-          ? 'unknown'
+    case 'finishModelReview': {
+      if (event.command?.kind !== 'finishModelReview') return null
+      if (event.command.status === 'failed') return 'review_failed'
+      if (event.command.status === 'unknown') return 'unknown'
+      const review = event.campaign.modelReviews?.find(
+        (candidate) => candidate.id === event.command.reviewId,
+      )
+      if (!review) return null
+      try {
+        return parseModelReview(event.command.text, review.artifactVersionIds).decision ===
+          'insufficient'
+          ? 'review_insufficient'
           : null
+      } catch {
+        return null
+      }
+    }
     default:
       return null
   }
@@ -85,9 +110,11 @@ function notificationKind(event: ResearchEvent): ResearchNotificationKind | null
 function payloadFor(
   event: ResearchEvent,
   kind: ResearchNotificationKind,
+  deliveryKey: string,
 ): ResearchNotificationPayload {
   return {
     schema: 'research-notification-v1',
+    deliveryKey,
     eventId: event.id,
     campaignId: event.campaignId,
     campaignSeq: event.sequence,
@@ -104,6 +131,12 @@ function payloadFor(
   }
 }
 
+function deliveryKey(eventId: string, channel: string, recipient: string): string {
+  return `research-notification-v1:${createHash('sha256')
+    .update(JSON.stringify([eventId, channel, recipient]))
+    .digest('hex')}`
+}
+
 function sanitizedError(): string {
   // Delivery adapters may put credentials or endpoint URLs into Error.message.
   // The durable receipt deliberately retains only a stable, non-sensitive code.
@@ -116,10 +149,12 @@ export class ResearchNotificationCoordinator {
   private readonly maxAttempts: number
   private readonly retryBaseMs: number
   private readonly retryMaxMs: number
+  private readonly deliveryTimeoutMs: number
   private readonly now: () => number
   private readonly timer: ReturnType<typeof setInterval>
   private delivering = false
   private closed = false
+  private activeAbort: AbortController | null = null
 
   constructor(config: ResearchNotificationConfig) {
     if (!Number.isSafeInteger(config.maxAttempts ?? 3) || (config.maxAttempts ?? 3) < 1)
@@ -129,6 +164,11 @@ export class ResearchNotificationCoordinator {
     if (!Number.isSafeInteger(config.retryMaxMs ?? 60_000) || (config.retryMaxMs ?? 60_000) < 1)
       throw new Error('invalid notification retryMaxMs')
     if (
+      !Number.isSafeInteger(config.deliveryTimeoutMs ?? 5_000) ||
+      (config.deliveryTimeoutMs ?? 5_000) < 1
+    )
+      throw new Error('invalid notification deliveryTimeoutMs')
+    if (
       !Number.isSafeInteger(config.pollIntervalMs ?? 1_000) ||
       (config.pollIntervalMs ?? 1_000) < 1
     )
@@ -136,6 +176,7 @@ export class ResearchNotificationCoordinator {
     this.maxAttempts = config.maxAttempts ?? 3
     this.retryBaseMs = config.retryBaseMs ?? 1_000
     this.retryMaxMs = config.retryMaxMs ?? 60_000
+    this.deliveryTimeoutMs = config.deliveryTimeoutMs ?? 5_000
     this.now = config.now ?? Date.now
     const enabled = (config.adapters ?? []).filter(
       (adapter) =>
@@ -154,6 +195,7 @@ export class ResearchNotificationCoordinator {
         kind TEXT NOT NULL,
         channel TEXT NOT NULL,
         recipient TEXT NOT NULL,
+        delivery_key TEXT,
         payload TEXT NOT NULL,
         status TEXT NOT NULL CHECK(status IN ('pending','delivered','failed')),
         attempts INTEGER NOT NULL DEFAULT 0,
@@ -168,6 +210,30 @@ export class ResearchNotificationCoordinator {
       CREATE INDEX IF NOT EXISTS idx_research_notifications_campaign
         ON research_notifications(campaign_id, id);`,
     )
+    const columns = this.db.query('PRAGMA table_info(research_notifications)').all() as {
+      name: string
+    }[]
+    if (!columns.some((column) => column.name === 'delivery_key')) {
+      this.db.exec('ALTER TABLE research_notifications ADD COLUMN delivery_key TEXT')
+      const legacy = this.db
+        .query(
+          'SELECT id,event_id,channel,recipient,payload FROM research_notifications WHERE delivery_key IS NULL',
+        )
+        .all() as {
+        id: number
+        event_id: string
+        channel: string
+        recipient: string
+        payload: string
+      }[]
+      for (const row of legacy) {
+        const key = deliveryKey(row.event_id, row.channel, row.recipient)
+        const payload = JSON.parse(row.payload) as Record<string, unknown>
+        this.db
+          .query('UPDATE research_notifications SET delivery_key=?, payload=? WHERE id=?')
+          .run(key, JSON.stringify({ ...payload, deliveryKey: key }), row.id)
+      }
+    }
     this.timer = setInterval(() => void this.deliverDue(), config.pollIntervalMs ?? 1_000)
   }
 
@@ -175,15 +241,16 @@ export class ResearchNotificationCoordinator {
   record(event: ResearchEvent): number {
     const kind = notificationKind(event)
     if (!kind || this.adapters.size === 0) return 0
-    const payload = JSON.stringify(payloadFor(event, kind))
     const now = this.now()
     let inserted = 0
     for (const adapter of this.adapters.values()) {
+      const key = deliveryKey(event.id, adapter.channel, adapter.recipient)
+      const payload = JSON.stringify(payloadFor(event, kind, key))
       const result = this.db
         .query(
           `INSERT INTO research_notifications
-            (event_id,campaign_id,kind,channel,recipient,payload,status,attempts,next_attempt_at,delivered_at,last_error,created_at)
-           VALUES (?,?,?,?,?,?, 'pending', 0, ?, NULL, NULL, ?)
+            (event_id,campaign_id,kind,channel,recipient,delivery_key,payload,status,attempts,next_attempt_at,delivered_at,last_error,created_at)
+           VALUES (?,?,?,?,?,?,?, 'pending', 0, ?, NULL, NULL, ?)
            ON CONFLICT(event_id,channel,recipient) DO NOTHING`,
         )
         .run(
@@ -192,6 +259,7 @@ export class ResearchNotificationCoordinator {
           kind,
           adapter.channel,
           adapter.recipient,
+          key,
           payload,
           now,
           now,
@@ -239,30 +307,67 @@ export class ResearchNotificationCoordinator {
   }
 
   async deliverDue(): Promise<void> {
-    if (this.closed || this.delivering) return
+    if (this.closed || this.delivering || this.adapters.size === 0) return
     this.delivering = true
     try {
       while (!this.closed) {
         const now = this.now()
+        const adapterPairs = [...this.adapters.values()].flatMap((adapter) => [
+          adapter.channel,
+          adapter.recipient,
+        ])
+        const eligible = [...this.adapters.values()]
+          .map(() => '(channel=? AND recipient=?)')
+          .join(' OR ')
         const row = this.db
           .query(
-            `SELECT id,channel,recipient,payload,attempts FROM research_notifications
-             WHERE status='pending' AND next_attempt_at <= ? ORDER BY id LIMIT 1`,
+            `SELECT id,channel,recipient,delivery_key,payload,attempts FROM research_notifications
+             WHERE status='pending' AND next_attempt_at <= ? AND (${eligible}) ORDER BY id LIMIT 1`,
           )
-          .get(now) as {
+          .get(now, ...adapterPairs) as {
           id: number
           channel: string
           recipient: string
+          delivery_key: string
           payload: string
           attempts: number
         } | null
         if (!row) return
         const adapter = this.adapters.get(`${row.channel}\u0000${row.recipient}`)
-        // Adapters are supplied only at startup. If an administrator removes one,
-        // leave the durable row pending for a later explicit reconfiguration.
-        if (!adapter) return
+        if (!adapter) continue
         try {
-          await adapter.deliver(JSON.parse(row.payload) as ResearchNotificationPayload)
+          const controller = new AbortController()
+          this.activeAbort = controller
+          let timeout: ReturnType<typeof setTimeout> | undefined
+          const aborted = new Promise<never>((_, reject) =>
+            controller.signal.addEventListener(
+              'abort',
+              () => reject(new Error('delivery_aborted')),
+              {
+                once: true,
+              },
+            ),
+          )
+          const timedOut = new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => {
+              controller.abort()
+              reject(new Error('delivery_timeout'))
+            }, this.deliveryTimeoutMs)
+          })
+          try {
+            await Promise.race([
+              adapter.deliver({
+                deliveryKey: row.delivery_key,
+                payload: JSON.parse(row.payload) as ResearchNotificationPayload,
+                signal: controller.signal,
+              }),
+              aborted,
+              timedOut,
+            ])
+          } finally {
+            if (timeout) clearTimeout(timeout)
+            if (this.activeAbort === controller) this.activeAbort = null
+          }
           if (this.closed) return
           this.db
             .query(
@@ -298,6 +403,7 @@ export class ResearchNotificationCoordinator {
   close(): void {
     this.closed = true
     clearInterval(this.timer)
+    this.activeAbort?.abort()
     this.db.close()
   }
 }
