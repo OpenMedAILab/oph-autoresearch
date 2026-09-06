@@ -3,7 +3,16 @@ import type {
   CliPreparationJobSpec,
   CliPreparationLimits,
 } from './cli-preparation.ts'
+import type {
+  CliPreparationAuthorityBinding,
+  CliPreparationObserverIdentity,
+} from './cli-preparation-dispatch.ts'
 import type { LabelSetReference } from './labelset.ts'
+import type {
+  ResearchCostEvidence,
+  ResearchCostSettlement,
+  ResearchCostSubject,
+} from './research-cost.ts'
 export const RESEARCH_STAGES = [
   'question',
   'data_audit',
@@ -111,7 +120,16 @@ export interface ResearchApprovalScope {
   }
   backendPolicyHash?: string
   trackingPolicyHash?: string
-  kind: 'protocol' | 'execution' | 'cli_preparation' | 'model_review' | 'release'
+  kind:
+    | 'protocol'
+    | 'execution'
+    | 'cli_preparation'
+    | 'model_review'
+    | 'release'
+    | 'cost_settlement'
+  costEvidenceId?: string
+  costSubject?: ResearchCostSubject
+  costAmount?: number
   evidencePackHash?: string
   configHash?: string
   maxRequests?: number
@@ -143,6 +161,7 @@ export type ResearchTaskStatus = 'pending' | 'verified' | 'failed' | 'interrupte
 
 /** Immutable execution specification. Its status is derived from its attempts. */
 export interface ResearchTaskRevision {
+  sourceContextVersion?: 1 | 2
   labelSetContentHashes?: string[]
   skillBinding?: {
     id: string
@@ -195,6 +214,7 @@ export interface ResearchJobSpec {
 }
 
 export interface ResearchAttempt {
+  cliPreparationAuthority?: CliPreparationAuthorityBinding
   /** Actual execution fact can differ from the user's cancellation request. */
   executionOutcome?: 'completed'
   /** Late results after a stop request remain historical and never gain admission. */
@@ -250,6 +270,7 @@ export interface SyntheticCompletionValidation {
 }
 
 export interface ResearchModelReview {
+  sourceContextVersion?: 1 | 2
   executionBackend?: 'builtin-session' | 'builtin-cli'
   /** Derived against current evidence; execution status remains historical. */
   sourceValidity?: 'current' | 'stale'
@@ -297,6 +318,8 @@ export interface ResearchProgressControl {
 }
 
 export interface ResearchCampaign {
+  costEvidence?: ResearchCostEvidence[]
+  costSettlements?: ResearchCostSettlement[]
   /** Missing on historical campaigns means manual, active, generation zero. */
   progressControl?: ResearchProgressControl
   cliPreparations?: ResearchCliPreparation[]
@@ -329,6 +352,23 @@ export interface ResearchCampaign {
 }
 
 export type ResearchCommand =
+  | { kind: 'recordCostEvidence'; evidence: Omit<ResearchCostEvidence, 'recordedAt'> }
+  | { kind: 'settleCostEvidence'; evidenceId: string; approvalId: string }
+  | {
+      kind: 'claimCliPreparationDispatch' | 'acquireCliPreparationObservation'
+      attemptId: string
+      instanceId: string
+      expectedEpoch: string
+      expectedJobSpecHash: string
+      leaseExpiresAt: number
+    }
+  | {
+      kind: 'acknowledgeCliPreparationDispatch' | 'markCliPreparationObservationUnknown'
+      attemptId: string
+      instanceId: string
+      generation: number
+      expectedEpoch: string
+    }
   | { kind: 'setResearchProgress'; state: 'active' | 'held'; expectedGeneration: number }
   | {
       kind: 'applyResearchPattern'
@@ -358,9 +398,15 @@ export type ResearchCommand =
       acknowledgeUnknownCost: true
     }
   | { kind: 'claimCliPreparation'; preparationId: string; approvalId: string }
-  | { kind: 'bindCliPreparationJob'; attemptId: string; spec: CliPreparationJobSpec }
+  | {
+      kind: 'bindCliPreparationJob'
+      attemptId: string
+      spec: CliPreparationJobSpec
+      authorityEpoch?: string
+    }
   | {
       kind: 'finishCliPreparation'
+      observer?: CliPreparationObserverIdentity
       attemptId: string
       uri: string
       artifactKind: 'cli_preparation_candidate'
@@ -369,6 +415,7 @@ export type ResearchCommand =
     }
   | {
       kind: 'quarantineCliPreparationResult'
+      observer?: CliPreparationObserverIdentity
       attemptId: string
       uri: string
       contentHash: string

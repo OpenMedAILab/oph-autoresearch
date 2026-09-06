@@ -23,6 +23,12 @@ export type {
 } from './domain/cli-preparation.ts'
 // id 与构造器：账本、事件、协议三处都按它们对齐类型
 export { canonicalCliPreparationConfig } from './domain/cli-preparation.ts'
+export type {
+  CliPreparationAuthorityBinding,
+  CliPreparationDispatchState,
+  CliPreparationObserverIdentity,
+  CliPreparationObserverLease,
+} from './domain/cli-preparation-dispatch.ts'
 export {
   type ConversationId,
   type GoalId,
@@ -158,6 +164,11 @@ export {
   type SyntheticCompletionValidation,
   type TrustedHumanReviewerProof,
 } from './domain/research.ts'
+export type {
+  ResearchCostEvidence,
+  ResearchCostSettlement,
+  ResearchCostSubject,
+} from './domain/research-cost.ts'
 export {
   decideResearchCapability,
   RESTRICTED_RESEARCH_CAPABILITY_DENIED,
