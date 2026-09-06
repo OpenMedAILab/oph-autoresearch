@@ -38,6 +38,19 @@ export interface SshDaemonAuthority {
   query(dispatchKey: string, expectedEpoch?: string): Promise<DurableJob | null>
   cancel(dispatchKey: string, expectedEpoch?: string): Promise<DurableJob | null>
   receipt(dispatchKey: string, expectedEpoch?: string): Promise<Uint8Array>
+  registerFormalCandidate(input: {
+    candidateArtifactId: string
+    code: Uint8Array
+    codeHash: string
+    candidateReceipt: Uint8Array
+    candidateReceiptHash: string
+    expectedEpoch: string
+  }): Promise<void>
+  verifyFormalReceipt(
+    dispatchKey: string,
+    specHash: string,
+    expectedEpoch: string,
+  ): Promise<boolean>
   reconcileInterrupted(): Promise<readonly DurableJob[]>
   hasAvailableSlot(): false
   launchWorker(): never
@@ -526,6 +539,86 @@ class Client implements SshDaemonAuthority {
     if (hashBytes(bytes) !== job.contentHash)
       throw new Error('SSH daemon receipt does not match its job')
     return bytes
+  }
+
+  async registerFormalCandidate(input: {
+    candidateArtifactId: string
+    code: Uint8Array
+    codeHash: string
+    candidateReceipt: Uint8Array
+    candidateReceiptHash: string
+    expectedEpoch: string
+  }) {
+    if (
+      !TEXT_ID.test(input.candidateArtifactId) ||
+      !validEpoch(input.expectedEpoch) ||
+      !SHA256.test(input.codeHash) ||
+      !SHA256.test(input.candidateReceiptHash) ||
+      input.code.byteLength > 1_000_000 ||
+      input.candidateReceipt.byteLength > 1_000_000 ||
+      hashBytes(input.code) !== input.codeHash ||
+      hashBytes(input.candidateReceipt) !== input.candidateReceiptHash
+    )
+      throw new Error('invalid formal candidate binding')
+    const body = await this.bytes(
+      await this.endpoint(),
+      '/formal-candidate',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          candidateArtifactId: input.candidateArtifactId,
+          code: Buffer.from(input.code).toString('base64'),
+          codeHash: input.codeHash,
+          candidateReceipt: Buffer.from(input.candidateReceipt).toString('base64'),
+          candidateReceiptHash: input.candidateReceiptHash,
+          expectedEpoch: input.expectedEpoch,
+        }),
+      },
+      true,
+      input.expectedEpoch,
+    )
+    let response: unknown
+    try {
+      response = JSON.parse(new TextDecoder().decode(body))
+    } catch {
+      throw new Error('invalid formal candidate response')
+    }
+    if (
+      !isRecord(response) ||
+      response.authorityId !== this.config.authorityId ||
+      response.candidateArtifactId !== input.candidateArtifactId
+    )
+      throw new Error('formal candidate response does not match')
+  }
+
+  async verifyFormalReceipt(dispatchKey: string, specHash: string, expectedEpoch: string) {
+    if (!TEXT_ID.test(dispatchKey) || !SHA256.test(specHash) || !validEpoch(expectedEpoch))
+      throw new Error('invalid formal receipt binding')
+    const body = await this.bytes(
+      await this.endpoint(),
+      '/verify-formal-receipt',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dispatchKey, expectedEpoch, specHash }),
+      },
+      true,
+      expectedEpoch,
+    )
+    let response: unknown
+    try {
+      response = JSON.parse(new TextDecoder().decode(body))
+    } catch {
+      throw new Error('invalid formal receipt response')
+    }
+    if (
+      !isRecord(response) ||
+      response.authorityId !== this.config.authorityId ||
+      typeof response.valid !== 'boolean'
+    )
+      throw new Error('formal receipt response does not match')
+    return response.valid
   }
 
   async reconcileInterrupted(): Promise<readonly DurableJob[]> {

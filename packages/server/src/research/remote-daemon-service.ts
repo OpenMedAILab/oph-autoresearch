@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import type { CliPreparationAdministratorConfig } from './cli-preparation-job.ts'
+import { isFormalOciJob } from './formal-job.ts'
 import type { FormalOciAdministratorConfig } from './formal-oci.ts'
 import { type DurableJob, JobDaemon } from './job-daemon.ts'
 import type { RunnerTrackingConfig } from './runner-tracking.ts'
@@ -23,6 +24,14 @@ function projection(job: DurableJob | null) {
 }
 const CLOSURE_KEYS = ['dispatchKey', 'expectedEpoch', 'specHash'] as const
 const SUBMISSION_KEYS = ['expectedEpoch', 'spec'] as const
+const FORMAL_CANDIDATE_KEYS = [
+  'candidateArtifactId',
+  'candidateReceipt',
+  'candidateReceiptHash',
+  'code',
+  'codeHash',
+  'expectedEpoch',
+] as const
 function isClosureRequest(value: unknown): value is {
   dispatchKey: string
   expectedEpoch: string
@@ -65,6 +74,54 @@ function isSubmissionRequest(value: unknown): value is { expectedEpoch: string; 
     isEpoch((value as Record<string, unknown>).expectedEpoch) &&
     'spec' in (value as Record<string, unknown>)
   )
+}
+function formalCandidateRequest(value: unknown): {
+  candidateArtifactId: string
+  code: Uint8Array
+  codeHash: string
+  candidateReceipt: Uint8Array
+  candidateReceiptHash: string
+  expectedEpoch: string
+} | null {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.keys(value as Record<string, unknown>)
+      .sort()
+      .join(',') !== FORMAL_CANDIDATE_KEYS.join(',')
+  )
+    return null
+  const row = value as Record<string, unknown>
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(String(row.candidateArtifactId)) ||
+    !isEpoch(row.expectedEpoch) ||
+    !/^sha256:[a-f0-9]{64}$/.test(String(row.codeHash)) ||
+    !/^sha256:[a-f0-9]{64}$/.test(String(row.candidateReceiptHash)) ||
+    typeof row.code !== 'string' ||
+    typeof row.candidateReceipt !== 'string'
+  )
+    return null
+  const decode = (encoded: string) => {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length % 4 !== 0) return null
+    const bytes = Buffer.from(encoded, 'base64')
+    return bytes.toString('base64') === encoded ? bytes : null
+  }
+  const code = decode(row.code),
+    candidateReceipt = decode(row.candidateReceipt)
+  return code &&
+    candidateReceipt &&
+    code.byteLength <= 1_000_000 &&
+    candidateReceipt.byteLength <= 1_000_000
+    ? {
+        candidateArtifactId: row.candidateArtifactId as string,
+        code,
+        codeHash: row.codeHash as string,
+        candidateReceipt,
+        candidateReceiptHash: row.candidateReceiptHash as string,
+        expectedEpoch: row.expectedEpoch,
+      }
+    : null
 }
 async function boundedJson(request: Request, maxBytes: number): Promise<unknown> {
   const length = Number(request.headers.get('content-length') ?? 0)
@@ -216,6 +273,49 @@ export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
           return respond(job)
         } catch {
           return respond(null, 409)
+        }
+      }
+      if (request.method === 'POST' && url.pathname === '/formal-candidate') {
+        let body: unknown
+        try {
+          body = await boundedJson(request, 3_000_000)
+        } catch {
+          return new Response('invalid request', { status: 400, headers: authorityHeaders() })
+        }
+        const candidate = formalCandidateRequest(body)
+        if (!candidate || candidate.expectedEpoch !== daemon.identity().epoch)
+          return new Response('operation rejected', { status: 409, headers: authorityHeaders() })
+        try {
+          await daemon.registerFormalCandidate(candidate)
+          return Response.json(
+            { authorityId, candidateArtifactId: candidate.candidateArtifactId },
+            { headers: authorityHeaders() },
+          )
+        } catch {
+          return new Response('operation rejected', { status: 409, headers: authorityHeaders() })
+        }
+      }
+      if (request.method === 'POST' && url.pathname === '/verify-formal-receipt') {
+        let body: unknown
+        try {
+          body = await boundedJson(request, 4096)
+        } catch {
+          return new Response('invalid request', { status: 400, headers: authorityHeaders() })
+        }
+        if (!isClosureRequest(body) || body.expectedEpoch !== daemon.identity().epoch)
+          return new Response('operation rejected', { status: 409, headers: authorityHeaders() })
+        const job = daemon.query(body.dispatchKey)
+        if (!job || job.specHash !== body.specHash || !isFormalOciJob(job.spec))
+          return new Response('operation rejected', { status: 409, headers: authorityHeaders() })
+        try {
+          const valid = await daemon.verifyFormalReceipt(
+            job.spec,
+            `${config.outputRoot}/${body.dispatchKey}`,
+            daemon.receipt(body.dispatchKey),
+          )
+          return Response.json({ authorityId, valid }, { headers: authorityHeaders() })
+        } catch {
+          return new Response('operation rejected', { status: 409, headers: authorityHeaders() })
         }
       }
       const match = /^\/(status|cancel|receipt)\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(

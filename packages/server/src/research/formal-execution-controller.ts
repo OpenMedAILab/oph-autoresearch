@@ -51,6 +51,7 @@ export interface FormalExecutionRoute {
       codeHash: string
       candidateReceipt: Uint8Array
       candidateReceiptHash: string
+      expectedEpoch: string
     }): Promise<void>
   }
 }
@@ -62,6 +63,12 @@ export interface FormalCandidateSource {
     code: Uint8Array
     candidateReceipt: Uint8Array
   }>
+}
+export interface FormalExecutionTrustedScope {
+  profileId: string
+  workspaceBindingHash: string
+  connectionHash: string
+  remoteRoot: string
 }
 export class FormalExecutionControlError extends Error {
   constructor(
@@ -81,6 +88,9 @@ export class FormalExecutionController {
     private readonly routes: readonly FormalExecutionRoute[],
     private readonly candidates: FormalCandidateSource,
     private readonly changed: () => void,
+    private readonly resolveScope: (
+      scope: FormalExecutionScope,
+    ) => Promise<FormalExecutionTrustedScope>,
     instanceId = `formal-observer-${crypto.randomUUID()}`,
   ) {
     if (
@@ -130,10 +140,18 @@ export class FormalExecutionController {
     if (notify) this.changed()
     return result
   }
-  private routeFor(plan: FormalExecutionPlan, routeId: string) {
+  private routeFor(
+    plan: FormalExecutionPlan,
+    routeId: string,
+    trusted: FormalExecutionTrustedScope,
+  ) {
     const route = this.routes.find(
       (item) =>
         item.id === routeId &&
+        item.profileId === trusted.profileId &&
+        item.connectionHash === trusted.connectionHash &&
+        item.remoteRoot === trusted.remoteRoot &&
+        plan.workspaceBindingHash === trusted.workspaceBindingHash &&
         (item.workspaceBindingHash === undefined ||
           item.workspaceBindingHash === plan.workspaceBindingHash),
     )
@@ -155,7 +173,7 @@ export class FormalExecutionController {
       throw new FormalExecutionControlError('无效幂等键', 400)
     const plan = before.formalExecutionPlans?.find((item) => item.planId === input.planId)
     if (!plan) throw new FormalExecutionControlError('正式计划不存在', 404)
-    const route = this.routeFor(plan, input.routeId)
+    const route = this.routeFor(plan, input.routeId, await this.resolveScope(scope))
     const existing = before.formalExecutionDispatches?.find((item) => item.planId === plan.planId)
     if (existing) {
       if (
@@ -272,7 +290,8 @@ export class FormalExecutionController {
     if (!attempt || !binding || !attempt.formalExecutionJobSpec)
       throw new FormalExecutionControlError('正式执行缺少冻结作业规格；不会重投')
     const route = this.routes.find((item) => item.id === binding.routeId)
-    if (!route) throw new FormalExecutionControlError('原正式执行路线不再准入；不会改投')
+    if (!route || !this.routeMatches(route, binding, await this.resolveScope(scope)))
+      throw new FormalExecutionControlError('原正式执行路线不再准入；不会改投')
     void this.observe(scope, attemptId, route)
     return { campaign, attemptId }
   }
@@ -322,6 +341,7 @@ export class FormalExecutionController {
     route: FormalExecutionRoute,
     plan: FormalExecutionPlan,
     campaign: ResearchCampaign,
+    expectedEpoch: string,
   ) {
     const staged = await this.candidates.read(plan, campaign)
     if (
@@ -335,6 +355,7 @@ export class FormalExecutionController {
       codeHash: plan.codeHash,
       candidateReceipt: staged.candidateReceipt,
       candidateReceiptHash: plan.candidateReceiptHash,
+      expectedEpoch,
     })
   }
   private async observe(
@@ -354,9 +375,10 @@ export class FormalExecutionController {
         !['running', 'unknown'].includes(attempt.status)
       )
         return
-      const held = await this.acquire(scope, attemptId, binding.dispatchState === 'not_sent')
+      if (!this.routeMatches(route, binding, await this.resolveScope(scope))) return
+      const first = binding.dispatchState === 'not_sent'
+      const held = await this.acquire(scope, attemptId, first)
       if (!held) return
-      await this.stageCandidate(route, held.spec.formalPlan, this.campaign(scope))
       const identity = await route.authority.identity()
       if (identity.epoch !== held.epoch) {
         this.mutate(scope, `unknown-formal:${attemptId}:${held.observer.generation}`, {
@@ -368,7 +390,8 @@ export class FormalExecutionController {
         })
         return
       }
-      if (binding.dispatchState === 'not_sent') {
+      if (first) {
+        await this.stageCandidate(route, held.spec.formalPlan, this.campaign(scope), held.epoch)
         try {
           await route.authority.submit(held.spec, held.epoch)
         } catch {
@@ -409,5 +432,24 @@ export class FormalExecutionController {
     } finally {
       this.observing.delete(attemptId)
     }
+  }
+  private routeMatches(
+    route: FormalExecutionRoute,
+    binding: FormalExecutionAuthorityBinding,
+    trusted: FormalExecutionTrustedScope,
+  ) {
+    return (
+      route.id === binding.routeId &&
+      route.profileId === binding.profileId &&
+      route.workspaceBindingHash === binding.workspaceBindingHash &&
+      route.connectionHash === binding.connectionHash &&
+      route.remoteRoot === binding.remoteRoot &&
+      route.authorityId === binding.authorityId &&
+      route.admissionEvidenceHash === binding.admissionEvidenceHash &&
+      trusted.profileId === binding.profileId &&
+      trusted.workspaceBindingHash === binding.workspaceBindingHash &&
+      trusted.connectionHash === binding.connectionHash &&
+      trusted.remoteRoot === binding.remoteRoot
+    )
   }
 }

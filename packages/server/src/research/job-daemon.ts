@@ -882,7 +882,7 @@ export class JobDaemon implements JobDaemonPort {
   private async verifiedOutput(
     job: DurableJob,
     result: unknown,
-  ): { contentHash: string; outputPath: string } | null {
+  ): Promise<{ contentHash: string; outputPath: string } | null> {
     if (
       !isRecord(result) ||
       !hasKeys(result, ['contentHash', 'outputPath']) ||
