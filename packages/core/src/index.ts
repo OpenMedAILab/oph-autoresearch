@@ -11,6 +11,11 @@
  */
 
 export type {
+  ResearchAuthorityClosureProof,
+  ResearchAuthorityClosureRequest,
+  ResearchAuthorityIdentity,
+} from './domain/authority-closure.ts'
+export type {
   CliPreparationCandidateValidation,
   CliPreparationFrozenConfig,
   CliPreparationJobSpec,

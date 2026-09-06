@@ -195,6 +195,10 @@ export interface ResearchJobSpec {
 }
 
 export interface ResearchAttempt {
+  /** Actual execution fact can differ from the user's cancellation request. */
+  executionOutcome?: 'completed'
+  /** Late results after a stop request remain historical and never gain admission. */
+  resultDisposition?: 'quarantined'
   backendPolicyHash?: string
   trackingPolicyHash?: string
   backend?: 'builtin-local' | 'localhost-daemon' | 'ssh-daemon'
@@ -351,6 +355,13 @@ export type ResearchCommand =
       attemptId: string
       uri: string
       artifactKind: 'cli_preparation_candidate'
+      contentHash: string
+      validation: CliPreparationCandidateValidation
+    }
+  | {
+      kind: 'quarantineCliPreparationResult'
+      attemptId: string
+      uri: string
       contentHash: string
       validation: CliPreparationCandidateValidation
     }

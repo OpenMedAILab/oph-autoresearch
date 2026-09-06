@@ -124,7 +124,7 @@ test('daemon-disabled deployment rejects both CLI preparation authority injectio
     adapterConfigHash: `sha256:${'a'.repeat(64)}`,
   }
   const authority = {
-    get backendPolicyHash() {
+    get backendPolicyHash(): string {
       authorityAccessed = true
       throw new Error('must not construct execution authority')
     },

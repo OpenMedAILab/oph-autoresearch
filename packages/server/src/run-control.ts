@@ -528,6 +528,11 @@ export function setGoal(
   objective: string,
   deps: Omit<CommandDeps, 'ws'>,
 ): { ok: true } | { ok: false; message: string } {
+  if (deps.researchControllerOnly)
+    return {
+      ok: false,
+      message: '研究控制模式暂不支持自动目标循环；请在研究项目中执行有明确批准范围的步骤。',
+    }
   if (deps.runs.isBusy(conversationId)) {
     return { ok: false, message: '该会话已有任务在执行，先停下这一轮再立目标' }
   }
@@ -565,6 +570,11 @@ export function resumeGoal(
   conversationId: ConversationId,
   deps: Omit<CommandDeps, 'ws'>,
 ): { ok: true } | { ok: false; message: string } {
+  if (deps.researchControllerOnly)
+    return {
+      ok: false,
+      message: '研究控制模式暂不支持自动目标循环；请在研究项目中执行有明确批准范围的步骤。',
+    }
   if (deps.runs.isBusy(conversationId)) {
     return { ok: false, message: '该会话已有任务在执行' }
   }

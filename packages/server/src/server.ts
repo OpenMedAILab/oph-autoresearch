@@ -39,7 +39,9 @@ import {
   contentPathFor,
   createConversation,
   getWorkspaceByPath,
+  listResearchCampaigns,
   listResearchEvents,
+  listWorkspaces,
   mostRecentWorkspace,
   recoverRunningSyntheticAttempts,
   recoverStaleRuns,
@@ -265,6 +267,17 @@ export function serve(opts: ServeOptions) {
   const stale = recoverStaleRuns(opts.store, previousExit)
   if (!restricted) {
     recoverRunningSyntheticAttempts(opts.store)
+    if (researchCliPreparation) {
+      for (const existingWorkspace of listWorkspaces(opts.store)) {
+        for (const campaign of listResearchCampaigns(opts.store, existingWorkspace.id)) {
+          researchCliPreparation.recover({
+            workspaceId: existingWorkspace.id,
+            workspaceRoot: existingWorkspace.rootPath,
+            campaignId: campaign.id,
+          })
+        }
+      }
+    }
     if (researchNotifications) {
       const campaignIds = opts.store.db
         .query<{ id: string }, []>('SELECT id FROM research_campaigns')
