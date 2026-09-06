@@ -104,7 +104,7 @@ export interface ResearchApprovalScope {
   }
   backendPolicyHash?: string
   trackingPolicyHash?: string
-  kind: 'protocol' | 'execution' | 'model_review' | 'release'
+  kind: 'protocol' | 'execution' | 'cli_preparation' | 'model_review' | 'release'
   evidencePackHash?: string
   configHash?: string
   maxRequests?: number
@@ -172,12 +172,25 @@ export type ResearchAttemptStatus =
 export interface ResearchJobSpec {
   backendPolicyHash?: string
   trackingPolicyHash?: string
-  version: 1 | 2
-  execution?: {
-    adapter: 'supervised-phantom-v2'
-    codeHash: string
-    maxRuntimeMs: number
-  }
+  version: 1 | 2 | 3
+  execution?:
+    | {
+        adapter: 'supervised-phantom-v2'
+        codeHash: string
+        maxRuntimeMs: number
+      }
+    | {
+        adapter: 'cli-preparation-v1'
+        preparationId: string
+        candidateId: string
+        adapterId: string
+        model: string
+        instructions: string
+        configHash: string
+        deviceId: string
+        maxRuntimeMs: number
+        maxCost: number
+      }
   dispatchKey: string
   campaignId: string
   taskRevisionId: string
@@ -203,6 +216,26 @@ export interface ResearchAttempt {
   artifactVersionId: string | null
   error: string | null
   cancelRequestedAt: number | null
+}
+
+/** Immutable proposal; its generated code remains a candidate artifact until a separate workflow admits it. */
+export interface ResearchCliPreparation {
+  id: string
+  taskRevisionId: string
+  dispatchKey: string
+  candidateId: string
+  adapterId: string
+  model: string
+  instructions: string
+  inputHash: string
+  configHash: string
+  deviceId: string
+  maxRuntimeMs: number
+  maxCost: number
+  status: 'proposed' | 'claimed' | 'candidate'
+  attemptId: string | null
+  artifactVersionId: string | null
+  createdAt: number
 }
 
 export interface SyntheticCompletionValidation {
@@ -254,6 +287,7 @@ export interface ResearchLiteratureCitation {
 }
 
 export interface ResearchCampaign {
+  cliPreparations?: ResearchCliPreparation[]
   pattern?: { contractHash: string; plan: ResearchJsonObject; taskRevisionIds: string[] }
   patternHistory?: Array<{
     contractHash: string
@@ -292,6 +326,22 @@ export type ResearchCommand =
   | { kind: 'setPolicy'; policy: ResearchJsonObject }
   | { kind: 'setInputs'; inputs: ResearchJsonObject }
   | { kind: 'setBudget'; budget: ResearchBudget }
+  | {
+      kind: 'proposeCliPreparation'
+      preparationId: string
+      taskRevisionId: string
+      dispatchKey: string
+      candidateId: string
+      adapterId: string
+      model: string
+      instructions: string
+      inputHash: string
+      configHash: string
+      deviceId: string
+      maxRuntimeMs: number
+      maxCost: number
+    }
+  | { kind: 'claimCliPreparation'; preparationId: string; approvalId: string }
   | {
       kind: 'recordArtifact'
       artifactId: string

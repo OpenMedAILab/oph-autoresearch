@@ -7,6 +7,7 @@ import {
   type ResearchAttempt,
   type ResearchCampaign,
   type ResearchCampaignInput,
+  type ResearchCliPreparation,
   type ResearchCommand,
   type ResearchEvent,
   type ResearchTaskRevision,
@@ -596,6 +597,118 @@ function nextCampaign(
       next = { ...campaign, budget: cloneJson(command.budget), status: 'proposal' }
       break
     }
+    case 'proposeCliPreparation': {
+      const task = campaign.taskRevisions.find(
+        (candidate) => candidate.id === command.taskRevisionId,
+      )
+      const error =
+        textError(command.preparationId, 'preparationId') ??
+        textError(command.dispatchKey, 'dispatchKey') ??
+        textError(command.candidateId, 'candidateId') ??
+        textError(command.adapterId, 'adapterId') ??
+        textError(command.model, 'model') ??
+        textError(command.deviceId, 'deviceId') ??
+        (typeof command.instructions !== 'string' ||
+        command.instructions.length < 1 ||
+        command.instructions.length > 32_000
+          ? 'instructions 无效'
+          : null) ??
+        (!SHA256.test(command.inputHash) ? 'inputHash 无效' : null) ??
+        (!SHA256.test(command.configHash) ? 'configHash 无效' : null) ??
+        (!Number.isSafeInteger(command.maxRuntimeMs) ||
+        command.maxRuntimeMs < 1 ||
+        command.maxRuntimeMs > 600_000
+          ? 'maxRuntimeMs 无效'
+          : null) ??
+        (!Number.isFinite(command.maxCost) ||
+        command.maxCost < 0 ||
+        command.maxCost > campaign.budget.limit
+          ? 'maxCost 无效'
+          : null)
+      if (
+        error ||
+        !task ||
+        task.status === 'stale' ||
+        task.inputHash !== command.inputHash ||
+        (campaign.cliPreparations ?? []).some(
+          (candidate) =>
+            candidate.id === command.preparationId || candidate.dispatchKey === command.dispatchKey,
+        )
+      )
+        return invalid('invalid_cli_preparation_proposal', error ?? '任务版本或 dispatchKey 不可用')
+      const preparation: ResearchCliPreparation = {
+        id: command.preparationId,
+        taskRevisionId: task.id,
+        dispatchKey: command.dispatchKey,
+        candidateId: command.candidateId,
+        adapterId: command.adapterId,
+        model: command.model,
+        instructions: command.instructions,
+        inputHash: command.inputHash,
+        configHash: command.configHash,
+        deviceId: command.deviceId,
+        maxRuntimeMs: command.maxRuntimeMs,
+        maxCost: command.maxCost,
+        status: 'proposed',
+        attemptId: null,
+        artifactVersionId: null,
+        createdAt: now,
+      }
+      next = { ...campaign, cliPreparations: [...(campaign.cliPreparations ?? []), preparation] }
+      break
+    }
+    case 'claimCliPreparation': {
+      const preparation = (campaign.cliPreparations ?? []).find(
+        (candidate) => candidate.id === command.preparationId,
+      )
+      const task = campaign.taskRevisions.find(
+        (candidate) => candidate.id === preparation?.taskRevisionId,
+      )
+      const approval = campaign.approvals.find((candidate) => candidate.id === command.approvalId)
+      if (
+        !preparation ||
+        !task ||
+        preparation.status !== 'proposed' ||
+        approval?.status !== 'active' ||
+        approval.consumedBy ||
+        approval.bundleHash !== campaign.bundleHash ||
+        approval.scope?.kind !== 'cli_preparation' ||
+        approval.scope.expiresAt <= now ||
+        approval.scope.taskRevisionId !== task.id ||
+        approval.scope.dispatchKey !== preparation.dispatchKey ||
+        approval.scope.configHash !== preparation.configHash ||
+        approval.scope.maxCost !== preparation.maxCost ||
+        approval.scope.executionLimits?.maxRuntimeMs !== preparation.maxRuntimeMs ||
+        approval.scope.executionLimits?.inputHash !== preparation.inputHash
+      )
+        return invalid('cli_preparation_approval_required', '准备任务需要精确且未消费的人类审批')
+      const attempt: ResearchAttempt = {
+        id: randomId('rat'),
+        taskRevisionId: task.id,
+        dispatchKey: preparation.dispatchKey,
+        backend: 'ssh-daemon',
+        ownerPid: process.pid,
+        status: 'running',
+        executionStartedAt: now,
+        endedAt: null,
+        artifactVersionId: null,
+        error: null,
+        cancelRequestedAt: null,
+      }
+      next = {
+        ...campaign,
+        attempts: [...campaign.attempts, attempt],
+        cliPreparations: (campaign.cliPreparations ?? []).map((candidate) =>
+          candidate.id === preparation.id
+            ? { ...candidate, status: 'claimed', attemptId: attempt.id }
+            : candidate,
+        ),
+        approvals: campaign.approvals.map((candidate) =>
+          candidate.id === approval.id ? { ...candidate, consumedBy: attempt.id } : candidate,
+        ),
+      }
+      break
+    }
     case 'recordArtifact': {
       const error =
         textError(command.artifactId, 'artifactId') ??
@@ -650,7 +763,9 @@ function nextCampaign(
             (scope.kind !== 'execution' || !SHA256.test(scope.trackingPolicyHash))) ||
           (scope.backendPolicyHash !== undefined &&
             (scope.kind !== 'execution' || !SHA256.test(scope.backendPolicyHash))) ||
-          !['protocol', 'execution', 'model_review', 'release'].includes(scope.kind) ||
+          !['protocol', 'execution', 'cli_preparation', 'model_review', 'release'].includes(
+            scope.kind,
+          ) ||
           !Number.isSafeInteger(scope.expiresAt) ||
           scope.expiresAt <= now ||
           scope.expiresAt > now + 24 * 60 * 60 * 1000 ||
@@ -666,6 +781,14 @@ function nextCampaign(
           (scope.kind === 'execution' &&
             (!scope.dispatchKey ||
               !scope.taskRevisionId ||
+              !campaign.taskRevisions.some(
+                (t) => t.id === scope.taskRevisionId && t.status !== 'stale',
+              ))) ||
+          (scope.kind === 'cli_preparation' &&
+            (!scope.dispatchKey ||
+              !scope.taskRevisionId ||
+              !scope.configHash ||
+              !SHA256.test(scope.configHash) ||
               !campaign.taskRevisions.some(
                 (t) => t.id === scope.taskRevisionId && t.status !== 'stale',
               )))
