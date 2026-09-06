@@ -9,6 +9,52 @@ interface PatternState {
   stages: Array<{ stageId: string; status: string; evidence: string }>
   candidateAssessments: Array<{ reportHash: string; decision: string }>
 }
+const stageNames: Record<string, string> = {
+  question: '研究问题',
+  literature: '文献依据',
+  dataset_audit: '数据检查',
+  protocol_freeze: '方案冻结',
+  smoke: '基础检查',
+  experiment: '实验',
+  evaluation: '结果核验',
+  independent_review: '独立科学复核',
+  release: '结果发布',
+}
+const statusNames: Record<string, string> = {
+  recorded: '已记录',
+  'metadata-recorded': '已记录文献元数据',
+  'not-requested': '尚未请求',
+  'fixed-fixture-contract': '合成样例范围',
+  'criteria-unmet': '条件未满足',
+  stale: '依据已变化',
+  blocked: '等待前置条件',
+  pending: '待处理',
+  running: '进行中',
+  unknown: '状态待核对',
+  failed: '未完成',
+  interrupted: '执行中断',
+  cancelled: '已取消',
+  verified: '产物已核验',
+  'model-reviewed': '模型复核已返回',
+  released: '已发布',
+}
+const nextNames: Record<string, string> = {
+  'replan-required': '更新方案并重新核对条件',
+  'approved-fixed-execution': '审批并执行当前步骤',
+  'approved-model-review': '另行批准独立科学复核',
+  complete: '流程已完成',
+  'signed-release': '核对科学支持后另行批准发布',
+}
+function stageDescription(stage: PatternState['stages'][number]) {
+  if (stage.stageId === 'question') return stage.evidence
+  if (stage.stageId === 'literature') return '当前仅记录公开文献元数据，尚不代表全文主张已核验。'
+  if (stage.stageId === 'dataset_audit') return '使用固定合成样例；实际数据检查以执行产物为准。'
+  if (stage.stageId === 'protocol_freeze') return '方案版本与依赖保存在研究账本中。'
+  if (stage.stageId === 'independent_review')
+    return '独立模型复核与人工批准分别记录，调用完成不代表证据支持。'
+  if (stage.stageId === 'release') return '发布需要当前证据支持以及独立人工签署。'
+  return '请在下方运行记录和产物中查看实际结果。'
+}
 export function ResearchPatternPanel(props: {
   campaign: ResearchCampaign
   busy: boolean
@@ -129,13 +175,14 @@ export function ResearchPatternPanel(props: {
       <Show when={state()}>
         {(current) => (
           <>
-            <p>下一步：{current().nextAction}</p>
+            <p>下一步：{nextNames[current().nextAction] ?? '等待核对'}</p>
             <ol>
               <For each={current().stages}>
                 {(stage) => (
                   <li>
-                    {stage.stageId} · {stage.status}
-                    <p>{stage.evidence}</p>
+                    {stageNames[stage.stageId] ?? '研究步骤'} ·{' '}
+                    {statusNames[stage.status] ?? '待核对'}
+                    <p>{stageDescription(stage)}</p>
                   </li>
                 )}
               </For>

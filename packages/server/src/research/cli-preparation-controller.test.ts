@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   createConversation,
   createResearchCampaign,
@@ -11,6 +12,7 @@ import {
   type Store,
   upsertWorkspace,
 } from '@oph-autoresearch/store'
+import { readCliCandidateView } from './cli-candidate-view.ts'
 import { candidateReceipt } from './cli-preparation-candidate.ts'
 import { CliPreparationController, type CliPreparationRoute } from './cli-preparation-controller.ts'
 import type { CliPreparationJobSpec } from './cli-preparation-job.ts'
@@ -197,6 +199,16 @@ test('controller submits one approved immutable attempt and records only a candi
     expect(completed.taskRevisions[0]!.status).toBe('pending')
     expect(completed.cliPreparations?.[0]?.actualCost).toBeNull()
     expect(completed.artifactVersions[0]?.kind).toBe('cli_preparation_candidate')
+    expect(await readCliCandidateView(completed, root, proposed.preparationId)).toMatchObject({
+      code: draft(spec).code,
+      patch: null,
+      formalExecutionAvailable: false,
+      quarantined: false,
+    })
+    await writeFile(fileURLToPath(completed.artifactVersions[0]!.uri), '{}')
+    await expect(readCliCandidateView(completed, root, proposed.preparationId)).rejects.toThrow(
+      '候选内容已变化',
+    )
     const removedRouteController = new CliPreparationController(
       store,
       [route(authority, `sha256:${'f'.repeat(64)}`)],
@@ -267,6 +279,10 @@ test('quarantines a verified completed receipt when local cancellation wins admi
     expect(quarantined.cliPreparations?.[0]?.status).toBe('claimed')
     expect(quarantined.cliPreparations?.[0]?.actualCost).toBeNull()
     expect(quarantined.artifactVersions[0]?.kind).toBe('cli_preparation_quarantined_candidate')
+    expect(await readCliCandidateView(quarantined, root, proposed.preparationId)).toMatchObject({
+      quarantined: true,
+      formalExecutionAvailable: false,
+    })
     controller.close()
   } finally {
     store.close()
@@ -337,6 +353,10 @@ test('quarantines a completed receipt for a historically revoked consumed approv
     })
     expect(quarantined.cliPreparations?.[0]?.status).toBe('claimed')
     expect(quarantined.artifactVersions[0]?.kind).toBe('cli_preparation_quarantined_candidate')
+    expect(await readCliCandidateView(quarantined, root, proposed.preparationId)).toMatchObject({
+      quarantined: true,
+      formalExecutionAvailable: false,
+    })
     controller.close()
   } finally {
     store.close()

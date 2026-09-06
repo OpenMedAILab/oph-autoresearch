@@ -116,6 +116,77 @@ export function ResearchCliPreparationPanel(props: {
       }
     }, '已提交远端代码准备。返回代码仅作为候选保存，正式实验需要另行冻结和批准。')
   }
+  const pendingApproval = (preparationId: string) => {
+    const preparation = props.campaign.cliPreparations?.find((item) => item.id === preparationId)
+    return props.campaign.approvals.find(
+      (item) =>
+        item.status === 'active' &&
+        !item.consumedBy &&
+        item.bundleHash === props.campaign.bundleHash &&
+        item.scope?.kind === 'cli_preparation' &&
+        item.scope.dispatchKey === preparation?.dispatchKey &&
+        item.scope.expiresAt > Date.now(),
+    )
+  }
+  async function continuePreparation(preparationId: string) {
+    const authorization = pendingApproval(preparationId)
+    const popup = authorization ? null : window.open('about:blank', 'oph-research-approval')
+    const captured = {
+      campaignId: props.campaign.id,
+      workspaceId: props.campaign.workspaceId,
+      endpoint: endpoint(),
+      suffix: suffix(),
+      version: props.campaign.version,
+      approvalUrl: props.approvalUrl,
+    }
+    await props.act(async () => {
+      try {
+        let approvalId = authorization?.id
+        let expectedVersion = captured.version
+        if (!approvalId) {
+          if (!popup || !captured.approvalUrl)
+            throw new Error('请配置审批渠道并允许打开独立审批窗口。')
+          const quote = await client.api<{
+            body: { expectedVersion: number; scope: { dispatchKey: string } }
+          }>(
+            `${captured.endpoint}/approval${captured.suffix}&preparationId=${encodeURIComponent(preparationId)}`,
+          )
+          const proof = await requestHumanApproval(
+            captured.approvalUrl,
+            {
+              workspaceId: captured.workspaceId,
+              campaignId: captured.campaignId,
+              action: 'approve',
+              body: quote.body,
+            },
+            popup,
+          )
+          const signed = await client.api<{ campaign: ResearchCampaign }>(
+            `/api/research/campaigns/${captured.campaignId}/approve${captured.suffix}`,
+            {
+              method: 'POST',
+              headers: { 'x-oph-human-proof': proof },
+              body: JSON.stringify(quote.body),
+            },
+          )
+          approvalId = signed.campaign.approvals.find(
+            (item) =>
+              item.status === 'active' &&
+              item.scope?.dispatchKey === quote.body.scope.dispatchKey &&
+              !item.consumedBy,
+          )?.id
+          expectedVersion = signed.campaign.version
+          if (!approvalId) throw new Error('本次准备审批未生效')
+        }
+        await client.api(`${captured.endpoint}/submit${captured.suffix}`, {
+          method: 'POST',
+          body: JSON.stringify({ preparationId, approvalId, expectedVersion }),
+        })
+      } finally {
+        popup?.close()
+      }
+    }, '已继续原代码准备；若提交响应丢失，请核对原运行，不会重新创建提案。')
+  }
   async function action(attemptId: string, kind: 'cancel' | 'reconcile') {
     await props.act(
       async () => {
@@ -278,16 +349,35 @@ export function ResearchCliPreparationPanel(props: {
                   : attempt()?.status === 'unknown'
                     ? '状态待核对'
                     : attempt()?.status === 'cancelled'
-                      ? '已确认停止'
+                      ? attempt()?.executionOutcome === 'completed'
+                        ? '停止请求后的结果已隔离，不用于实验结论'
+                        : '已确认停止'
                       : attempt()?.status === 'failed' || attempt()?.status === 'interrupted'
                         ? '准备未完成'
                         : preparation.status === 'claimed'
                           ? '准备中'
-                          : '待审批'}
+                          : pendingApproval(preparation.id)
+                            ? '已审批 · 待提交'
+                            : '待审批'}
               </p>
               <p>
                 费用未知 · 预留 {preparation.maxCost} {props.campaign.budget?.currency}
               </p>
+              <Show when={attempt()?.artifactVersionId}>
+                <CandidateContent
+                  endpoint={`${endpoint()}/candidate${suffix()}&preparationId=${encodeURIComponent(preparation.id)}`}
+                />
+              </Show>
+              <Show when={!preparation.attemptId}>
+                <p>关闭审批窗口或刷新后，可继续本次提案。</p>
+                <button
+                  type="button"
+                  disabled={props.busy || (!pendingApproval(preparation.id) && !props.approvalUrl)}
+                  onClick={() => void continuePreparation(preparation.id)}
+                >
+                  {pendingApproval(preparation.id) ? '提交已审批的代码准备' : '继续本次准备审批'}
+                </button>
+              </Show>
               <Show
                 when={
                   preparation.attemptId && ['running', 'unknown'].includes(attempt()?.status ?? '')
@@ -312,6 +402,57 @@ export function ResearchCliPreparationPanel(props: {
           )
         }}
       </For>
+    </details>
+  )
+}
+
+function CandidateContent(props: { endpoint: string }) {
+  const [opened, setOpened] = createSignal(false)
+  const [candidate] = createResource(
+    () => (opened() ? props.endpoint : undefined),
+    async (endpoint) =>
+      client.api<{
+        code: string
+        patch: string | null
+        quarantined: boolean
+        current: boolean
+        formalExecutionReason: string
+      }>(endpoint),
+  )
+  return (
+    <details onToggle={(event) => setOpened(event.currentTarget.open)}>
+      <summary>查看候选代码与变更</summary>
+      <Show when={candidate.loading}>
+        <p>正在核验已保存的候选内容…</p>
+      </Show>
+      <Show when={candidate.error}>
+        <p role="alert">候选内容暂不可核验，请刷新账本后重试。</p>
+      </Show>
+      <Show when={candidate()}>
+        {(value) => (
+          <>
+            <p>
+              {value().quarantined
+                ? '隔离的历史结果，不用于实验结论。'
+                : value().current
+                  ? '候选内容已核验，尚未通过独立代码审阅。'
+                  : '依据已变化，此候选需要重新核对。'}
+            </p>
+            <h6>完整代码</h6>
+            <pre style={{ 'max-height': '24rem', overflow: 'auto', 'white-space': 'pre-wrap' }}>
+              {value().code}
+            </pre>
+            <Show when={value().patch}>
+              <h6>补丁</h6>
+              <pre style={{ 'max-height': '16rem', overflow: 'auto', 'white-space': 'pre-wrap' }}>
+                {value().patch}
+              </pre>
+              <p>补丁仅供检查，不会自动应用。</p>
+            </Show>
+            <p>{value().formalExecutionReason}</p>
+          </>
+        )}
+      </Show>
     </details>
   )
 }

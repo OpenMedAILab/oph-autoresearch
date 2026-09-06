@@ -1,10 +1,11 @@
 import { getResearchCampaign } from '@oph-autoresearch/store'
+import { readCliCandidateView } from '../research/cli-candidate-view.ts'
 import { CliPreparationControlError } from '../research/cli-preparation-controller.ts'
 import { type ApiHandler, json } from './types.ts'
 
 export const handleCliPreparationsApi: ApiHandler = async (url, request, deps) => {
   const match =
-    /^\/api\/research\/campaigns\/([A-Za-z0-9_-]+)\/cli-preparations(?:\/(catalog|propose|approval|submit|reconcile|cancel))?$/.exec(
+    /^\/api\/research\/campaigns\/([A-Za-z0-9_-]+)\/cli-preparations(?:\/(catalog|propose|approval|submit|reconcile|cancel|candidate))?$/.exec(
       url.pathname,
     )
   if (!match) return null
@@ -17,6 +18,19 @@ export const handleCliPreparationsApi: ApiHandler = async (url, request, deps) =
   if (request.method === 'GET' && match[2] === 'catalog')
     return json({ routes: controller?.catalog() ?? [] })
   if (request.method === 'GET' && !match[2]) return json({ campaign })
+  if (request.method === 'GET' && match[2] === 'candidate') {
+    try {
+      return json(
+        await readCliCandidateView(
+          campaign,
+          deps.workspaceRoot,
+          url.searchParams.get('preparationId') ?? '',
+        ),
+      )
+    } catch {
+      return json({ error: '候选内容暂不可核验，请刷新账本后重试。' }, 409)
+    }
+  }
   if (!controller)
     return json({ error: '尚未配置可执行的远端 CLI 工具。登录探测不授予执行权限。' }, 409)
   try {

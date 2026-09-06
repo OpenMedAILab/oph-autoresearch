@@ -570,7 +570,7 @@ export async function preview(workspaceRoot: string, relPath: string): Promise<P
     return {
       ...base,
       content: text,
-      contentHash: buf.length <= MAX_TEXT_BYTES ? contentHash(buf) : undefined,
+      ...(buf.length <= MAX_TEXT_BYTES ? { contentHash: contentHash(buf) } : {}),
       truncated: buf.length > MAX_TEXT_BYTES,
     }
   }
