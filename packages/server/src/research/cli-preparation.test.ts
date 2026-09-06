@@ -23,7 +23,7 @@ EOF
       workspaceRoot: root,
       workspaceScope: '.',
       instructions: 'propose only',
-      maxRuntimeMs: 1000,
+      maxRuntimeMs: 5000,
       credentialHome: join(root, 'credentials'),
       adapter: {
         kind: 'codex-exec',
@@ -39,7 +39,7 @@ EOF
             taskRevisionId: 'task_1',
             workspaceScope: '.',
             instructions: 'propose only',
-            maxRuntimeMs: 1000,
+            maxRuntimeMs: 5000,
             config: {
               kind: 'codex-exec',
               id: 'codex',
