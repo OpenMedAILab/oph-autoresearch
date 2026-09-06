@@ -24,4 +24,4 @@ printf '%s' "$info" | grep -q '"cgroupVersion"[[:space:]]*:[[:space:]]*"v2"' || 
   echo "NOT ADMITTED: cgroup v2 resource controls unavailable" >&2
   exit 6
 }
-echo "ADMISSION READY: rootless Podman with cgroup v2; no image or experiment was run"
+echo "PREREQUISITES ONLY: rootless Podman with cgroup v2; no image or experiment was run; full isolation and durability acceptance is still required"
