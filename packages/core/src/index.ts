@@ -165,6 +165,11 @@ export {
   type TrustedHumanReviewerProof,
 } from './domain/research.ts'
 export type {
+  ResearchControllerLimits,
+  ResearchControllerRequest,
+  ResearchControllerReservation,
+} from './domain/research-controller.ts'
+export type {
   ResearchCostEvidence,
   ResearchCostSettlement,
   ResearchCostSubject,

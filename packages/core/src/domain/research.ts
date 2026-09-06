@@ -9,6 +9,10 @@ import type {
 } from './cli-preparation-dispatch.ts'
 import type { LabelSetReference } from './labelset.ts'
 import type {
+  ResearchControllerLimits,
+  ResearchControllerReservation,
+} from './research-controller.ts'
+import type {
   ResearchCostEvidence,
   ResearchCostSettlement,
   ResearchCostSubject,
@@ -127,6 +131,8 @@ export interface ResearchApprovalScope {
     | 'model_review'
     | 'release'
     | 'cost_settlement'
+    | 'controller'
+  controllerLimits?: ResearchControllerLimits
   costEvidenceId?: string
   costEvidenceHash?: string
   costSubjectLabel?: string
@@ -316,12 +322,14 @@ export interface ResearchLiteratureCitation {
 }
 
 export interface ResearchProgressControl {
-  mode: 'manual'
-  state: 'active' | 'held'
+  mode: 'manual' | 'bounded'
+  state: 'active' | 'held' | 'exhausted'
+  reservationRef?: string
   generation: number
 }
 
 export interface ResearchCampaign {
+  controllerReservations?: ResearchControllerReservation[]
   costEvidence?: ResearchCostEvidence[]
   costSettlements?: ResearchCostSettlement[]
   /** Missing on historical campaigns means manual, active, generation zero. */
@@ -356,6 +364,31 @@ export interface ResearchCampaign {
 }
 
 export type ResearchCommand =
+  | {
+      kind: 'activateBoundedResearch'
+      reservationId: string
+      approvalId: string
+      configHash: string
+      currency: string
+      reservedCost: number
+      limits: ResearchControllerLimits
+      expectedGeneration: number
+    }
+  | { kind: 'startControllerRequest'; reservationId: string; requestId: string; generation: number }
+  | {
+      kind: 'finishControllerRequest'
+      reservationId: string
+      requestId: string
+      actualCost: number | null
+      completed: boolean
+    }
+  | {
+      kind: 'reserveControllerAdvance'
+      reservationId: string
+      generation: number
+      actionKey: string
+    }
+  | { kind: 'completeBoundedResearch'; reservationId: string; generation: number }
   | { kind: 'recordCostEvidence'; evidence: Omit<ResearchCostEvidence, 'recordedAt'> }
   | { kind: 'settleCostEvidence'; evidenceId: string; approvalId: string }
   | {

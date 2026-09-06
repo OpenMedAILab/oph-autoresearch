@@ -1,5 +1,5 @@
 export interface ResearchCostSubject {
-  kind: 'cli_preparation' | 'model_review'
+  kind: 'cli_preparation' | 'model_review' | 'controller'
   id: string
 }
 export interface ResearchCostEvidence {
