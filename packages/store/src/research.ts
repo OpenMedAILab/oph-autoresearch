@@ -1927,6 +1927,10 @@ function nextCampaign(
       const artifact = campaign.artifactVersions.find(
         (item) => item.id === result.candidateArtifactId,
       )
+      const candidateAttempt = campaign.attempts.find(
+        (item) =>
+          item.artifactVersionId === artifact?.id && item.taskRevisionId === result.taskRevisionId,
+      )
       const task = withDerivedTaskStatuses(campaign).taskRevisions.find(
         (item) => item.id === result.taskRevisionId,
       )
@@ -1936,7 +1940,7 @@ function nextCampaign(
           artifact.kind,
         ) ||
         artifact.contentHash !== result.candidateReceiptHash ||
-        artifact.producerTaskRevisionId !== result.taskRevisionId ||
+        (artifact.producerTaskRevisionId !== result.taskRevisionId && !candidateAttempt) ||
         task?.status === 'stale' ||
         !(campaign.labelSets ?? []).some((item) => item.contentHash === plan.labelSetContentHash) ||
         !(task?.labelSetContentHashes ?? []).includes(plan.labelSetContentHash) ||
@@ -2013,6 +2017,13 @@ function nextCampaign(
       const artifact = validFormalExecutionPlan(plan)
         ? campaign.artifactVersions.find((item) => item.id === plan.candidateArtifactId)
         : undefined
+      const candidateAttempt = validFormalExecutionPlan(plan)
+        ? campaign.attempts.find(
+            (item) =>
+              item.artifactVersionId === artifact?.id &&
+              item.taskRevisionId === plan.taskRevisionId,
+          )
+        : undefined
       const task = validFormalExecutionPlan(plan)
         ? withDerivedTaskStatuses(campaign).taskRevisions.find(
             (item) => item.id === plan.taskRevisionId,
@@ -2031,7 +2042,7 @@ function nextCampaign(
         !['cli_preparation_candidate', 'cli_preparation_quarantined_candidate'].includes(
           artifact.kind,
         ) ||
-        artifact.producerTaskRevisionId !== plan.taskRevisionId ||
+        (artifact.producerTaskRevisionId !== plan.taskRevisionId && !candidateAttempt) ||
         task?.status === 'stale' ||
         !(campaign.labelSets ?? []).some((item) => item.contentHash === plan.labelSetContentHash) ||
         !(task?.labelSetContentHashes ?? []).includes(plan.labelSetContentHash) ||

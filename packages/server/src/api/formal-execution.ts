@@ -125,7 +125,9 @@ async function buildPlan(
   const workspace = getWorkspace(deps.store, deps.workspaceId as never)
   // Re-resolve the saved SSH profile at every formal boundary.  A saved hash by
   // itself is historical metadata and must not silently authorize profile drift.
-  const resolved = workspace ? await resolveWorkspaceServerBinding(workspace) : null
+  const resolved = workspace
+    ? await (deps.resolveFormalWorkspaceBinding ?? resolveWorkspaceServerBinding)(workspace)
+    : null
   const binding = resolved?.binding
   if (
     !campaign ||
@@ -141,7 +143,13 @@ async function buildPlan(
   if (candidate.quarantined || !candidate.current) return null
   if (
     !(campaign.labelSets ?? []).some((item) => item.contentHash === input.labelSetContentHash) ||
-    !deps.researchFormalEvaluators?.some(
+    !deps.researchFormalCatalog?.images.some((item) => item.digest === input.ociImageDigest) ||
+    !deps.researchFormalCatalog?.datasets.some(
+      (item) =>
+        item.dataManifestHash === input.dataManifestHash &&
+        item.labelSetContentHash === input.labelSetContentHash,
+    ) ||
+    !(deps.researchFormalCatalog?.evaluators ?? deps.researchFormalEvaluators)?.some(
       (item) =>
         item.id === input.trustedEvaluatorId &&
         item.implementationHash === input.trustedEvaluatorHash,
@@ -197,7 +205,10 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
     return json({
       plans: campaign.formalExecutionPlans ?? [],
       reviews: campaign.formalCodeReviews ?? [],
+      dispatches: campaign.formalReviewDispatches ?? [],
+      catalog: deps.researchFormalCatalog ?? { images: [], datasets: [], evaluators: [] },
       admittedBackend: false,
+      admissionReason: '未配置通过验证的 Linux OCI 执行后端',
     })
   }
   if (request.method !== 'POST' || !action)
@@ -278,10 +289,12 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       !Number.isSafeInteger(body.expiresAt)
     )
       return json({ error: 'invalid_execution_approval_request' }, 400)
+    const planHash = formalExecutionPlanHash(built.plan)
     if (
       !(campaign.formalCodeReviews ?? []).some(
         (review) =>
           review.decision === 'accepted' &&
+          review.formalPlanHash === planHash &&
           review.candidateArtifactId === built.plan.candidateArtifactId &&
           review.taskRevisionId === built.plan.taskRevisionId &&
           review.codeHash === built.plan.codeHash &&
@@ -295,7 +308,6 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       )
     )
       return json({ error: 'accepted_formal_review_required' }, 409)
-    const planHash = formalExecutionPlanHash(built.plan)
     return json({
       plan: built.plan,
       planHash,
@@ -328,7 +340,9 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       return json({ error: 'formal_reviewer_price_unavailable' }, 409)
     }
     const planHash = formalExecutionPlanHash(built.plan)
-    const reviewId = `fcr_${crypto.randomUUID()}`
+    // This enters the durable idempotency payload. Random IDs would turn a safe
+    // retry into an idempotency conflict before we can return its original dispatch.
+    const reviewId = `fcr_${sha256(`${campaignId}:${body.idempotencyKey as string}`).slice(7)}`
     const reserve = mutateResearchCampaign(deps.store, campaignId, {
       expectedVersion: body.expectedVersion as number,
       idempotencyKey: `formal-review-reserve:${body.idempotencyKey as string}`,
@@ -354,8 +368,13 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
     )!
     // A replay after a lost response or crash is read-only.  Its reservation remains
     // committed and a human can reconcile the unknown in-flight state.
-    if (reserve.replayed || dispatch.status !== 'reserved')
-      return json({ ...reserve, dispatch, replayed: true }, 202)
+    if (reserve.replayed || dispatch.status !== 'reserved') {
+      const current = getResearchCampaign(deps.store, campaignId)!
+      const currentDispatch = current.formalReviewDispatches!.find(
+        (item) => item.id === dispatch.id,
+      )!
+      return json({ ...reserve, campaign: current, dispatch: currentDispatch, replayed: true }, 202)
+    }
     const started = mutateResearchCampaign(deps.store, campaignId, {
       expectedVersion: reserve.campaign.version,
       idempotencyKey: `formal-review-send:${dispatch.id}`,

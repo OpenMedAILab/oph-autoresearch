@@ -16,7 +16,7 @@ import type { createLiteratureCollector } from '../research/literature-evidence.
  * **接口定义在上层，实现由下层注入**（`SinkPort` 是同一个套路）。
  */
 
-import type { ConversationId } from '@oph-autoresearch/core'
+import type { ConversationId, Workspace } from '@oph-autoresearch/core'
 import type { OphConfig } from '@oph-autoresearch/runtime'
 import type { Store } from '@oph-autoresearch/store'
 import type { EventBus } from '../bus.ts'
@@ -36,11 +36,24 @@ export interface ApiDeps {
   researchHumanAuth?: HumanAuthVerifier
   /** A purpose-built evidence-only reviewer; never a general shell/tool runner. */
   researchFormalCodeReviewer?: IsolatedFormalCodeReviewer
+  /** Test seam; production omits this and always resolves the current SSH profile. */
+  resolveFormalWorkspaceBinding?: (
+    workspace: Workspace,
+  ) => Promise<{ binding: NonNullable<Workspace['serverBinding']>; profile: { root: string } }>
   /** Administrator-owned evaluator implementations; clients may only select an exact configured digest. */
   researchFormalEvaluators?: readonly {
     id: 'binary-classification-v1'
     implementationHash: string
   }[]
+  researchFormalCatalog?: {
+    images: readonly { label: string; digest: string }[]
+    datasets: readonly { label: string; dataManifestHash: string; labelSetContentHash: string }[]
+    evaluators: readonly {
+      id: 'binary-classification-v1'
+      label: string
+      implementationHash: string
+    }[]
+  }
   researchRequireApproval?: boolean
   store: Store
   config: OphConfig
