@@ -14,6 +14,7 @@ import type { ToolContext, ToolRegistry } from '@oph-autoresearch/agent'
 import { DEFAULT_DENSITY, type TokenDensity } from '@oph-autoresearch/ai'
 import {
   appendStep,
+  bindWorkspaceServer,
   createConversation,
   createRun,
   fileReadHash,
@@ -653,4 +654,39 @@ test('research controller mode exposes only ledger control even when a broad rol
 
 test('research controller mode rejects construction without a scoped control port', async () => {
   await expect(session({ researchControllerOnly: true })).rejects.toThrow('研究控制模式需要已绑定')
+})
+
+test('project server binding enters trusted tool context and controller system context', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'oph-autoresearch-bound-session-'))
+  const store = new Store({ path: ':memory:' })
+  const workspace = upsertWorkspace(store, root, 'bound project')
+  const binding = {
+    version: 1 as const,
+    profileId: 'fixture-server',
+    remoteRoot: '/research/fixture',
+    connectionHash: `sha256:${'a'.repeat(64)}`,
+    verifiedAt: Date.now(),
+  }
+  bindWorkspaceServer(store, workspace.id, binding)
+  const { s } = await session({ store, workspaceRoot: root })
+  try {
+    const internals = s as unknown as {
+      makeToolContext(r: string, e: () => void, m: string, c: string): ToolContext
+      makeLoop(m: string): { deps: { systemPrompt: string } }
+    }
+    const context = internals.makeToolContext(
+      'rn_fixture',
+      () => {},
+      'deepseek-v4-flash',
+      'cv_fixture',
+    )
+    expect(context.projectServerBinding).toEqual(binding)
+    const prompt = internals.makeLoop('deepseek-v4-flash').deps.systemPrompt
+    expect(prompt).toContain(JSON.stringify(root))
+    expect(prompt).toContain('/research/fixture')
+    expect(prompt).toContain('fixture-server')
+  } finally {
+    s.dispose()
+    store.close()
+  }
 })
