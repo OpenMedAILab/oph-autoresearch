@@ -43,6 +43,8 @@ import { makeDelegate } from './delegate.ts'
 import type { CommandDeps } from './deps.ts'
 import { publishGitState } from './http-util.ts'
 import { makePluginPort } from './plugin-port.ts'
+import { createBoundedController } from './research/bounded-controller.ts'
+import { publishResearchEvents } from './research-events.ts'
 import type { GoalArm } from './runs.ts'
 
 /**
@@ -123,11 +125,13 @@ export async function startRun(
     return
   }
 
-  if (
-    listResearchCampaigns(deps.store, ws.id, conversationId).some(
-      (campaign) => campaign.progressControl?.state === 'held',
-    )
-  ) {
+  const campaigns = listResearchCampaigns(deps.store, ws.id, conversationId)
+  const boundedCampaign = campaigns.find(
+    (campaign) =>
+      campaign.progressControl?.mode === 'bounded' && campaign.progressControl.state === 'active',
+  )
+  const controllerOnly = deps.researchControllerOnly === true || Boolean(boundedCampaign)
+  if (campaigns.some((campaign) => campaign.progressControl?.state === 'held')) {
     deps.runs.disarm(conversationId)
     deps.runs.release(conversationId)
     deps.bus.publish(
@@ -135,7 +139,7 @@ export async function startRun(
         type: 'run.error',
         runId: '' as RunId,
         code: 'internal_error',
-        message: '本会话的研究推进已暂停，请先在研究进度中恢复手动推进。',
+        message: '本会话的研究推进已暂停或已到达限额，请先在研究进度中核对并恢复或重新批准。',
       },
       conversationId,
     )
@@ -154,7 +158,7 @@ export async function startRun(
     `${CLI_PROVIDER_PREFIX}ssh:`,
   )
   if (
-    deps.researchControllerOnly &&
+    controllerOnly &&
     (isNativeCli ||
       !deps.researchControlPortFactory ||
       listResearchCampaigns(deps.store, ws.id, conversationId).length === 0)
@@ -197,6 +201,45 @@ export async function startRun(
         })
       : undefined
 
+  const frozenConfig = boundedCampaign ? structuredClone(deps.config) : deps.config
+  let bounded: ReturnType<typeof createBoundedController> | undefined
+  try {
+    if (boundedCampaign) {
+      if (!researchControlPort || isNativeCli) throw new Error('有界主控只能使用受控 API 模型')
+      const conversation = getConversation(deps.store, conversationId)
+      const target =
+        !model && conversation?.provider
+          ? { provider: conversation.provider, model: conversation.model }
+          : (model ?? conversation?.model ?? frozenConfig.active.model)
+      bounded = createBoundedController({
+        store: deps.store,
+        config: frozenConfig,
+        campaignId: boundedCampaign.id,
+        target,
+        port: researchControlPort,
+        changed: () => publishResearchEvents(deps.store, deps.bus),
+      })
+    }
+  } catch (error) {
+    deps.runs.release(conversationId)
+    deps.bus.publish(
+      {
+        type: 'run.error',
+        runId: '' as RunId,
+        code: 'internal_error',
+        message: error instanceof Error ? error.message : '主控推进未获准',
+      },
+      conversationId,
+    )
+    researchControl?.close()
+    return
+  }
+  const boundedDeadline = bounded
+    ? setTimeout(
+        () => controller.abort(new Error('主控推进已到达批准的截止时间')),
+        Math.max(1, bounded.reservation.limits.deadlineAt - Date.now()),
+      )
+    : undefined
   const session = isNativeCli
     ? new CliConversationSession({
         store: deps.store,
@@ -207,21 +250,27 @@ export async function startRun(
       })
     : new Session({
         store: deps.store,
-        config: deps.config,
+        config: frozenConfig,
         content: deps.content,
         workspaceRoot: ws.rootPath,
         signal: controller.signal,
-        ...(researchControlPort ? { researchControl: researchControlPort } : {}),
-        researchControllerOnly: deps.researchControllerOnly === true,
+        ...(researchControlPort ? { researchControl: bounded?.port ?? researchControlPort } : {}),
+        ...(bounded
+          ? {
+              researchRequestGuard: bounded.guard,
+              maxSteps: bounded.reservation.limits.maxModelRequests,
+              extraSystem:
+                '在已批准的次数与费用预留内推进当前研究。遇到人类审批、未知执行状态或等待远端运行时停止本轮。候选代码不能当作正式实验结果，不得伪造人类批准。',
+            }
+          : {}),
+        researchControllerOnly: controllerOnly,
         // 派活通道只给顶层会话。成员会话（`team-run.ts`）不传，因此它那边连
         // `subagent` 工具都不注册——子 agent 再派活没有终止条件。
-        ...(!deps.researchControllerOnly
+        ...(!controllerOnly
           ? { delegate: makeDelegate({ deps, workspaceRoot: ws.rootPath, conversationId }) }
           : {}),
         // 装插件同样只给顶层会话：成员会话不该给整台机器装插件。
-        ...(!deps.researchControllerOnly
-          ? { plugins: makePluginPort({ workspaceRoot: ws.rootPath }) }
-          : {}),
+        ...(!controllerOnly ? { plugins: makePluginPort({ workspaceRoot: ws.rootPath }) } : {}),
         // 跟进消息队列同样只给顶层会话：成员会话不在界面上，没有人往它里面插话。
         followUps: (id) => deps.runs.takeSteered(id),
       })
@@ -315,7 +364,15 @@ export async function startRun(
       // 每条消息一个 Session，每个 Session 都持有扩展的一份引用。
       // 不释放的话引用只增不减，插件与 MCP 子进程到进程退出都关不掉。
       session.dispose()
+      if (boundedDeadline) clearTimeout(boundedDeadline)
       researchControl?.close()
+      if (bounded) {
+        try {
+          bounded.finish()
+        } catch {
+          console.warn('Bounded controller retains unresolved reservation after run')
+        }
+      }
       const interrupted = controller.signal.aborted || stopReason === 'user_interrupt'
       /*
        * 「调整方向」只对发出它的那一轮成立。这一轮收尾了，没赶上 step 边界的那些

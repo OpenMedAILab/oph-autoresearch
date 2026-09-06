@@ -1,4 +1,5 @@
 import { refreshCliCatalog } from './cli-catalog.ts'
+import { createBoundedScheduler } from './research/bounded-scheduler.ts'
 import {
   CliPreparationController,
   type CliPreparationRoute,
@@ -424,6 +425,34 @@ export function serve(opts: ServeOptions) {
     ...(researchNotifications ? { researchNotifications } : {}),
   })
 
+  const boundedScheduler = restricted
+    ? undefined
+    : createBoundedScheduler({
+        store: opts.store,
+        isBusy: (id) => runs.isBusy(id),
+        changed: () => publishResearchEvents(opts.store, bus, researchNotifications),
+        onError: (error) =>
+          console.error(
+            'Bounded research scheduling failed',
+            error instanceof Error ? error.message : 'unknown error',
+          ),
+        startRun: (conversationId, prompt) => {
+          void startRun(conversationId, prompt, undefined, {
+            store: opts.store,
+            content,
+            config: opts.config,
+            bus,
+            runs,
+            researchControllerOnly: true,
+            researchControlPortFactory: ({ workspaceId, workspaceRoot, campaignIds }) =>
+              createResearchControlPort(
+                researchControlDeps(workspaceId, workspaceRoot),
+                campaignIds,
+              ),
+          })
+        },
+      })
+
   /**
    * 局域网监听用**另一个端口**，不是主端口。
    *
@@ -688,6 +717,7 @@ export function serve(opts: ServeOptions) {
           route.authority.close()
       }
       researchNotifications?.close()
+      boundedScheduler?.close()
       clearInterval(schedulerTimer)
       gitWatch.stop()
       runs.interruptAll()

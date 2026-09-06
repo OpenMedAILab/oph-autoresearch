@@ -1,13 +1,22 @@
-import type { ConversationId, ResearchCommand, ResearchWriteResult } from '@oph-autoresearch/core'
+import type {
+  ConversationId,
+  ResearchCommand,
+  ResearchControllerLimits,
+  ResearchWriteResult,
+} from '@oph-autoresearch/core'
 import { isResearchTemplateId, validateLabelSetReference } from '@oph-autoresearch/core'
 import {
+  controllerApprovalScope,
+  costEvidenceApprovalScope,
   createResearchCampaign,
   getConversation,
   getResearchCampaign,
   listResearchCampaigns,
   listResearchEvents,
   mutateResearchCampaign,
+  researchCostSummary,
 } from '@oph-autoresearch/store'
+import { quoteBoundedController } from '../research/bounded-controller.ts'
 import { HUMAN_PROOF_HEADER } from '../research/human-auth.ts'
 import { prepareEvidenceCitations } from '../research/literature-evidence.ts'
 import { compileResearchPattern } from '../research/pattern.ts'
@@ -19,6 +28,7 @@ import {
 import { readResearchDocuments } from '../research/research-documents.ts'
 import { projectResearchFlow } from '../research/research-flow.ts'
 import { executeEvidenceReview, quoteEvidenceReview } from '../research/review-execution.ts'
+import { canonicalJson, sha256 } from '../research/skill-lock.ts'
 import { syntheticProtocol } from '../research/synthetic-protocol.ts'
 import {
   cancelSyntheticRun,
@@ -50,7 +60,7 @@ function respond(result: ResearchWriteResult): Response {
 /** Bearer access permits proposals. It does not attest a human reviewer. */
 export const handleResearchApi: ApiHandler = async (url, req, d) => {
   const match =
-    /^\/api\/research\/campaigns(?:\/([^/]+)(?:\/(events|notifications|progress|next_actions|proposals|approve|revoke|release|labelsets|literature|pattern(?:\/(?:preview|advance))?|review(?:\/quote)?|synthetic(?:\/(?:cancel|status|receipt|reconcile))?))?)?$/.exec(
+    /^\/api\/research\/campaigns(?:\/([^/]+)(?:\/(events|notifications|progress|next_actions|controller(?:\/(?:quote|start))?|costs(?:\/(?:evidence|quote|settle))?|proposals|approve|revoke|release|labelsets|literature|pattern(?:\/(?:preview|advance))?|review(?:\/quote)?|synthetic(?:\/(?:cancel|status|receipt|reconcile))?))?)?$/.exec(
       url.pathname,
     )
   if (!match) return null
@@ -111,6 +121,215 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
   }
   if (id && req.method === 'GET' && action === 'notifications') {
     return json({ notifications: d.researchNotifications?.list(id) ?? [] })
+  }
+  if (id && campaign && req.method === 'GET' && action === 'controller') {
+    return json({
+      control: campaign.progressControl ?? { mode: 'manual', state: 'active', generation: 0 },
+      reservations: campaign.controllerReservations ?? [],
+    })
+  }
+  if (
+    id &&
+    campaign &&
+    req.method === 'POST' &&
+    (action === 'controller/quote' || action === 'controller/start')
+  ) {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      !body.limits ||
+      typeof body.limits !== 'object' ||
+      Array.isArray(body.limits)
+    )
+      return json({ error: '主控限额格式无效' }, 400)
+    if (
+      Object.keys(body.limits).sort().join(',') !==
+      'deadlineAt,maxAdvances,maxInputCharacters,maxModelRequests,maxOutputTokens,stopAfter'
+    )
+      return json({ error: '主控限额字段无效' }, 400)
+    const conversation = getConversation(d.store, campaign.parentConversationId as ConversationId)
+    if (!conversation || conversation.provider.startsWith('cli:'))
+      return json({ error: '有界主控需要本机 API 模型' }, 409)
+    try {
+      const quote = quoteBoundedController(
+        d.config,
+        campaign,
+        body.limits as unknown as ResearchControllerLimits,
+        conversation.provider
+          ? { provider: conversation.provider, model: conversation.model }
+          : conversation.model,
+      )
+      if (action === 'controller/quote') {
+        if (Object.keys(body).join(',') !== 'limits')
+          return json({ error: '主控报价字段无效' }, 400)
+        return json({
+          quote: {
+            currency: quote.currency,
+            reservedCost: quote.reservedCost,
+            model: quote.model,
+            limits: quote.limits,
+          },
+          body: {
+            expectedVersion: campaign.version,
+            idempotencyKey: `controller-approve:${crypto.randomUUID()}`,
+            bundleHash: campaign.bundleHash,
+            scope: controllerApprovalScope(campaign, {
+              ...quote,
+              expiresAt: Math.min(Date.now() + 15 * 60_000, quote.limits.deadlineAt),
+            }),
+          },
+        })
+      }
+      if (
+        Object.keys(body).sort().join(',') !==
+          'approvalId,expectedGeneration,expectedVersion,idempotencyKey,limits,reservationId' ||
+        typeof body.approvalId !== 'string' ||
+        typeof body.reservationId !== 'string' ||
+        typeof body.idempotencyKey !== 'string' ||
+        !Number.isSafeInteger(body.expectedVersion) ||
+        !Number.isSafeInteger(body.expectedGeneration)
+      )
+        return json({ error: '主控启动字段无效' }, 400)
+      if (d.runs.isBusy(campaign.parentConversationId as ConversationId))
+        return json({ error: '请等待当前会话结束，再启动有界推进' }, 409)
+      const result = mutateResearchCampaign(d.store, id, {
+        expectedVersion: body.expectedVersion as number,
+        idempotencyKey: body.idempotencyKey,
+        command: {
+          kind: 'activateBoundedResearch',
+          reservationId: body.reservationId,
+          approvalId: body.approvalId,
+          configHash: quote.configHash,
+          currency: quote.currency,
+          reservedCost: quote.reservedCost,
+          limits: quote.limits,
+          expectedGeneration: body.expectedGeneration as number,
+        },
+      })
+      if (result.ok) {
+        changed()
+        if (!result.replayed)
+          d.startRun(
+            campaign.parentConversationId as ConversationId,
+            '在已签署的主控限额内继续当前研究。先读取现状，再推进可执行步骤；遇到人类审批、未知运行或远端尚未完成时停止。候选代码必须等待独立审閱与正式执行批准。',
+          )
+      }
+      return respond(result)
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : '主控推进未获准' }, 409)
+    }
+  }
+  if (id && campaign && req.method === 'GET' && action === 'costs') {
+    return json({
+      summary: researchCostSummary(campaign),
+      evidence: campaign.costEvidence ?? [],
+      settlements: campaign.costSettlements ?? [],
+    })
+  }
+  if (id && campaign && req.method === 'GET' && action === 'costs/quote') {
+    try {
+      return json({
+        body: {
+          expectedVersion: campaign.version,
+          idempotencyKey: `cost-approve:${crypto.randomUUID()}`,
+          bundleHash: campaign.bundleHash,
+          scope: costEvidenceApprovalScope(
+            campaign,
+            url.searchParams.get('evidenceId') ?? '',
+            Date.now() + 15 * 60_000,
+          ),
+        },
+      })
+    } catch {
+      return json({ error: '当前结算依据不可批准，请核对原费用记录。' }, 409)
+    }
+  }
+  if (
+    id &&
+    campaign &&
+    req.method === 'POST' &&
+    (action === 'costs/evidence' || action === 'costs/settle')
+  ) {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      !Number.isSafeInteger(body.expectedVersion) ||
+      typeof body.idempotencyKey !== 'string'
+    )
+      return json({ error: 'invalid_cost_request' }, 400)
+    if (action === 'costs/evidence') {
+      if (
+        Object.keys(body).sort().join(',') !==
+          'amount,description,expectedVersion,idempotencyKey,subject' ||
+        typeof body.amount !== 'number' ||
+        !Number.isFinite(body.amount) ||
+        body.amount < 0 ||
+        typeof body.description !== 'string' ||
+        !body.description.trim() ||
+        body.description.length > 2000 ||
+        !body.subject ||
+        typeof body.subject !== 'object' ||
+        Array.isArray(body.subject)
+      )
+        return json({ error: 'invalid_cost_evidence' }, 400)
+      const subject = body.subject as { kind?: unknown; id?: unknown }
+      if (
+        Object.keys(subject).sort().join(',') !== 'id,kind' ||
+        (subject.kind !== 'cli_preparation' &&
+          subject.kind !== 'model_review' &&
+          subject.kind !== 'controller') ||
+        typeof subject.id !== 'string'
+      )
+        return json({ error: 'invalid_cost_subject' }, 400)
+      const evidence = {
+        id: `rce_${sha256(`${id}:${body.idempotencyKey}`).slice(7, 39)}`,
+        subject: {
+          kind: subject.kind as 'cli_preparation' | 'model_review' | 'controller',
+          id: subject.id,
+        },
+        currency: campaign.budget.currency,
+        amount: body.amount,
+        description: body.description.trim(),
+        source: 'human-attestation' as const,
+        sourceHash: sha256(
+          canonicalJson({
+            subject,
+            currency: campaign.budget.currency,
+            amount: body.amount,
+            description: body.description.trim(),
+          }),
+        ),
+      }
+      return respondAndPublish(
+        mutateResearchCampaign(d.store, id, {
+          expectedVersion: body.expectedVersion as number,
+          idempotencyKey: body.idempotencyKey,
+          command: { kind: 'recordCostEvidence', evidence },
+        }),
+      )
+    }
+    if (
+      Object.keys(body).sort().join(',') !==
+        'approvalId,evidenceId,expectedVersion,idempotencyKey' ||
+      typeof body.evidenceId !== 'string' ||
+      typeof body.approvalId !== 'string'
+    )
+      return json({ error: 'invalid_cost_settlement' }, 400)
+    return respondAndPublish(
+      mutateResearchCampaign(d.store, id, {
+        expectedVersion: body.expectedVersion as number,
+        idempotencyKey: body.idempotencyKey,
+        command: {
+          kind: 'settleCostEvidence',
+          evidenceId: body.evidenceId,
+          approvalId: body.approvalId,
+        },
+      }),
+    )
   }
   if (id && campaign && req.method === 'GET' && action === 'next_actions') {
     const documents = await readResearchDocuments(d.store, d.workspaceRoot, id)

@@ -14,6 +14,8 @@ import {
   workspace,
 } from '../lib/store/index.ts'
 import { ResearchCliPreparationPanel } from './ResearchCliPreparationPanel.tsx'
+import { ResearchControllerPanel } from './ResearchControllerPanel.tsx'
+import { ResearchCostPanel } from './ResearchCostPanel.tsx'
 import { ResearchDocumentsPanel } from './ResearchDocumentsPanel.tsx'
 import { ResearchExperimentResult } from './ResearchExperimentResult.tsx'
 import { ResearchFlowPanel } from './ResearchFlowPanel.tsx'
@@ -77,6 +79,8 @@ const approvalKinds = {
   protocol: '研究方案审批',
   model_review: '独立复核审批',
   release: '结论发布审批',
+  cost_settlement: '费用结算审批',
+  controller: '有界主控推进审批',
 }
 const templateName = (id: string) =>
   templates.find((template) => template.id === id)?.label ?? '研究任务'
@@ -85,6 +89,14 @@ function runName(campaign: ResearchCampaign, id: string | undefined) {
   return index < 0 ? '人工登记' : `第 ${index + 1} 次运行`
 }
 function approvalConsumer(campaign: ResearchCampaign, id: string) {
+  if (id.startsWith('controller:')) {
+    const index =
+      campaign.controllerReservations?.findIndex(
+        (item) => item.id === id.slice('controller:'.length),
+      ) ?? -1
+    return index >= 0 ? `第 ${index + 1} 次主控推进` : '对应主控推进'
+  }
+  if (id.startsWith('cost-settlement:')) return '费用结算'
   const run = campaign.attempts.findIndex((item) => item.id === id)
   if (run >= 0) return `第 ${run + 1} 次运行`
   const review = campaign.modelReviews?.findIndex((item) => item.id === id) ?? -1
@@ -590,6 +602,18 @@ export function ResearchCampaignPanel() {
                 </For>
               </fieldset>
               <ResearchFlowPanel campaign={campaign} busy={busy()} act={act} />
+              <ResearchControllerPanel
+                campaign={campaign}
+                approvalUrl={approvalChannel()}
+                busy={busy()}
+                act={act}
+              />
+              <ResearchCostPanel
+                campaign={campaign}
+                busy={busy()}
+                act={act}
+                approvalUrl={approvalChannel()}
+              />
               <ResearchPatternPanel campaign={campaign} busy={busy()} act={act} />
               <ResearchCliPreparationPanel
                 campaign={campaign}
