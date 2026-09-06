@@ -281,6 +281,8 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
         Object.keys(subject).sort().join(',') !== 'id,kind' ||
         (subject.kind !== 'cli_preparation' &&
           subject.kind !== 'model_review' &&
+          subject.kind !== 'formal_review' &&
+          subject.kind !== 'formal_execution' &&
           subject.kind !== 'controller') ||
         typeof subject.id !== 'string'
       )
@@ -288,7 +290,12 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
       const evidence = {
         id: `rce_${sha256(`${id}:${body.idempotencyKey}`).slice(7, 39)}`,
         subject: {
-          kind: subject.kind as 'cli_preparation' | 'model_review' | 'controller',
+          kind: subject.kind as
+            | 'cli_preparation'
+            | 'model_review'
+            | 'formal_review'
+            | 'formal_execution'
+            | 'controller',
           id: subject.id,
         },
         currency: campaign.budget.currency,

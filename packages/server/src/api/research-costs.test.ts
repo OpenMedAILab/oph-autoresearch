@@ -205,3 +205,65 @@ test('费用接口保留项目隔离，拒绝伪造服务商来源及未知对�
   ).toBe(400)
   expect(f.campaign().costEvidence ?? []).toHaveLength(0)
 })
+
+for (const kind of ['formal_review', 'formal_execution'] as const) {
+  for (const status of ['failed', 'unknown'] as const) {
+    test(`${kind} ${status}：正式费用可记录，只有已确认终态才能批准结算`, async () => {
+      const f = fixture()
+      const id = `fixture-${kind}`
+      // Seed only the persisted cost authority fact; no model or experiment runs.
+      const snapshot: ResearchCampaign = {
+        ...f.campaign(),
+        modelReviews: [],
+        ...(kind === 'formal_review'
+          ? {
+              formalReviewDispatches: [
+                { id, status, currency: 'USD', reservedCost: 10, actualCost: null } as never,
+              ],
+            }
+          : { formalExecutionDispatches: [{ id, status, reservedMaxCost: 10 } as never] }),
+      }
+      snapshot.bundleHash = sha256(canonicalResearchBundle(snapshot))
+      f.store.db
+        .query('UPDATE research_campaigns SET snapshot=? WHERE id=?')
+        .run(JSON.stringify(snapshot), snapshot.id)
+      const recorded = await f.call('costs/evidence', {
+        expectedVersion: f.campaign().version,
+        idempotencyKey: 'formal-invoice',
+        subject: { kind, id },
+        amount: 1,
+        description: '合成费用核账依据',
+      })
+      expect(recorded.status).toBe(200)
+      const evidence = f.campaign().costEvidence![0]!
+      const quoted = await f.call(`costs/quote?evidenceId=${evidence.id}`)
+      if (status === 'unknown') {
+        expect(quoted.status).toBe(409)
+        expect(f.campaign().costSettlements ?? []).toHaveLength(0)
+        expect(await (await f.call('costs')).json()).toMatchObject({
+          summary: { committedCost: 10, settledCost: 0 },
+        })
+        return
+      }
+      expect(quoted.status).toBe(200)
+      const quote = (await quoted.json()) as { body: unknown }
+      expect((await f.call('approve', quote.body, f.proof(quote.body))).status).toBe(200)
+      const approval = f
+        .campaign()
+        .approvals.find((item) => item.scope?.kind === 'cost_settlement')!
+      expect(
+        (
+          await f.call('costs/settle', {
+            expectedVersion: f.campaign().version,
+            idempotencyKey: 'formal-settlement',
+            evidenceId: evidence.id,
+            approvalId: approval.id,
+          })
+        ).status,
+      ).toBe(200)
+      expect(await (await f.call('costs')).json()).toMatchObject({
+        summary: { committedCost: 1, settledCost: 1 },
+      })
+    })
+  }
+}

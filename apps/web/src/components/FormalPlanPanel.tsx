@@ -33,6 +33,13 @@ interface FormalState {
   }>
   admittedBackend: boolean
   admissionReason: string
+  executions: Array<{
+    id: string
+    planId: string
+    attemptId: string | null
+    status: string
+    receiptHash?: string
+  }>
   catalog: {
     images: Array<{ label: string; digest: string }>
     datasets: Array<{ label: string; dataManifestHash: string; labelSetContentHash: string }>
@@ -92,7 +99,12 @@ export function FormalPlanPanel(props: {
         !Array.isArray(value.catalog?.evaluators)
       )
         throw new Error('正式实验状态暂不可用')
-      return { ...value, drafts: value.drafts ?? [], owner: `${workspaceId}:${id}` }
+      return {
+        ...value,
+        drafts: value.drafts ?? [],
+        executions: value.executions ?? [],
+        owner: `${workspaceId}:${id}`,
+      }
     },
   )
   const current = () => {
@@ -279,6 +291,72 @@ export function FormalPlanPanel(props: {
       if (props.campaign.id === campaign.id) await refetch()
     }, '正式执行请求已提交。')
   }
+  const executionAttempt = (item: FormalState['executions'][number]) =>
+    props.campaign.attempts?.find((attempt) => attempt.id === item.attemptId)
+  const activeExecution = (item: FormalState['executions'][number]) => {
+    const status = executionAttempt(item)?.status ?? item.status
+    return ['reserved', 'bound', 'running', 'unknown'].includes(status)
+  }
+  const executionLabel = (item: FormalState['executions'][number]) => {
+    const attempt = executionAttempt(item)
+    if (attempt?.resultDisposition === 'quarantined') return '迟到结果已隔离，不能作为正式成果'
+    if (attempt?.cancelRequestedAt && activeExecution(item)) return '已请求取消，等待确认实际停止'
+    const status = attempt?.status ?? item.status
+    return (
+      (
+        {
+          reserved: '等待执行',
+          bound: '等待执行端确认',
+          running: '执行中',
+          unknown: '状态待核对，不会重新投递',
+          completed: '执行已完成',
+          failed: '执行失败',
+          cancelled: '已确认取消',
+        } as Record<string, string>
+      )[status] ?? '执行状态待确认'
+    )
+  }
+  const verifiedReceipt = (item: FormalState['executions'][number]) => {
+    const attempt = executionAttempt(item)
+    if (
+      attempt?.status !== 'completed' ||
+      attempt.resultDisposition === 'quarantined' ||
+      !item.receiptHash
+    )
+      return false
+    return (
+      props.campaign.artifactVersions?.some(
+        (artifact) =>
+          artifact.id === attempt.artifactVersionId &&
+          artifact.producerAttemptId === attempt.id &&
+          artifact.kind === 'formal_execution_receipt' &&
+          artifact.schemaId === 'research-formal-oci-receipt-v1' &&
+          artifact.contentHash === item.receiptHash,
+      ) ?? false
+    )
+  }
+  async function controlExecution(action: 'cancel' | 'reconcile', attemptId: string) {
+    const campaign = props.campaign
+    await props.act(
+      async () => {
+        await client.api(
+          `/api/research/campaigns/${campaign.id}/formal-execution/${action}?ws=${encodeURIComponent(campaign.workspaceId)}`,
+          {
+            method: 'POST',
+            body: JSON.stringify({ attemptId }),
+          },
+        )
+        if (
+          props.campaign.id === campaign.id &&
+          props.campaign.workspaceId === campaign.workspaceId
+        )
+          await refetch()
+      },
+      action === 'cancel'
+        ? '已请求取消，实际停止状态以执行端确认结果为准。'
+        : '已请求核对原任务，不会重新提交实验。',
+    )
+  }
   return (
     <details>
       <summary>正式实验计划</summary>
@@ -448,6 +526,44 @@ export function FormalPlanPanel(props: {
                 </article>
               )}
             </For>
+            <For each={value().executions}>
+              {(execution, index) => (
+                <article>
+                  <p>
+                    第 {index() + 1} 次正式执行 · {executionLabel(execution)}
+                  </p>
+                  <Show when={verifiedReceipt(execution)}>
+                    <p>执行回执已核验并归档，科研结论仍需独立结果复核。</p>
+                  </Show>
+                  <Show
+                    when={
+                      (executionAttempt(execution)?.status ?? execution.status) === 'completed' &&
+                      !verifiedReceipt(execution)
+                    }
+                  >
+                    <p>执行回执尚未核验，不能作为已验证结果。</p>
+                  </Show>
+                  <Show when={execution.attemptId && activeExecution(execution)}>
+                    <button
+                      type="button"
+                      disabled={
+                        props.busy || Boolean(executionAttempt(execution)?.cancelRequestedAt)
+                      }
+                      onClick={() => void controlExecution('cancel', execution.attemptId!)}
+                    >
+                      请求取消正式执行
+                    </button>
+                    <button
+                      type="button"
+                      disabled={props.busy}
+                      onClick={() => void controlExecution('reconcile', execution.attemptId!)}
+                    >
+                      核对正式执行状态
+                    </button>
+                  </Show>
+                </article>
+              )}
+            </For>
             <For each={value().drafts}>
               {(draft, index) => (
                 <article>
@@ -488,13 +604,17 @@ export function FormalPlanPanel(props: {
                     已冻结计划 {index() + 1} · {plan.resources.maxRuntimeMs / 60000} 分钟 ·{' '}
                     {plan.resources.cpu} 核 · {plan.resources.memoryMb} MB
                   </p>
-                  <button
-                    type="button"
-                    disabled={props.busy || !value().admittedBackend}
-                    onClick={() => void submit(plan)}
+                  <Show
+                    when={!value().executions.some((execution) => execution.planId === plan.planId)}
                   >
-                    提交正式实验
-                  </button>
+                    <button
+                      type="button"
+                      disabled={props.busy || !value().admittedBackend}
+                      onClick={() => void submit(plan)}
+                    >
+                      提交正式实验
+                    </button>
+                  </Show>
                 </article>
               )}
             </For>

@@ -1,3 +1,7 @@
+import { formalWorkspaceBindingHash } from '../research/formal-binding.ts'
+
+export { formalWorkspaceBindingHash } from '../research/formal-binding.ts'
+
 import {
   FORMAL_DATASET_TARGET,
   FORMAL_ENTRY_ARGV,
@@ -15,6 +19,7 @@ import {
 } from '@oph-autoresearch/store'
 import { readCliCandidateView } from '../research/cli-candidate-view.ts'
 import type { IsolatedFormalCodeReviewer } from '../research/formal-review-runner.ts'
+import { matchingFormalRoutes, resolveFormalScope } from '../research/formal-runtime.ts'
 import { HUMAN_PROOF_HEADER } from '../research/human-auth.ts'
 import { publishResearchEvents } from '../research-events.ts'
 import { resolveWorkspaceServerBinding } from '../workspace-binding.ts'
@@ -23,37 +28,10 @@ import { type ApiHandler, json } from './types.ts'
 const SHA256 = /^sha256:[a-f0-9]{64}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value)
-}
-
 function sha256(value: string): string {
   const hash = new Bun.CryptoHasher('sha256')
   hash.update(value)
   return `sha256:${hash.digest('hex')}`
-}
-
-/** Hash only stable binding facts. The local root, SSH profile, and credentials never enter a plan. */
-export function formalWorkspaceBindingHash(
-  workspaceId: string,
-  binding: { connectionHash: string; remoteRoot: string },
-): string {
-  return sha256(
-    canonical({
-      schema: 'research-formal-workspace-binding-v1',
-      localWorkspaceId: workspaceId,
-      profileConnectionHash: binding.connectionHash,
-      remoteRoot: binding.remoteRoot,
-    }),
-  )
 }
 
 type PlanInput = {
@@ -193,7 +171,7 @@ function result(response: ReturnType<typeof mutateResearchCampaign>) {
 
 export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) => {
   const match =
-    /^\/api\/research\/campaigns\/([A-Za-z0-9_-]+)\/formal-execution(?:\/(quote|approval|review|human-review|freeze|submit))?$/.exec(
+    /^\/api\/research\/campaigns\/([A-Za-z0-9_-]+)\/formal-execution(?:\/(quote|approval|review|human-review|freeze|submit|cancel|reconcile))?$/.exec(
       url.pathname,
     )
   if (!match) return null
@@ -202,8 +180,23 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
   const campaign = getResearchCampaign(deps.store, campaignId)
   if (!campaign || campaign.workspaceId !== deps.workspaceId)
     return json({ error: 'not_found' }, 404)
+  const executionScope = {
+    workspaceId: deps.workspaceId,
+    workspaceRoot: deps.workspaceRoot,
+    campaignId,
+  }
   if (request.method === 'GET' && !action) {
+    const binding = await resolveFormalScope(
+      deps.store,
+      executionScope,
+      deps.resolveFormalWorkspaceBinding,
+    ).catch(() => null)
+    const admitted =
+      binding && deps.researchFormalExecution
+        ? matchingFormalRoutes(deps.researchFormalExecution.routes, binding).length === 1
+        : false
     return json({
+      executions: campaign.formalExecutionDispatches ?? [],
       plans: campaign.formalExecutionPlans ?? [],
       reviews: campaign.formalCodeReviews ?? [],
       dispatches: campaign.formalReviewDispatches ?? [],
@@ -213,20 +206,84 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
         dispatchId: item.id,
       })),
       catalog: deps.researchFormalCatalog ?? { images: [], datasets: [], evaluators: [] },
-      admittedBackend: false,
-      admissionReason: '未配置通过验证的 Linux OCI 执行后端',
+      admittedBackend: admitted,
+      admissionReason: admitted
+        ? '当前项目绑定的隔离执行环境已登记验收依据'
+        : '未配置唯一匹配当前项目目录且通过验证的 Linux OCI 执行后端',
     })
   }
   if (request.method !== 'POST' || !action)
     return new Response('', { status: 405, headers: { allow: 'GET, POST' } })
-  if (action === 'submit') {
-    return json(
-      {
-        error: 'formal_execution_backend_unavailable',
-        message: '尚无通过隔离验收的正式执行后端；冻结计划不能提交。',
-      },
-      409,
-    )
+  if (['submit', 'cancel', 'reconcile'].includes(action)) {
+    if (!deps.researchFormalExecution)
+      return json(
+        {
+          error: 'formal_execution_backend_unavailable',
+          message: '尚无通过隔离验收的正式执行后端；冻结计划不能提交。',
+        },
+        409,
+      )
+    const rawBody = await request.json().catch(() => null)
+    if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody))
+      return json({ error: 'invalid_request' }, 400)
+    const body = rawBody as Record<string, unknown>
+    try {
+      const { controller, routes } = deps.researchFormalExecution
+      if (action !== 'submit') {
+        if (Object.keys(body).join(',') !== 'attemptId' || typeof body.attemptId !== 'string')
+          return json({ error: 'invalid_request' }, 400)
+        return json(
+          await controller[action as 'cancel' | 'reconcile'](executionScope, body.attemptId),
+        )
+      }
+      if (
+        Object.keys(body).sort().join(',') !== 'expectedVersion,idempotencyKey,planId' ||
+        typeof body.planId !== 'string' ||
+        typeof body.idempotencyKey !== 'string' ||
+        !Number.isSafeInteger(body.expectedVersion)
+      )
+        return json({ error: 'invalid_request' }, 400)
+      const plan = campaign.formalExecutionPlans?.find((item) => item.planId === body.planId)
+      if (!plan) return json({ error: 'formal_plan_not_found' }, 404)
+      const binding = await resolveFormalScope(
+        deps.store,
+        executionScope,
+        deps.resolveFormalWorkspaceBinding,
+      )
+      const matched = matchingFormalRoutes(routes, binding)
+      if (matched.length !== 1 || plan.workspaceBindingHash !== binding.workspaceBindingHash)
+        return json({ error: 'formal_execution_binding_unavailable' }, 409)
+      const existingDispatch = campaign.formalExecutionDispatches?.find(
+        (item) => item.planId === plan.planId,
+      )
+      const approval = campaign.approvals.find(
+        (item) =>
+          (item.consumedBy === `formal-plan:${plan.planId}` ||
+            (existingDispatch?.approvalId === item.id &&
+              item.consumedBy === `formal-execution:${existingDispatch.id}`)) &&
+          item.scope?.kind === 'formal_execution' &&
+          item.scope.formalPlanHash === formalExecutionPlanHash(plan),
+      )
+      if (!approval) return json({ error: 'formal_execution_approval_required' }, 409)
+      return json(
+        await controller.submit(executionScope, {
+          planId: body.planId,
+          expectedVersion: body.expectedVersion as number,
+          idempotencyKey: body.idempotencyKey,
+          approvalId: approval.id,
+          routeId: matched[0]!.id,
+        }),
+        202,
+      )
+    } catch (error) {
+      return json(
+        {
+          error: 'formal_execution_rejected',
+          message: error instanceof Error ? error.message : '正式执行未获准',
+        },
+        409,
+      )
+    }
   }
   const raw = await request.json().catch(() => null)
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))

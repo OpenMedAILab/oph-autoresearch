@@ -59,8 +59,14 @@ export function ResearchCostPanel(props: {
             ? (props.campaign.formalReviewDispatches ?? []).findIndex(
                 (candidate) => candidate.id === item.id,
               )
-            : (props.campaign.modelReviews ?? []).findIndex((candidate) => candidate.id === item.id)
-    return `第 ${index + 1} 次${item.kind === 'cli_preparation' ? '代码准备' : item.kind === 'controller' ? '主控推进' : item.kind === 'formal_review' ? '候选代码审阅' : '独立复核'}`
+            : item.kind === 'formal_execution'
+              ? (props.campaign.formalExecutionDispatches ?? []).findIndex(
+                  (candidate) => candidate.id === item.id,
+                )
+              : (props.campaign.modelReviews ?? []).findIndex(
+                  (candidate) => candidate.id === item.id,
+                )
+    return `第 ${index + 1} 次${item.kind === 'cli_preparation' ? '代码准备' : item.kind === 'controller' ? '主控推进' : item.kind === 'formal_review' ? '候选代码审阅' : item.kind === 'formal_execution' ? '正式隔离实验' : '独立复核'}`
   }
   const record = () =>
     props.act(async () => {

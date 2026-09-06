@@ -6,7 +6,13 @@ import {
 } from './research/cli-preparation-controller.ts'
 import { captureResearchDeployment } from './research/deployment-governance.ts'
 import { createResearchDevices, quoteResearchDevice } from './research/execution-devices.ts'
+import {
+  FormalExecutionController,
+  type FormalExecutionRoute,
+} from './research/formal-execution-controller.ts'
 import { createConfiguredIsolatedFormalCodeReviewer } from './research/formal-review-runner.ts'
+import { readFormalCandidate, resolveFormalScope } from './research/formal-runtime.ts'
+import { createFormalSshRoute, type SshFormalExecutionRoute } from './research/formal-ssh-route.ts'
 import { createHumanAuthVerifier, type HumanAuthVerifierConfig } from './research/human-auth.ts'
 import { JobDaemon } from './research/job-daemon.ts'
 import { createLiteratureCollector } from './research/literature-evidence.ts'
@@ -74,6 +80,7 @@ import { startRun } from './run-control.ts'
 import { RunManager } from './runs.ts'
 
 export interface ServeOptions {
+  researchFormalExecution?: readonly (FormalExecutionRoute | SshFormalExecutionRoute)[]
   researchCliPreparation?: readonly (Omit<CliPreparationRoute, 'authority'> &
     ({ authority: CliPreparationRoute['authority'] } | { config: SshDaemonConfig }))[]
   /** Explicit administrator-owned external notification configuration. Disabled by default. */
@@ -176,7 +183,8 @@ export function serve(opts: ServeOptions) {
             opts.researchDaemon ||
               opts.researchSshDaemon ||
               opts.researchSshDevices ||
-              opts.researchCliPreparation?.length,
+              opts.researchCliPreparation?.length ||
+              opts.researchFormalExecution?.length,
           ),
         })
   const researchLiteratureCollector =
@@ -224,6 +232,27 @@ export function serve(opts: ServeOptions) {
     ? new CliPreparationController(opts.store, cliPreparationRoutes, () =>
         publishResearchEvents(opts.store, bus, researchNotifications),
       )
+    : undefined
+  const formalSshClients: Array<{ close(): void }> = []
+  const formalRoutes = !restricted
+    ? (opts.researchFormalExecution ?? []).map((input) => {
+        if ('authority' in input) return input
+        const prepared = createFormalSshRoute(input)
+        formalSshClients.push(prepared)
+        return prepared.route
+      })
+    : []
+  const formalController = formalRoutes.length
+    ? new FormalExecutionController(
+        opts.store,
+        formalRoutes,
+        { read: (plan, campaign) => readFormalCandidate(opts.store, plan, campaign) },
+        () => publishResearchEvents(opts.store, bus, researchNotifications),
+        (scope) => resolveFormalScope(opts.store, scope),
+      )
+    : undefined
+  const researchFormalExecution = formalController
+    ? { controller: formalController, routes: formalRoutes }
     : undefined
   const researchTemplate =
     restricted || !workspace ? { created: [] } : ensureResearchWorkspace(workspaceRoot)
@@ -278,6 +307,17 @@ export function serve(opts: ServeOptions) {
   const stale = recoverStaleRuns(opts.store, previousExit)
   if (!restricted) {
     recoverRunningSyntheticAttempts(opts.store)
+    if (formalController) {
+      for (const existingWorkspace of listWorkspaces(opts.store)) {
+        for (const campaign of listResearchCampaigns(opts.store, existingWorkspace.id)) {
+          formalController.recover({
+            workspaceId: existingWorkspace.id,
+            workspaceRoot: existingWorkspace.rootPath,
+            campaignId: campaign.id,
+          })
+        }
+      }
+    }
     if (researchCliPreparation) {
       for (const existingWorkspace of listWorkspaces(opts.store)) {
         for (const campaign of listResearchCampaigns(opts.store, existingWorkspace.id)) {
@@ -432,6 +472,7 @@ export function serve(opts: ServeOptions) {
     ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
     researchControllerOnly,
     ...(researchCliPreparation ? { researchCliPreparation } : {}),
+    ...(researchFormalExecution ? { researchFormalExecution } : {}),
     ...(researchNotifications ? { researchNotifications } : {}),
   })
 
@@ -629,6 +670,7 @@ export function serve(opts: ServeOptions) {
             ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
             researchControllerOnly,
             ...(researchCliPreparation ? { researchCliPreparation } : {}),
+            ...(researchFormalExecution ? { researchFormalExecution } : {}),
             ...(researchNotifications ? { researchNotifications } : {}),
           })
           if (res) return withCors(res)
@@ -729,6 +771,8 @@ export function serve(opts: ServeOptions) {
       for (const device of researchExecutionDevices ?? []) device.authority.close()
       researchDaemonBackend?.daemon.close()
       researchCliPreparation?.close()
+      formalController?.close()
+      for (const client of formalSshClients) client.close()
       for (const route of cliPreparationRoutes) {
         if ('close' in route.authority && typeof route.authority.close === 'function')
           route.authority.close()

@@ -261,3 +261,110 @@ test('状态读取失败不会显示可用的正式运行入口', async () => {
   await until(() => ui.host.textContent?.includes('正式实验状态加载失败') ?? false)
   expect(button(ui.host, '提交正式实验')).toBeUndefined()
 })
+
+test('未知正式执行只核对原任务，取消请求不会被显示成已经停止', async () => {
+  const calls: Array<{ path: string; body: unknown }> = []
+  await mocks(async (path, init) => {
+    if (init?.method) {
+      calls.push({ path, body: JSON.parse(String(init.body)) })
+      return {}
+    }
+    return {
+      ...state(),
+      plans: [plan],
+      admittedBackend: true,
+      executions: [
+        {
+          id: 'private-execution',
+          planId: plan.planId,
+          attemptId: 'private-attempt',
+          status: 'unknown',
+        },
+      ],
+    }
+  })
+  const ui = await mount()
+  ui.setCurrent({
+    ...campaign(),
+    attempts: [{ id: 'private-attempt', status: 'unknown', cancelRequestedAt: null } as never],
+  })
+  await until(() => Boolean(button(ui.host, '核对正式执行状态')))
+  expect(button(ui.host, '提交正式实验')).toBeUndefined()
+  expect(ui.host.textContent).toContain('状态待核对，不会重新投递')
+  button(ui.host, '核对正式执行状态').click()
+  await until(() => ui.finished() === 1)
+  button(ui.host, '请求取消正式执行').click()
+  await until(() => ui.finished() === 2)
+  expect(calls).toEqual([
+    {
+      path: '/api/research/campaigns/campaign-original/formal-execution/reconcile?ws=workspace-original',
+      body: { attemptId: 'private-attempt' },
+    },
+    {
+      path: '/api/research/campaigns/campaign-original/formal-execution/cancel?ws=workspace-original',
+      body: { attemptId: 'private-attempt' },
+    },
+  ])
+  ui.setCurrent({
+    ...campaign(),
+    version: 10,
+    attempts: [
+      { id: 'private-attempt', status: 'unknown', cancelRequestedAt: Date.now() } as never,
+    ],
+  })
+  await until(() => ui.host.textContent?.includes('已请求取消，等待确认实际停止') ?? false)
+  expect(button(ui.host, '请求取消正式执行').disabled).toBe(true)
+  expect(ui.host.textContent).not.toContain('已确认取消')
+  expect(ui.host.textContent).not.toContain('private-attempt')
+})
+
+test('执行完成须匹配归档回执才显示已核验，隔离结果不能冒充正式成果', async () => {
+  await mocks(async () => ({
+    ...state(),
+    plans: [plan],
+    executions: [
+      {
+        id: 'private-execution',
+        planId: plan.planId,
+        attemptId: 'private-attempt',
+        status: 'completed',
+        receiptHash: hash('a'),
+      },
+    ],
+  }))
+  const ui = await mount()
+  const completed: ResearchCampaign = {
+    ...campaign(),
+    attempts: [
+      {
+        id: 'private-attempt',
+        status: 'completed',
+        artifactVersionId: 'receipt',
+        cancelRequestedAt: null,
+      } as never,
+    ],
+    artifactVersions: [],
+  }
+  ui.setCurrent(completed)
+  await until(() => ui.host.textContent?.includes('执行回执尚未核验') ?? false)
+  expect(ui.host.textContent).not.toContain('执行回执已核验并归档')
+  ui.setCurrent({
+    ...completed,
+    artifactVersions: [
+      {
+        id: 'receipt',
+        producerAttemptId: 'private-attempt',
+        kind: 'formal_execution_receipt',
+        schemaId: 'research-formal-oci-receipt-v1',
+        contentHash: hash('a'),
+      } as never,
+    ],
+  })
+  await until(() => ui.host.textContent?.includes('执行回执已核验并归档') ?? false)
+  ui.setCurrent({
+    ...completed,
+    attempts: [{ ...completed.attempts[0]!, resultDisposition: 'quarantined' }],
+  })
+  await until(() => ui.host.textContent?.includes('迟到结果已隔离，不能作为正式成果') ?? false)
+  expect(ui.host.textContent).not.toContain('执行回执已核验并归档')
+})

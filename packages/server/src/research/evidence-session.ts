@@ -5,6 +5,7 @@ import type { ResearchLiteratureCitation, RunUsage } from '@oph-autoresearch/cor
 import type { OphConfig, ResearchRequestGuard } from '@oph-autoresearch/runtime'
 import { Session } from '@oph-autoresearch/runtime'
 import { getResearchCampaign, type Store } from '@oph-autoresearch/store'
+import { type FormalEvidenceMetrics, readFormalEvidence } from './formal-evidence.ts'
 import type { RunnerTrackingReceipt } from './runner-tracking.ts'
 import { canonicalJson, type SkillLock, sha256 } from './skill-lock.ts'
 import { lockedResearchSkillPort } from './skill-port.ts'
@@ -24,7 +25,7 @@ export interface EvidencePack {
     inputHash: string
     contentHash: string
     byteLength: number
-    report: { schema: string; inputHash: string }
+    report: { schema: string; inputHash: string; metrics?: FormalEvidenceMetrics }
   }>
 }
 export interface EvidenceReviewResult {
@@ -53,7 +54,7 @@ function evidenceLock(contentHash: string): SkillLock {
       scriptHash: sha256('research-evidence-session-v1'),
       tools: [],
       network: 'deny',
-      data: 'synthetic-only',
+      data: 'aggregate-only',
       backend: 'builtin-local',
       evaluation: { id: 'research-evidence-pack-v1', hash: contentHash },
       reviewer: 'code-owned-evidence-pack',
@@ -76,6 +77,25 @@ export async function buildEvidencePack(
   const protocol = syntheticProtocol(store, workspaceRoot, campaignId)
   const reports = [] as EvidencePack['reports']
   for (const attemptId of [...attemptIds].toSorted()) {
+    const attempt = campaign.attempts.find((item) => item.id === attemptId)
+    if (attempt?.formalExecutionJobSpec) {
+      const formal = await readFormalEvidence(store, workspaceRoot, campaign, attempt)
+      reports.push({
+        attemptId,
+        taskRevisionId: attempt.taskRevisionId,
+        templateId: 'formal-oci-v1',
+        artifactVersionId: formal.artifactVersionId,
+        inputHash: formal.inputHash,
+        contentHash: formal.contentHash,
+        byteLength: formal.byteLength,
+        report: {
+          schema: 'research-formal-evidence-v1',
+          inputHash: formal.inputHash,
+          metrics: formal.metrics,
+        },
+      })
+      continue
+    }
     const receipt = await protocol.receipt(attemptId)
     const task = campaign.taskRevisions.find((value) => value.id === receipt.taskRevisionId)
     if (!task) throw new Error('Receipt task revision disappeared')

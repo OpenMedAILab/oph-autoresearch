@@ -1,6 +1,10 @@
 import type { CliPreparationController } from '../research/cli-preparation-controller.ts'
 import type { ResearchDaemonBackend } from '../research/daemon-execution.ts'
 import type { ResearchDevice } from '../research/execution-devices.ts'
+import type {
+  FormalExecutionController,
+  FormalExecutionRoute,
+} from '../research/formal-execution-controller.ts'
 import type { IsolatedFormalCodeReviewer } from '../research/formal-review-runner.ts'
 import type { HumanAuthVerifier } from '../research/human-auth.ts'
 import type { createLiteratureCollector } from '../research/literature-evidence.ts'
@@ -45,6 +49,10 @@ export interface ApiDeps {
     id: 'binary-classification-v1'
     implementationHash: string
   }[]
+  researchFormalExecution?: {
+    controller: FormalExecutionController
+    routes: readonly FormalExecutionRoute[]
+  }
   researchFormalCatalog?: {
     images: readonly { label: string; digest: string }[]
     datasets: readonly { label: string; dataManifestHash: string; labelSetContentHash: string }[]

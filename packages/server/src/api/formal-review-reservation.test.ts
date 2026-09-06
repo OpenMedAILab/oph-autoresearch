@@ -404,6 +404,43 @@ test('formal review reserves before provider, replays safely, and binds the acce
       idempotencyKey: 'changed',
     })
     expect(changed.status).toBe(400)
+    const frozen = getResearchCampaign(store, campaign.id)!
+    const plan = frozen.formalExecutionPlans![0]!
+    let submitted: Record<string, unknown> | undefined
+    const executionRoute = {
+      id: 'formal-route',
+      profileId: workspace.serverBinding?.profileId ?? 'fixture',
+      connectionHash: hash('ssh'),
+      remoteRoot: '/remote/formal',
+      workspaceBindingHash: plan.workspaceBindingHash,
+    } as never
+    d.researchFormalExecution = {
+      routes: [executionRoute],
+      controller: {
+        submit: async (_scope: unknown, input: Record<string, unknown>) => {
+          submitted = input
+          return { campaign: frozen, attemptId: 'fixture-only', replayed: false }
+        },
+      } as never,
+    }
+    const executionSubmission = {
+      planId: plan.planId,
+      expectedVersion: frozen.version,
+      idempotencyKey: `formal-submit:${plan.planId}`,
+    }
+    const delivered = await post(d, workspace.id, campaign.id, 'submit', executionSubmission)
+    expect(delivered.status).toBe(202)
+    expect(submitted).toEqual({
+      ...executionSubmission,
+      routeId: 'formal-route',
+      approvalId: 'execution',
+    })
+    d.researchFormalExecution.routes = [
+      { ...(executionRoute as object), remoteRoot: '/wrong' } as never,
+    ]
+    expect((await post(d, workspace.id, campaign.id, 'submit', executionSubmission)).status).toBe(
+      409,
+    )
     d.resolveFormalWorkspaceBinding = async (bound) => ({
       binding: bound.serverBinding!,
       profile: { root: '/remote/drifted' },
