@@ -687,8 +687,9 @@ describe('命令正文逐字节到达', () => {
 
   test('原始失败形状：python 源码里的一个反斜杠字符', async () => {
     const bs = String.fromCharCode(92)
+    const python = Bun.which('python3') ? 'python3' : 'python'
     const { proc } = await spawnGuarded({
-      command: [`python - <<'PYEOF'`, `print(len('${bs}${bs}'))`, 'PYEOF'].join('\n'),
+      command: [`${python} - <<'PYEOF'`, `print(len('${bs}${bs}'))`, 'PYEOF'].join('\n'),
       cwd: process.cwd(),
       policy: null,
       env: process.env as Record<string, string>,

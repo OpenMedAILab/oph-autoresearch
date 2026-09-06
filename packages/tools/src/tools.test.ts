@@ -980,7 +980,8 @@ describe('probe_url', () => {
     const root = await workspace()
     const port = 19807
     const server = `require('http').createServer((_,r)=>{r.writeHead(200);r.end('hello from probe')}).listen(${port},'127.0.0.1');setInterval(()=>{},1000)`
-    const cmd = process.platform === 'win32' ? `node -e "${server}"` : `node -e '${server}'`
+    await Bun.write(join(root, 'probe-server.cjs'), server)
+    const cmd = 'node probe-server.cjs'
     const out = await run(root, cmd, `http://127.0.0.1:${port}/`)
 
     expect(out.status).toBe('success')

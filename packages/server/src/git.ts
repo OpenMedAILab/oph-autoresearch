@@ -23,7 +23,9 @@ async function git(
   // `proc.stdout` 变成 `number | ReadableStream | undefined`，下面读流就编译不过。
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {
-    proc = Bun.spawn(['git', '--no-optional-locks', ...args], {
+    const executable = Bun.which('git', { PATH: process.env.PATH ?? '' })
+    if (!executable) return { ok: false, out: '', err: 'Git executable is unavailable' }
+    proc = Bun.spawn([executable, '--no-optional-locks', ...args], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -51,6 +53,12 @@ async function git(
   // `core.fsmonitor` 一旦开着就走得到，那时 git 会留下一个常驻守护进程。
   const got = await collectProcess(proc, { timeoutMs })
   return { ok: got.exitCode === 0, out: got.stdout, err: got.stderr }
+}
+
+/** Git resolves linked worktrees and repository subdirectories itself. */
+export async function gitDirectory(cwd: string): Promise<string | null> {
+  const result = await git(cwd, ['rev-parse', '--absolute-git-dir'])
+  return result.ok ? result.out.trim() || null : null
 }
 
 /**

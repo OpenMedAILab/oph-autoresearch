@@ -16,7 +16,18 @@ import { createGitWatch } from './git-watch.ts'
 
 function repo(dir: string): (...args: string[]) => void {
   return (...args: string[]) => {
-    Bun.spawnSync(['git', ...args], { cwd: dir })
+    const result = Bun.spawnSync(
+      [
+        'git',
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        `core.hooksPath=${join(dir, '.test-no-hooks')}`,
+        ...args,
+      ],
+      { cwd: dir },
+    )
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString())
   }
 }
 
@@ -50,7 +61,7 @@ function fixture(root: string) {
  * 不写死一个 sleep：这条路上串着文件系统回调、120ms 的合并窗口和一次 git 子进程，
  * 三样的耗时都由机器决定。写死的那个数在别人的机器上要么白等要么不够。
  */
-async function until(branches: string[], name: string, ms = 5000): Promise<boolean> {
+async function until(branches: string[], name: string, ms = 2500): Promise<boolean> {
   for (let waited = 0; waited < ms; waited += 50) {
     if (branches.includes(name)) return true
     await Bun.sleep(50)
@@ -71,6 +82,36 @@ describe('分支名跟着 .git/HEAD 走', () => {
     } finally {
       watch.stop()
     }
+  })
+
+  test('linked worktree 的分支目录也能持续观察', async () => {
+    const dir = await repoWithCommit()
+    const linked = join(await mkdtemp(join(tmpdir(), 'oph-linked-watch-')), 'linked')
+    repo(dir)('worktree', 'add', '-q', '-b', 'linked-start', linked)
+    const { branches, watch } = fixture(linked)
+    try {
+      watch.retarget()
+      expect(await until(branches, 'linked-start')).toBe(true)
+      repo(linked)('checkout', '-q', '-b', 'linked-next')
+      expect(await until(branches, 'linked-next')).toBe(true)
+      repo(linked)('checkout', '-q', 'linked-start')
+      branches.length = 0
+      expect(await until(branches, 'linked-start')).toBe(true)
+    } finally {
+      watch.stop()
+    }
+  })
+
+  test('发现 Git 目录前停止，不会留下晚到监听', async () => {
+    const dir = await repoWithCommit()
+    const { branches, watch } = fixture(dir)
+    watch.retarget()
+    watch.stop()
+    watch.announce()
+    await Bun.sleep(300)
+    repo(dir)('checkout', '-q', '-b', 'after-stop')
+    await Bun.sleep(300)
+    expect(branches).toEqual([])
   })
 
   /**
