@@ -1,5 +1,14 @@
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, realpathSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs'
 import { resolve, sep } from 'node:path'
 import type { FormalExecutionPlan } from '@oph-autoresearch/core'
 import { cliPreparationExecutableHash } from './cli-preparation-job.ts'
@@ -14,7 +23,8 @@ export interface FormalOciAdministratorConfig {
   podmanExecutable: string
   podmanBinaryHash: string
   candidates: readonly { candidateArtifactId: string; mainPy: string; candidateReceipt: string }[]
-  datasets: readonly { dataManifestHash: string; root: string }[]
+  /** The manifest bytes are frozen by dataManifestHash; root is only its readonly mount. */
+  datasets: readonly { dataManifestHash: string; manifest: string; root: string }[]
   labels: readonly { labelSetContentHash: string; path: string }[]
   evaluators: readonly { id: 'binary-classification-v1'; hash: string }[]
 }
@@ -43,8 +53,22 @@ function canonical(value: unknown): string {
 function bounded(bytes: Uint8Array) {
   return bytes.byteLength <= MAX_STDIO_BYTES ? bytes : bytes.slice(0, MAX_STDIO_BYTES)
 }
-function fileHash(path: string) {
-  return bytesHash(readFileSync(path))
+function readBoundedRegular(path: string, maximum: number, nonEmpty = false) {
+  const listed = lstatSync(path)
+  if (!listed.isFile() || listed.isSymbolicLink() || listed.nlink !== 1)
+    throw new Error('formal OCI path is not a unique regular file')
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const stat = fstatSync(descriptor)
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > maximum || (nonEmpty && stat.size === 0))
+      throw new Error('formal OCI file is unsafe or exceeds its bound')
+    return readFileSync(descriptor)
+  } finally {
+    closeSync(descriptor)
+  }
+}
+function fileHash(path: string, maximum = MAX_PREDICTIONS_BYTES) {
+  return bytesHash(readBoundedRegular(path, maximum))
 }
 function safeDirectory(path: string) {
   const stat = lstatSync(path)
@@ -84,19 +108,42 @@ export function probeRootlessPodman(command: PodmanCommand, platform = process.p
 export function systemPodmanCommand(executable: string): PodmanCommand {
   return {
     run(argv, timeoutMs) {
-      const child = Bun.spawnSync([executable, ...argv], {
-        stdout: 'pipe',
-        stderr: 'pipe',
+      const child = spawnSync(executable, argv, {
+        encoding: 'buffer',
         timeout: timeoutMs,
-        env: { PATH: process.env.PATH ?? '' },
+        maxBuffer: MAX_STDIO_BYTES,
+        env: rootlessEnvironment(),
       })
       return {
-        exitCode: child.exitCode,
-        stdout: new Uint8Array(child.stdout),
-        stderr: new Uint8Array(child.stderr),
+        exitCode: child.status ?? 1,
+        stdout: new Uint8Array(child.stdout ?? Buffer.alloc(0)),
+        stderr: new Uint8Array(child.stderr ?? Buffer.alloc(0)),
       }
     },
   }
+}
+function rootlessEnvironment() {
+  const environment: Record<string, string> = {}
+  const path = process.env.PATH
+  if (path && !/[\0\r\n]/.test(path)) environment.PATH = path
+  for (const key of [
+    'HOME',
+    'XDG_RUNTIME_DIR',
+    'XDG_CONFIG_HOME',
+    'XDG_DATA_HOME',
+    'XDG_STATE_HOME',
+  ]) {
+    const value = process.env[key]
+    if (!value || !value.startsWith('/') || /[\0\r\n]/.test(value)) continue
+    try {
+      environment[key] = safeDirectory(value)
+    } catch {
+      // Omit unsafe optional locations rather than inheriting the environment.
+    }
+  }
+  if (!environment.HOME || !environment.XDG_RUNTIME_DIR)
+    throw new Error('rootless Podman environment is not admitted')
+  return environment
 }
 
 export class FormalOciAdapter {
@@ -128,7 +175,11 @@ export class FormalOciAdapter {
       safeFile(item.candidateReceipt)
     }
     for (const item of config.datasets) {
-      if (!SHA256.test(item.dataManifestHash)) throw new Error('invalid formal dataset registry')
+      if (
+        !SHA256.test(item.dataManifestHash) ||
+        fileHash(safeFile(item.manifest)) !== item.dataManifestHash
+      )
+        throw new Error('invalid formal dataset registry')
       safeDirectory(item.root)
     }
     for (const item of config.labels) {
@@ -162,6 +213,10 @@ export class FormalOciAdapter {
       fileHash(candidate.candidateReceipt) !== plan.candidateReceiptHash
     )
       throw new Error('formal candidate bytes changed')
+    if (fileHash(safeFile(dataset.manifest)) !== plan.dataManifestHash)
+      throw new Error('formal dataset manifest changed')
+    if (fileHash(safeFile(labels.path)) !== plan.labelSetContentHash)
+      throw new Error('formal truth registry changed')
     return { candidate, dataset, labels, evaluator }
   }
   validate(job: FormalOciJobSpec) {
@@ -245,9 +300,10 @@ export class FormalOciAdapter {
   evaluate(job: FormalOciJobSpec, outputDirectory: string) {
     const { labels } = this.bindings(job.formalPlan)
     const predictionsPath = mountedPath(safeDirectory(outputDirectory), 'predictions.json')
-    const bytes = readFileSync(predictionsPath)
-    if (bytes.byteLength > MAX_PREDICTIONS_BYTES) throw new Error('formal predictions exceed bound')
-    const truth = JSON.parse(readFileSync(labels.path, 'utf8')) as unknown
+    const bytes = readBoundedRegular(predictionsPath, MAX_PREDICTIONS_BYTES, true)
+    const truth = JSON.parse(
+      readBoundedRegular(labels.path, MAX_PREDICTIONS_BYTES, true).toString(),
+    ) as unknown
     const predictions = JSON.parse(bytes.toString()) as unknown
     if (!Array.isArray(truth) || !Array.isArray(predictions))
       throw new Error('invalid formal evaluator fixture')

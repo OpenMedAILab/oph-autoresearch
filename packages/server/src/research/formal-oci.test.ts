@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FormalExecutionPlan } from '@oph-autoresearch/core'
@@ -19,12 +19,14 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
   const mainPy = join(root, 'main.py')
   const candidateReceipt = join(root, 'candidate.json')
   const labels = join(root, 'labels.json')
+  const manifest = join(root, 'manifest.json')
   await mkdir(dataset)
   await mkdir(output)
   await writeFile(podman, '#!/bin/sh\nexit 0\n')
   await chmod(podman, 0o755)
   await writeFile(mainPy, 'print("fixed candidate")\n')
   await writeFile(candidateReceipt, '{"candidate":"fixed"}\n')
+  await writeFile(manifest, '{"dataset":"fixed"}\n')
   await writeFile(
     labels,
     JSON.stringify([
@@ -64,7 +66,7 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
       workspaceBindingHash: hash('workspace'),
       ociImageDigest: `sha256:${'a'.repeat(64)}`,
       entryArgv: ['python3', 'main.py'],
-      dataManifestHash: hash('data-manifest'),
+      dataManifestHash: hash(await Bun.file(manifest).bytes()),
       labelSetContentHash: hash(await Bun.file(labels).bytes()),
       trustedEvaluatorId: 'binary-classification-v1',
       trustedEvaluatorHash: hash('trusted-evaluator'),
@@ -83,7 +85,7 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
         podmanExecutable: podman,
         podmanBinaryHash: cliPreparationExecutableHash(podman),
         candidates: [{ candidateArtifactId: plan.candidateArtifactId, mainPy, candidateReceipt }],
-        datasets: [{ dataManifestHash: plan.dataManifestHash, root: dataset }],
+        datasets: [{ dataManifestHash: plan.dataManifestHash, manifest, root: dataset }],
         labels: [{ labelSetContentHash: plan.labelSetContentHash, path: labels }],
         evaluators: [{ id: 'binary-classification-v1', hash: plan.trustedEvaluatorHash }],
       },
@@ -133,6 +135,18 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
       JSON.stringify([{ id: 'case-a', probability: 0.9 }]),
     )
     expect(() => adapter.evaluate(job, output)).toThrow('complete truth registry')
+
+    const external = join(root, 'external-predictions.json')
+    await writeFile(external, JSON.stringify([{ id: 'case-a', probability: 0.9 }]))
+    await unlink(`${output}/predictions.json`)
+    await symlink(external, `${output}/predictions.json`)
+    expect(() => adapter.evaluate(job, output)).toThrow('unique regular file')
+    await unlink(`${output}/predictions.json`)
+
+    await writeFile(labels, JSON.stringify([{ id: 'case-a', label: 1 }]))
+    expect(() => adapter.evaluate(job, output)).toThrow('truth registry changed')
+    await writeFile(manifest, '{"dataset":"mutated"}\n')
+    expect(() => adapter.argv(job, output)).toThrow('dataset manifest changed')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
