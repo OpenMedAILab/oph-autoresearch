@@ -620,21 +620,33 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
       (action === 'approve' && !body.scope)
     )
       return json({ error: 'invalid_approval_request' }, 400)
-    return respondAndPublish(
-      mutateResearchCampaign(d.store, id, {
-        expectedVersion: body.expectedVersion as number,
-        idempotencyKey: body.idempotencyKey as string,
-        command: (action === 'approve'
-          ? {
-              kind: 'approve',
-              bundleHash: body.bundleHash,
-              scope: body.scope,
-              ...(body.approvalId ? { approvalId: body.approvalId } : {}),
-              reviewer,
-            }
-          : { kind: 'revokeApproval', approvalId: body.approvalId, reviewer }) as ResearchCommand,
-      }),
-    )
+    const result = mutateResearchCampaign(d.store, id, {
+      expectedVersion: body.expectedVersion as number,
+      idempotencyKey: body.idempotencyKey as string,
+      command: (action === 'approve'
+        ? {
+            kind: 'approve',
+            bundleHash: body.bundleHash,
+            scope: body.scope,
+            ...(body.approvalId ? { approvalId: body.approvalId } : {}),
+            reviewer,
+          }
+        : { kind: 'revokeApproval', approvalId: body.approvalId, reviewer }) as ResearchCommand,
+    })
+    if (result.ok) {
+      changed()
+      const current = getResearchCampaign(d.store, id)
+      const revoked = current?.approvals.find((item) => item.id === body.approvalId)
+      if (
+        action === 'revoke' &&
+        current?.progressControl?.state === 'held' &&
+        revoked?.status === 'revoked' &&
+        revoked.consumedBy === `controller:${current.progressControl.reservationRef}`
+      ) {
+        await pauseGoal(current.parentConversationId as ConversationId, d)
+      }
+    }
+    return respond(result)
   }
   if (id && campaign && action === 'release') {
     if (

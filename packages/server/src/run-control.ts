@@ -35,7 +35,9 @@ import {
   createGoal,
   currentGoal,
   getConversation,
+  getResearchCampaign,
   listResearchCampaigns,
+  mutateResearchCampaign,
   updateGoal,
   workspaceOf,
 } from '@oph-autoresearch/store'
@@ -131,6 +133,22 @@ export async function startRun(
       campaign.progressControl?.mode === 'bounded' && campaign.progressControl.state === 'active',
   )
   const controllerOnly = deps.researchControllerOnly === true || Boolean(boundedCampaign)
+  const holdRejectedController = () => {
+    if (!boundedCampaign) return
+    const current = getResearchCampaign(deps.store, boundedCampaign.id)
+    if (!current || current.progressControl?.state !== 'active') return
+    const held = mutateResearchCampaign(deps.store, current.id, {
+      expectedVersion: current.version,
+      idempotencyKey: `controller-admission-hold:${current.id}:${current.progressControl.generation}`,
+      command: {
+        kind: 'setResearchProgress',
+        state: 'held',
+        expectedGeneration: current.progressControl.generation,
+      },
+    })
+    if (held.ok) publishResearchEvents(deps.store, deps.bus)
+  }
+
   if (campaigns.some((campaign) => campaign.progressControl?.state === 'held')) {
     deps.runs.disarm(conversationId)
     deps.runs.release(conversationId)
@@ -163,6 +181,7 @@ export async function startRun(
       !deps.researchControlPortFactory ||
       listResearchCampaigns(deps.store, ws.id, conversationId).length === 0)
   ) {
+    holdRejectedController()
     deps.runs.release(conversationId)
     deps.bus.publish(
       {
@@ -221,6 +240,13 @@ export async function startRun(
       })
     }
   } catch (error) {
+    const currentRound = boundedCampaign
+      ? getResearchCampaign(deps.store, boundedCampaign.id)?.controllerReservations?.find(
+          (item) => item.id === boundedCampaign.progressControl?.reservationRef,
+        )?.round
+      : undefined
+    if (!currentRound || currentRound.finishedAt || currentRound.expiresAt <= Date.now())
+      holdRejectedController()
     deps.runs.release(conversationId)
     deps.bus.publish(
       {

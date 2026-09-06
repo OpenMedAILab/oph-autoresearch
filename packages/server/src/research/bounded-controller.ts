@@ -64,9 +64,11 @@ export function quoteBoundedController(
   if (
     !Number.isSafeInteger(limits.maxInputCharacters) ||
     limits.maxInputCharacters < 1 ||
-    limits.maxInputCharacters > safeInput
+    limits.maxInputCharacters > 1_000_000 ||
+    safeInput < 1
   )
     throw new Error('主控输入长度超过已预留的模型上下文')
+  limits = { ...limits, maxInputCharacters: Math.min(limits.maxInputCharacters, safeInput) }
   return {
     ...budget,
     configHash: sha256(

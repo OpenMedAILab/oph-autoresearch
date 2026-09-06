@@ -1149,7 +1149,8 @@ function nextCampaign(
         (round &&
           round.generation === command.generation &&
           round.basisHash === command.basisHash &&
-          reservation.requests.length > round.requestCountAtStart)
+          (round.finishedAt !== undefined ||
+            reservation.requests.length > round.requestCountAtStart))
       )
         return invalid('controller_round_denied', '当前推进轮尚未结束，或研究依据没有变化')
       next = {
@@ -2407,8 +2408,25 @@ function nextCampaign(
             (preparation) => preparation.attemptId === consumedAttempt.id,
           )
         : false
+      const control = progressControl(campaign)
+      const stopsController =
+        control.mode === 'bounded' && found.consumedBy === `controller:${control.reservationRef}`
       next = {
         ...campaign,
+        ...(stopsController
+          ? {
+              progressControl: {
+                ...control,
+                state: 'held' as const,
+                generation: control.generation + 1,
+              },
+              controllerReservations: (campaign.controllerReservations ?? []).map((item) =>
+                item.id === control.reservationRef && item.status === 'active'
+                  ? { ...item, status: 'held' as const }
+                  : item,
+              ),
+            }
+          : {}),
         approvals: campaign.approvals.map((approval) =>
           approval.id === found.id
             ? {

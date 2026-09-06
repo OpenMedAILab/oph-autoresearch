@@ -198,3 +198,18 @@ test('held progress never restarts because an old remote receipt changed the cam
     f.store.close()
   }
 })
+
+test('a completed round with no transport does not hot-loop on the same preflight failure', () => {
+  const f = fixture()
+  try {
+    const round = f.controller()
+    // Models can reject locally (for example an oversized saved conversation)
+    // before beforeSend records a request. Repeating this appends endless runs.
+    round.finish()
+    expect(f.get().controllerReservations![0]!.requests).toHaveLength(0)
+    expect(boundedControllerDecision(f.get())).not.toBe('start')
+    expect(() => f.controller()).toThrow()
+  } finally {
+    f.store.close()
+  }
+})

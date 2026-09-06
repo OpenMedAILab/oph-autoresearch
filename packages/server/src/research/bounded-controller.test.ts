@@ -284,3 +284,23 @@ test('a live round prevents another process starting, while an unstarted expired
     f.store.close()
   }
 })
+
+test('revoking consumed controller approval durably holds progression before another provider request', () => {
+  const f = setup()
+  let sent = 0
+  try {
+    const round = f.create()
+    f.mutate({
+      kind: 'revokeApproval',
+      approvalId: 'approval-fixture',
+      reviewer: { reviewerId: 'fixture-human', proofId: 'revoke-fixture', verifiedAt: Date.now() },
+    })
+    expect(f.get().progressControl?.state).toBe('held')
+    expect(f.get().controllerReservations![0]!.status).toBe('held')
+    expect(() => round.guard.wrap(adapter(f.quote.spec, () => sent++)).stream(request)).toThrow()
+    expect(sent).toBe(0)
+    round.finish()
+  } finally {
+    f.store.close()
+  }
+})

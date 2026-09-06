@@ -80,7 +80,8 @@ export function boundedControllerDecision(campaign: ResearchCampaign, now = Date
   if (
     reservation.round?.generation === control.generation &&
     reservation.round.basisHash === sha256(canonicalResearchControllerBasis(campaign)) &&
-    reservation.requests.length > reservation.round.requestCountAtStart
+    (reservation.round.finishedAt !== undefined ||
+      reservation.requests.length > reservation.round.requestCountAtStart)
   )
     return 'change'
   return 'start'

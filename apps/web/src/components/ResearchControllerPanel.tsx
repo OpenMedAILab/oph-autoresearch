@@ -33,11 +33,11 @@ export function ResearchControllerPanel(props: {
     const approvalUrl = props.approvalUrl
     const reusable = reusableApproval()
     const popup = reusable ? null : window.open('about:blank', 'oph-research-approval')
-    const limits: ResearchControllerLimits = reusable?.scope?.controllerLimits ?? {
+    let limits: ResearchControllerLimits = reusable?.scope?.controllerLimits ?? {
       maxAdvances: advances(),
       maxModelRequests: requests(),
       maxOutputTokens: 1024,
-      maxInputCharacters: 4096,
+      maxInputCharacters: 100000,
       deadlineAt: Date.now() + minutes() * 60_000,
       stopAfter: stopAfter(),
     }
@@ -52,6 +52,7 @@ export function ResearchControllerPanel(props: {
             method: 'POST',
             body: JSON.stringify({ limits }),
           })
+          limits = quote.body.scope.controllerLimits
           const proof = await requestHumanApproval(
             approvalUrl,
             {
