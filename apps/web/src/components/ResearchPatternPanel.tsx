@@ -117,15 +117,11 @@ export function ResearchPatternPanel(props: {
         {(quote) => (
           <section aria-label="远端资源报价">
             <p>
-              可用设备建议：{quote().selected?.id ?? '暂无可用设备'}
+              可用设备建议：{quote().selected ? '已有可用执行设备' : '暂无可用设备'}
               。报价不预留资源；执行审批绑定所选设备，提交后不会自动改派。
             </p>
             <For each={quote().observations}>
-              {(device) => (
-                <p>
-                  {device.id} · 空闲执行槽 {device.availableSlots}/1 · {device.backendPolicyHash}
-                </p>
-              )}
+              {(device) => <p>执行设备 · 空闲执行槽 {device.availableSlots}/1</p>}
             </For>
           </section>
         )}
@@ -159,7 +155,11 @@ export function ResearchPatternPanel(props: {
               <For each={current().candidateAssessments}>
                 {(report) => (
                   <p>
-                    {report.decision} · {report.reportHash}
+                    {report.decision === 'supported'
+                      ? '证据支持'
+                      : report.decision === 'accepted'
+                        ? '通过'
+                        : '需要复核'}
                   </p>
                 )}
               </For>

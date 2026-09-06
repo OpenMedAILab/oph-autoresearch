@@ -86,16 +86,16 @@ function notificationKind(event: ResearchEvent): ResearchNotificationKind | null
     case 'finishSynthetic':
       return 'completed'
     case 'finishModelReview': {
-      if (event.command?.kind !== 'finishModelReview') return null
-      if (event.command.status === 'failed') return 'review_failed'
-      if (event.command.status === 'unknown') return 'unknown'
+      const command = event.command
+      if (command?.kind !== 'finishModelReview') return null
+      if (command.status === 'failed') return 'review_failed'
+      if (command.status === 'unknown') return 'unknown'
       const review = event.campaign.modelReviews?.find(
-        (candidate) => candidate.id === event.command.reviewId,
+        (candidate) => candidate.id === command.reviewId,
       )
       if (!review) return null
       try {
-        return parseModelReview(event.command.text, review.artifactVersionIds).decision ===
-          'insufficient'
+        return parseModelReview(command.text, review.artifactVersionIds).decision === 'insufficient'
           ? 'review_insufficient'
           : null
       } catch {

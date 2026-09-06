@@ -459,3 +459,41 @@ describe('research campaign ledger', () => {
     store.close()
   })
 })
+
+test('approval display is bound to the ledger research title and exact task revision', () => {
+  const store = fresh()
+  try {
+    const initial = created(store).campaign
+    const running = claim(store, initial.id, initial.version)
+    if (!running.ok) throw new Error(running.message)
+    const campaign = running.campaign
+    const task = campaign.taskRevisions[0]!
+    const display = { title: campaign.goal, task: task.templateId!, revision: task.revision }
+    const approve = (shown: typeof display, key: string) =>
+      mutateResearchCampaign(store, campaign.id, {
+        expectedVersion: campaign.version,
+        idempotencyKey: key,
+        command: {
+          kind: 'approve',
+          bundleHash: campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: key, verifiedAt: Date.now() },
+          scope: {
+            kind: 'execution',
+            taskRevisionId: task.id,
+            dispatchKey: 'display-signed-task',
+            artifactVersionIds: [],
+            currency: campaign.budget.currency,
+            maxCost: 0,
+            expiresAt: Date.now() + 60000,
+            display: shown,
+          },
+        },
+      })
+    expect(approve({ ...display, title: 'Another research project' }, 'wrong-title').ok).toBe(false)
+    expect(approve({ ...display, task: 'synthetic-retinal-image-v1' }, 'wrong-task').ok).toBe(false)
+    expect(approve({ ...display, revision: display.revision + 1 }, 'wrong-revision').ok).toBe(false)
+    expect(approve(display, 'correct-display').ok).toBe(true)
+  } finally {
+    store.close()
+  }
+})

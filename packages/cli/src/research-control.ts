@@ -9,6 +9,8 @@ const OPERATIONS = new Set([
   'reconcile',
   'receipt',
   'request_review',
+  'documents/read',
+  'record_document/write',
 ])
 
 export async function runResearchControl(args: string[]): Promise<number> {

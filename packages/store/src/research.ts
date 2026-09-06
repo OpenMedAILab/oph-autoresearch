@@ -765,6 +765,12 @@ function nextCampaign(
         const scopedTask = campaign.taskRevisions.find((task) => task.id === scope?.taskRevisionId)
         if (
           !scope ||
+          (scope.display !== undefined &&
+            (!scope.display ||
+              Object.keys(scope.display).sort().join(',') !== 'revision,task,title' ||
+              scope.display.title !== campaign.goal ||
+              scope.display.task !== scopedTask?.templateId ||
+              scope.display.revision !== scopedTask?.revision)) ||
           (scope.kind === 'execution' &&
             scopedTask?.templateId === 'supervised-phantom-v2' &&
             (scope.executionLimits?.maxRuntimeMs !== 600_000 ||

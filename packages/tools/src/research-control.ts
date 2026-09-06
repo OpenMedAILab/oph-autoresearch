@@ -11,12 +11,14 @@ const OPERATIONS: ResearchControlOperation[] = [
   'reconcile',
   'receipt',
   'request_review',
+  'documents/read',
+  'record_document/write',
 ]
 
 export const researchControlTool: ToolSpec = {
   name: 'research_control',
   description:
-    '在当前会话已授权的 research campaign 上准备、提案、提交、查询、取消、对账、读取回执或请求模型审查。每次写入必须带 expectedVersion 和 idempotencyKey。此工具不能审批、签名、撤销审批或发布。',
+    '在当前会话已授权的 research campaign 上准备、提案、提交、查询、取消、对账、读取回执、请求模型审查或读取/记录不可变研究文档。每次写入必须带 expectedVersion 和 idempotencyKey。此工具不能审批、签名、撤销审批或发布。',
   parameters: {
     type: 'object',
     properties: {
