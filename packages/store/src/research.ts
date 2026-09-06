@@ -546,7 +546,10 @@ export function canStartControllerRequest(
   return Boolean(
     reservation &&
       reservation.status === 'active' &&
-      approval?.status === 'active' &&
+      approval !== undefined &&
+      approval.status !== 'revoked' &&
+      approval.consumedBy === `controller:${reservation.id}` &&
+      reservation.sourceContextHash === scientificContextHash(campaign, 2) &&
       control.mode === 'bounded' &&
       control.state === 'active' &&
       control.reservationRef === reservation.id &&
@@ -576,7 +579,10 @@ function canReserveControllerAdvance(
   return Boolean(
     reservation &&
       reservation.status === 'active' &&
-      approval?.status === 'active' &&
+      approval !== undefined &&
+      approval.status !== 'revoked' &&
+      approval.consumedBy === `controller:${reservation.id}` &&
+      reservation.sourceContextHash === scientificContextHash(campaign, 2) &&
       control.mode === 'bounded' &&
       control.state === 'active' &&
       control.reservationRef === reservation.id &&
@@ -983,6 +989,7 @@ function nextCampaign(
             id: command.reservationId.trim(),
             approvalId: approval.id,
             configHash: command.configHash,
+            sourceContextHash: scientificContextHash(campaign, 2),
             currency: command.currency,
             reservedCost: command.reservedCost,
             limits: cloneJson(command.limits),

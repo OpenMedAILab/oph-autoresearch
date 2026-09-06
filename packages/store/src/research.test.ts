@@ -2191,6 +2191,7 @@ describe('CLI preparation authorization ledger', () => {
         controllerReservations: [
           {
             id: 'rcr_partial',
+            sourceContextHash: scientificContextHash(campaign, 2),
             approvalId: 'hap_partial',
             configHash: CONTENT_HASH,
             currency: 'USD',

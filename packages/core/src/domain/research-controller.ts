@@ -17,6 +17,7 @@ export interface ResearchControllerReservation {
   id: string
   approvalId: string
   configHash: string
+  sourceContextHash: string
   currency: string
   reservedCost: number
   limits: ResearchControllerLimits
