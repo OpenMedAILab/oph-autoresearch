@@ -5,6 +5,7 @@ import type {
   ResearchWriteResult,
 } from '@oph-autoresearch/core'
 import { createEffect, createMemo, createResource, createSignal, For, on, Show } from 'solid-js'
+import { requestHumanApproval } from '../lib/research-approval.ts'
 import {
   client,
   explainApiError,
@@ -49,6 +50,7 @@ const templates: Array<{ id: ResearchTemplateId; label: string }> = [
   { id: 'synthetic-evaluation-v1', label: '合成评分评估' },
   { id: 'synthetic-training-evaluation-v1', label: '合成特征评估' },
   { id: 'synthetic-retinal-image-v1', label: '合成眼底图像实验' },
+  { id: 'supervised-phantom-v2', label: '真实训练：合成图像双模型比较' },
 ]
 const statusLabels = {
   proposal: '未批准提案',
@@ -74,6 +76,14 @@ const backendLabels = {
 }
 
 export function ResearchCampaignPanel() {
+  const [approvalChannel, setApprovalChannel] = createSignal<string | null>(null)
+  const [templateCatalog, setTemplateCatalog] = createSignal<
+    Array<{ id: string; inputHash: string }>
+  >([])
+  const [executionBackends, setExecutionBackends] = createSignal<
+    Array<{ id: string; backendPolicyHash: string | null; trackingPolicyHash: string | null }>
+  >([])
+  const [executionDevice, setExecutionDevice] = createSignal('')
   const scope = createMemo(() => {
     const workspaceId = workspace()?.id
     const conversationId = state.activeConversation
@@ -89,15 +99,24 @@ export function ResearchCampaignPanel() {
         }
       : undefined
   })
-  const [campaigns, { refetch }] = createResource(
-    source,
-    async (selected) =>
-      (
-        await client.api<{ campaigns: ResearchCampaign[] }>(
-          `/api/research/campaigns?ws=${encodeURIComponent(selected.workspaceId)}&conversationId=${encodeURIComponent(selected.conversationId)}`,
-        )
-      ).campaigns,
-  )
+  const [campaigns, { refetch }] = createResource(source, async (selected) => {
+    const result = await client.api<{
+      campaigns: ResearchCampaign[]
+      approvalUrl?: string | null
+      templates?: Array<{ id: string; inputHash: string }>
+      executionBackends?: Array<{
+        id: string
+        backendPolicyHash: string | null
+        trackingPolicyHash: string | null
+      }>
+    }>(
+      `/api/research/campaigns?ws=${encodeURIComponent(selected.workspaceId)}&conversationId=${encodeURIComponent(selected.conversationId)}`,
+    )
+    setApprovalChannel(result.approvalUrl ?? null)
+    setTemplateCatalog(result.templates ?? [])
+    setExecutionBackends(result.executionBackends ?? [])
+    return result.campaigns
+  })
   const [goal, setGoal] = createSignal('')
   const [doi, setDoi] = createSignal('')
   const [pmid, setPmid] = createSignal('')
@@ -167,6 +186,10 @@ export function ResearchCampaignPanel() {
   }
   async function runTemplate(campaign: ResearchCampaign, templateId: ResearchTemplateId) {
     if (busy()) return
+    if (approvalChannel() || templateId === 'supervised-phantom-v2') {
+      await approveAndRun(campaign, templateId)
+      return
+    }
     const key = `synthetic:${campaign.id}:${templateId}`
     if (!pending.has(key)) pending.set(key, crypto.randomUUID())
     await act(async () => {
@@ -183,6 +206,97 @@ export function ResearchCampaignPanel() {
       )
       pending.delete(key)
     }, '固定模板请求已登记；以尝试和产物核验结果为准。')
+  }
+  async function approveAndRun(campaign: ResearchCampaign, templateId: ResearchTemplateId) {
+    const approvalUrl = approvalChannel()
+    if (!approvalUrl) {
+      setNotice({ scope: scopeKey(), text: '请先配置独立审批渠道，再启动真实训练。' })
+      return
+    }
+    const template = templateCatalog().find((item) => item.id === templateId)
+    if (!template) return
+    const device =
+      executionBackends().find((item) => item.id === executionDevice()) ?? executionBackends()[0]
+    if (templateId === 'supervised-phantom-v2' && !device) {
+      setNotice({
+        scope: scopeKey(),
+        text: '尚未配置研究执行守护进程。SSH 登录与 CLI 探测不等于执行设备准入。',
+      })
+      return
+    }
+    const popup = window.open('about:blank', 'oph-research-approval')
+    if (!popup) {
+      setNotice({ scope: scopeKey(), text: '请允许打开独立审批窗口。' })
+      return
+    }
+    await act(async () => {
+      try {
+        const key = crypto.randomUUID()
+        const endpoint = `/api/research/campaigns/${campaign.id}`
+        const suffix = `?ws=${encodeURIComponent(campaign.workspaceId)}`
+        const declared = await client.api<{ campaign: ResearchCampaign }>(
+          `${endpoint}/proposals${suffix}`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              expectedVersion: campaign.version,
+              idempotencyKey: `declare-${key}`,
+              command: {
+                kind: 'declareSyntheticTask',
+                taskId: `experiment-${key}`,
+                templateId,
+                inputHash: template.inputHash,
+                artifactVersionIds: [],
+              },
+            }),
+          },
+        )
+        const current = declared.campaign
+        const task = current.taskRevisions.find((item) => item.taskId === `experiment-${key}`)!
+        const body = {
+          expectedVersion: current.version,
+          idempotencyKey: `approve-${key}`,
+          bundleHash: current.bundleHash,
+          scope: {
+            kind: 'execution',
+            taskRevisionId: task.id,
+            dispatchKey: key,
+            artifactVersionIds: task.artifactVersionIds ?? [],
+            currency: current.budget.currency,
+            maxCost: current.budget.limit,
+            expiresAt: Date.now() + 15 * 60_000,
+            ...(device?.backendPolicyHash ? { backendPolicyHash: device.backendPolicyHash } : {}),
+            ...(device?.trackingPolicyHash
+              ? { trackingPolicyHash: device.trackingPolicyHash }
+              : {}),
+          },
+        }
+        const proof = await requestHumanApproval(
+          approvalUrl,
+          { workspaceId: current.workspaceId, campaignId: current.id, action: 'approve', body },
+          popup,
+        )
+        const approved = await client.api<{ campaign: ResearchCampaign }>(
+          `${endpoint}/approve${suffix}`,
+          { method: 'POST', headers: { 'x-oph-human-proof': proof }, body: JSON.stringify(body) },
+        )
+        const approval = approved.campaign.approvals.find(
+          (item) => item.scope?.dispatchKey === key,
+        )!
+        await client.api(`${endpoint}/synthetic${suffix}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            expectedVersion: approved.campaign.version,
+            dispatchKey: key,
+            templateId,
+            taskRevisionId: task.id,
+            approvalId: approval.id,
+          }),
+        })
+      } finally {
+        popup.close()
+      }
+    }, '已签署任务并提交执行；完成状态以产物核验为准。')
   }
   async function cancel(campaign: ResearchCampaign, attemptId: string) {
     await act(
@@ -306,9 +420,23 @@ export function ResearchCampaignPanel() {
     >
       <h3>科研提案账本</h3>
       <p>
-        审批渠道未配置。签名人工证明渠道仅在已配置身份服务后可用；本界面不接收证明、令牌或内部
-        JSON。
+        {approvalChannel()
+          ? '执行前将在独立审批窗口核对并签署本次任务。'
+          : '尚未配置独立审批渠道。真实训练需要任务绑定的人类批准。'}
       </p>
+      <Show when={executionBackends().length > 0}>
+        <label>
+          执行设备{' '}
+          <select
+            value={executionDevice()}
+            onChange={(event) => setExecutionDevice(event.currentTarget.value)}
+          >
+            <For each={executionBackends()}>
+              {(device) => <option value={device.id}>{device.id}</option>}
+            </For>
+          </select>
+        </label>
+      </Show>
       <Show when={scope()} fallback={<p>请先打开一个会话，再创建研究提案。</p>}>
         <form
           onSubmit={(event) => {
@@ -351,7 +479,7 @@ export function ResearchCampaignPanel() {
                 {campaign.version}
               </p>
               <fieldset>
-                <legend>固定模板（仅内置合成数据）</legend>
+                <legend>可复现实验（仅合成数据）</legend>
                 <For each={templates}>
                   {(template) => (
                     <button
@@ -362,7 +490,9 @@ export function ResearchCampaignPanel() {
                       }
                       onClick={() => void runTemplate(campaign, template.id)}
                     >
-                      运行{template.id === 'synthetic-summary-v1' ? '本地合成测试：' : ''}
+                      {approvalChannel() || template.id === 'supervised-phantom-v2'
+                        ? '审批后运行：'
+                        : '运行：'}
                       {template.label}
                     </button>
                   )}

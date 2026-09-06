@@ -157,13 +157,15 @@ export async function startSyntheticRun(
   input: StartSyntheticRunInput,
   hooks: SyntheticRunnerTestHooks = {},
 ): Promise<SyntheticRunResult> {
-  let summary: ReturnType<FixedResearchTemplate['execute']>
+  let inputHash: string
   let plan: FixedResearchTemplate
   try {
     plan = fixedResearchTemplate(input.templateId)
     await plan.assertSkill(hooks.skillManifest)
     recoverRunningSyntheticAttempts(input.store)
-    summary = plan.execute()
+    inputHash = plan.inputHash?.() ?? plan.execute().inputHash
+    if (plan.id === 'supervised-phantom-v2' && (!input.daemonBackend || !input.approvalId))
+      throw new Error('真实训练需要守护进程和任务绑定审批')
     assertId(input.campaignId, 'campaignId')
     assertId(input.dispatchKey, 'dispatchKey')
   } catch (error) {
@@ -190,7 +192,7 @@ export async function startSyntheticRun(
       skillBinding: plan.binding,
       ...(input.taskRevisionId ? { taskRevisionId: input.taskRevisionId } : {}),
       dispatchKey: input.dispatchKey,
-      inputHash: summary.inputHash,
+      inputHash,
     },
   })
   if (!claim.ok) return { ok: false, error: claim.message, code: claim.code }
@@ -232,7 +234,7 @@ export async function startSyntheticRun(
     )
     await hooks.beforeWrite?.({ campaignId: input.campaignId, attemptId: attempt.id, outputPath })
     if (controller.signal.aborted) return interrupt(input, attempt.id, '合成运行已取消')
-    await writeFile(outputPath, outputBytes ?? `${JSON.stringify(summary, null, 2)}\n`, {
+    await writeFile(outputPath, outputBytes ?? `${JSON.stringify(plan.execute(), null, 2)}\n`, {
       encoding: 'utf8',
       flag: 'wx',
     })

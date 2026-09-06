@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import type { ResearchTemplateId } from '@oph-autoresearch/core'
+import type { ResearchJobSpec, ResearchTemplateId } from '@oph-autoresearch/core'
 import {
   captureRunnerTracking,
   type RunnerTrackingConfig,
@@ -20,18 +20,7 @@ export type JobStatus =
   | 'cancelled'
   | 'failed'
   | 'interrupted'
-export interface JobSpec {
-  backendPolicyHash?: string
-  trackingPolicyHash?: string
-  version: 1
-  dispatchKey: string
-  campaignId: string
-  taskRevisionId: string
-  templateId: JobTemplate
-  inputHash: string
-  resource: { cpu: 1; memoryMb: number }
-  lease: { ownerId: string; token: string; fence: number; expiresAt: number }
-}
+export type JobSpec = ResearchJobSpec
 export interface DurableJob {
   spec: JobSpec
   specHash: string
@@ -86,6 +75,7 @@ function parse(value: unknown): JobSpec {
     !hasKeys(value, [
       ...(value.trackingPolicyHash === undefined ? [] : ['trackingPolicyHash']),
       ...(value.backendPolicyHash === undefined ? [] : ['backendPolicyHash']),
+      ...(value.execution === undefined ? [] : ['execution']),
       'campaignId',
       'dispatchKey',
       'inputHash',
@@ -104,7 +94,16 @@ function parse(value: unknown): JobSpec {
   const resource = value.resource
   const lease = value.lease
   if (
-    value.version !== 1 ||
+    (value.version !== 1 && value.version !== 2) ||
+    (value.version === 1 && value.execution !== undefined) ||
+    (value.version === 2 &&
+      (!isRecord(value.execution) ||
+        !hasKeys(value.execution, ['adapter', 'codeHash', 'maxRuntimeMs']) ||
+        value.templateId !== 'supervised-phantom-v2' ||
+        value.execution.adapter !== 'supervised-phantom-v2' ||
+        value.execution.codeHash !==
+          fixedResearchTemplate('supervised-phantom-v2').binding.sourceHash ||
+        value.execution.maxRuntimeMs !== 600_000)) ||
     (value.backendPolicyHash !== undefined &&
       !/^sha256:[a-f0-9]{64}$/.test(String(value.backendPolicyHash))) ||
     !validText(value.dispatchKey) ||
@@ -172,10 +171,14 @@ function leaseMatches(expected: JobSpec['lease'], value: unknown) {
   )
 }
 function leaseIdentityMatches(expected: JobSpec['lease'], value: unknown) {
-  return isRecord(value) &&
-    typeof value.ownerId === 'string' && typeof value.token === 'string' &&
-    value.ownerId === expected.ownerId && value.token === expected.token &&
+  return (
+    isRecord(value) &&
+    typeof value.ownerId === 'string' &&
+    typeof value.token === 'string' &&
+    value.ownerId === expected.ownerId &&
+    value.token === expected.token &&
     typeof value.fence === 'number'
+  )
 }
 function isSafeDirectory(path: string, boundary: string) {
   const stat = lstatSync(path)
@@ -218,9 +221,15 @@ export class JobDaemon implements JobDaemonPort {
     const rootStat = lstatSync(this.outputRoot)
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('unsafe output root')
     this.outputRootRealpath = realpathSync(this.outputRoot)
-    if (opts.executionRuntimeMs !== undefined && (!Number.isSafeInteger(opts.executionRuntimeMs) || opts.executionRuntimeMs < 1))
+    if (
+      opts.executionRuntimeMs !== undefined &&
+      (!Number.isSafeInteger(opts.executionRuntimeMs) || opts.executionRuntimeMs < 1)
+    )
       throw new Error('invalid execution runtime')
-    if (opts.renewalMs !== undefined && (!Number.isSafeInteger(opts.renewalMs) || opts.renewalMs < 1))
+    if (
+      opts.renewalMs !== undefined &&
+      (!Number.isSafeInteger(opts.renewalMs) || opts.renewalMs < 1)
+    )
       throw new Error('invalid renewal interval')
     this.executionRuntimeMs = opts.executionRuntimeMs
     this.renewalMs = opts.renewalMs ?? 15_000
@@ -253,7 +262,7 @@ export class JobDaemon implements JobDaemonPort {
     if (spec.trackingPolicyHash !== this.trackingPolicyHash)
       throw new Error('Tracking startup policy does not match JobSpec')
     const plan = fixedResearchTemplate(spec.templateId)
-    if (plan.execute().inputHash !== spec.inputHash)
+    if ((plan.inputHash?.() ?? plan.execute().inputHash) !== spec.inputHash)
       throw new Error('fixed_template_input_hash_mismatch')
     const specHash = hash(spec)
     const inserted = this.db
@@ -261,12 +270,19 @@ export class JobDaemon implements JobDaemonPort {
         'INSERT INTO local_jobs (dispatch_key,spec,spec_hash,status,output_path,content_hash,error,runtime_lease,execution_deadline_at,worker_heartbeat_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dispatch_key) DO NOTHING',
       )
       .run(
-        spec.dispatchKey, canonical(spec), specHash, 'queued', null, null, null,
+        spec.dispatchKey,
+        canonical(spec),
+        specHash,
+        'queued',
+        null,
+        null,
+        null,
         canonical(spec.lease),
         // v1 has no approved runtime budget: configuration may tighten, never enlarge its frozen expiry.
-        this.executionRuntimeMs === undefined
-          ? spec.lease.expiresAt
-          : Math.min(spec.lease.expiresAt, Date.now() + this.executionRuntimeMs),
+        Math.min(
+          spec.version === 2 ? Date.now() + spec.execution!.maxRuntimeMs : spec.lease.expiresAt,
+          this.executionRuntimeMs === undefined ? Infinity : Date.now() + this.executionRuntimeMs,
+        ),
         null,
       )
     const job = this.query(spec.dispatchKey)
@@ -305,9 +321,19 @@ export class JobDaemon implements JobDaemonPort {
       .query(
         "SELECT dispatch_key,status,worker_pid,worker_pgid,execution_deadline_at,runtime_lease FROM local_jobs WHERE status IN ('running','cancel_requested','completion_requested')",
       )
-      .all() as { dispatch_key: string; status: string; worker_pid: number | null; worker_pgid: number | null; execution_deadline_at: number | null; runtime_lease: string | null }[]
+      .all() as {
+      dispatch_key: string
+      status: string
+      worker_pid: number | null
+      worker_pgid: number | null
+      execution_deadline_at: number | null
+      runtime_lease: string | null
+    }[]
     for (const candidate of candidates) {
-      if (candidate.execution_deadline_at !== null && Date.now() >= candidate.execution_deadline_at) {
+      if (
+        candidate.execution_deadline_at !== null &&
+        Date.now() >= candidate.execution_deadline_at
+      ) {
         this.cancel(candidate.dispatch_key)
       }
       if (!candidate.worker_pid) continue // A missing process identity cannot prove termination.
@@ -355,30 +381,56 @@ export class JobDaemon implements JobDaemonPort {
       .query(
         "UPDATE local_jobs SET status='running', worker_pid=?, worker_pgid=?, worker_heartbeat_at=? WHERE dispatch_key=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested'))",
       )
-      .run(workerPid, this.workers.get(key)?.pid === workerPid && process.platform !== 'win32' ? workerPid : null, Date.now(), key)
+      .run(
+        workerPid,
+        this.workers.get(key)?.pid === workerPid && process.platform !== 'win32' ? workerPid : null,
+        Date.now(),
+        key,
+      )
     return updated.changes === 1 ? this.query(key) : null
   }
   private renew(key: string, lease: unknown): DurableJob | null {
     const job = this.query(key)
     const deadline = job?.executionDeadlineAt ?? job?.spec.lease.expiresAt
     const current = job?.runtimeLease ?? job?.spec.lease
-    if (!job || !current || job.status !== 'running' || !deadline || Date.now() >= deadline || Date.now() >= current.expiresAt)
+    if (
+      !job ||
+      !current ||
+      job.status !== 'running' ||
+      !deadline ||
+      Date.now() >= deadline ||
+      Date.now() >= current.expiresAt
+    )
       return null
     // A response can be lost after the authority commits renewal. Replaying the immediately
     // preceding generation returns the current lease instead of stranding the same worker.
     if (!leaseMatches(current, lease)) {
-      if (leaseIdentityMatches(current, lease) && (lease as { fence: number }).fence === current.fence - 1)
+      if (
+        leaseIdentityMatches(current, lease) &&
+        (lease as { fence: number }).fence === current.fence - 1
+      )
         return job
       return null
     }
-    const renewed = { ...current, fence: current.fence + 1, expiresAt: Math.min(deadline, Date.now() + this.renewalMs) }
-    this.db.query('UPDATE local_jobs SET runtime_lease=?, worker_heartbeat_at=? WHERE dispatch_key=? AND status=\'running\'')
+    const renewed = {
+      ...current,
+      fence: current.fence + 1,
+      expiresAt: Math.min(deadline, Date.now() + this.renewalMs),
+    }
+    this.db
+      .query(
+        "UPDATE local_jobs SET runtime_lease=?, worker_heartbeat_at=? WHERE dispatch_key=? AND status='running'",
+      )
       .run(canonical(renewed), Date.now(), key)
     return this.query(key)
   }
   private cancelAcknowledged(key: string, lease: unknown): DurableJob | null {
     const job = this.query(key)
-    if (!job || job.status !== 'cancel_requested' || !leaseMatches(job.runtimeLease ?? job.spec.lease, lease))
+    if (
+      !job ||
+      job.status !== 'cancel_requested' ||
+      !leaseMatches(job.runtimeLease ?? job.spec.lease, lease)
+    )
       return null
     const identity = this.db
       .query('SELECT worker_pid,worker_pgid FROM local_jobs WHERE dispatch_key=?')
@@ -462,7 +514,9 @@ export class JobDaemon implements JobDaemonPort {
   }
   hasAvailableSlot(): boolean {
     return !this.db
-      .query("SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested','completion_requested') LIMIT 1")
+      .query(
+        "SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested','completion_requested') LIMIT 1",
+      )
       .get()
   }
   pendingJobs(): DurableJob[] {
@@ -544,11 +598,11 @@ export class JobDaemon implements JobDaemonPort {
             ? this.claim(key, lease, isRecord(body) ? body.workerPid : null)
             : url.pathname.startsWith('/renew/')
               ? this.renew(key, lease)
-            : url.pathname.startsWith('/finish/')
-              ? this.finish(key, lease, isRecord(body) ? body.result : null)
-              : url.pathname.startsWith('/cancelled/')
-                ? this.cancelAcknowledged(key, lease)
-                : null
+              : url.pathname.startsWith('/finish/')
+                ? this.finish(key, lease, isRecord(body) ? body.result : null)
+                : url.pathname.startsWith('/cancelled/')
+                  ? this.cancelAcknowledged(key, lease)
+                  : null
           return Response.json(result ?? { error: 'operation_rejected' }, {
             status: result ? 200 : 409,
           })
@@ -593,7 +647,8 @@ export class JobDaemon implements JobDaemonPort {
       this.workers.delete(dispatchKey)
       if (this.closed) return
       const job = this.query(dispatchKey)
-      if (job?.status === 'cancel_requested') this.cancelAcknowledged(dispatchKey, job.runtimeLease ?? job.spec.lease)
+      if (job?.status === 'cancel_requested')
+        this.cancelAcknowledged(dispatchKey, job.runtimeLease ?? job.spec.lease)
       if (job?.status === 'completion_requested') this.reconcileInterrupted()
     })
     return child

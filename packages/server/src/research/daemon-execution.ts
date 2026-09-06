@@ -67,7 +67,16 @@ export async function executeDaemonAttempt(input: {
     ...(input.backend.daemon.trackingPolicyHash
       ? { trackingPolicyHash: input.backend.daemon.trackingPolicyHash }
       : {}),
-    version: 1,
+    version: task.templateId === 'supervised-phantom-v2' ? 2 : 1,
+    ...(task.templateId === 'supervised-phantom-v2'
+      ? {
+          execution: {
+            adapter: 'supervised-phantom-v2' as const,
+            codeHash: task.skillBinding!.sourceHash,
+            maxRuntimeMs: 600_000,
+          },
+        }
+      : {}),
     dispatchKey: input.attempt.id,
     campaignId: input.campaignId,
     taskRevisionId: task.id,
@@ -114,10 +123,16 @@ export async function executeDaemonAttempt(input: {
     await daemon.submit(spec)
     // Losing a local observer is not a cancellation command. The remote authority owns the job.
     if (input.signal.aborted && !cancellationIsPersisted())
-      return { status: 'unknown', reason: 'Local observer stopped before a terminal authority observation' }
+      return {
+        status: 'unknown',
+        reason: 'Local observer stopped before a terminal authority observation',
+      }
     while (true) {
       if (input.signal.aborted && !cancellationIsPersisted())
-        return { status: 'unknown', reason: 'Local observer stopped before a terminal authority observation' }
+        return {
+          status: 'unknown',
+          reason: 'Local observer stopped before a terminal authority observation',
+        }
       const job = await daemon.query(spec.dispatchKey)
       if (!job)
         return { status: 'unknown', reason: 'Execution authority has no confirmed job observation' }
@@ -147,23 +162,32 @@ export async function executeDaemonAttempt(input: {
         let timer: ReturnType<typeof setTimeout> | undefined
         const outcome = await Promise.race([
           worker.exited.then(() => 'exited' as const),
-          new Promise<'deadline'>(resolve => {
+          new Promise<'deadline'>((resolve) => {
             timer = setTimeout(() => resolve('deadline'), Math.max(1, deadline - Date.now()))
           }),
           observerAbort,
         ])
         if (timer) clearTimeout(timer)
         if (outcome === 'observer_abort')
-          return { status: 'unknown', reason: 'Local observer stopped before a terminal authority observation' }
+          return {
+            status: 'unknown',
+            reason: 'Local observer stopped before a terminal authority observation',
+          }
         if (outcome === 'deadline')
-          return { status: 'unknown', reason: 'Execution deadline elapsed; terminal authority observation pending' }
+          return {
+            status: 'unknown',
+            reason: 'Execution deadline elapsed; terminal authority observation pending',
+          }
         await daemon.reconcileInterrupted()
       } else if (job.status === 'running') {
         // This attempt owns the newly submitted job; only observation follows a lost worker acknowledgement.
         await daemon.reconcileInterrupted()
       }
       if (Date.now() >= (job.executionDeadlineAt ?? spec.lease.expiresAt))
-        return { status: 'unknown', reason: 'Execution deadline elapsed; terminal authority observation pending' }
+        return {
+          status: 'unknown',
+          reason: 'Execution deadline elapsed; terminal authority observation pending',
+        }
       await Bun.sleep(250)
     }
   } finally {

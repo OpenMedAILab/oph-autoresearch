@@ -22,6 +22,7 @@ import type { Pairing } from '../pairing.ts'
 import type { RunManager } from '../runs.ts'
 
 export interface ApiDeps {
+  researchApprovalUrl?: string
   researchExecutionDevices?: readonly ResearchDevice[]
   researchLiteratureCollector?: ReturnType<typeof createLiteratureCollector>
   researchDaemonBackend?: ResearchDaemonBackend

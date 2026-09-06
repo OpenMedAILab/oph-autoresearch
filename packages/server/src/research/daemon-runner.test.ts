@@ -5,10 +5,12 @@ import {
   createConversation,
   createResearchCampaign,
   getResearchCampaign,
+  mutateResearchCampaign,
   Store,
   upsertWorkspace,
 } from '@oph-autoresearch/store'
 import { JobDaemon } from './job-daemon.ts'
+import { SUPERVISED_BINDING, SUPERVISED_INPUT_HASH } from './supervised-experiment.ts'
 import { syntheticProtocol } from './synthetic-protocol.ts'
 import { cancelSyntheticRun, reconcileSyntheticRun, startSyntheticRun } from './synthetic-runner.ts'
 
@@ -70,6 +72,76 @@ function anotherCampaign(
 }
 
 describe('durable daemon runner integration', () => {
+  test('v2 supervised experiment requires exact approval and trains in a real child process', async () => {
+    const { store, root, campaign, protocol } = await fresh()
+    const daemon = new JobDaemon({
+      dbPath: join(root, 'v2.sqlite'),
+      outputRoot: join(root, 'v2-output'),
+    })
+    try {
+      const input = {
+        store,
+        workspaceRoot: root,
+        campaignId: campaign.id,
+        expectedVersion: campaign.version,
+        dispatchKey: 'supervised-once',
+        templateId: 'supervised-phantom-v2' as const,
+        daemonBackend: { daemon },
+      }
+      expect((await startSyntheticRun(input)).ok).toBe(false)
+      const declared = mutateResearchCampaign(store, campaign.id, {
+        expectedVersion: campaign.version,
+        idempotencyKey: 'declare-v2',
+        command: {
+          kind: 'declareSyntheticTask',
+          taskId: 'fit-classifier',
+          templateId: input.templateId,
+          inputHash: SUPERVISED_INPUT_HASH,
+          skillBinding: SUPERVISED_BINDING,
+          artifactVersionIds: [],
+        },
+      })
+      if (!declared.ok) throw new Error(declared.message)
+      const task = declared.campaign.taskRevisions[0]!
+      const approved = mutateResearchCampaign(store, campaign.id, {
+        expectedVersion: declared.campaign.version,
+        idempotencyKey: 'approve-v2',
+        command: {
+          kind: 'approve',
+          bundleHash: declared.campaign.bundleHash,
+          reviewer: { reviewerId: 'test-human', proofId: 'v2-human', verifiedAt: Date.now() },
+          scope: {
+            kind: 'execution',
+            taskRevisionId: task.id,
+            dispatchKey: input.dispatchKey,
+            artifactVersionIds: [],
+            expiresAt: Date.now() + 60_000,
+            currency: 'USD',
+            maxCost: 0,
+          },
+        },
+      })
+      if (!approved.ok) throw new Error(approved.message)
+      const run = await startSyntheticRun({
+        ...input,
+        expectedVersion: approved.campaign.version,
+        taskRevisionId: task.id,
+        approvalId: approved.campaign.approvals[0]!.id,
+      })
+      if (!run.ok) throw new Error(run.error)
+      expect(run.campaign.attempts[0]!.jobSpec?.version).toBe(2)
+      const job = daemon.query(run.attemptId)!
+      expect(job.executionDeadlineAt!).toBeGreaterThan(job.spec.lease.expiresAt)
+      expect(job.spec.execution?.codeHash).toBe(SUPERVISED_BINDING.sourceHash)
+      expect(job.status).toBe('completed')
+      expect((await protocol.receipt(run.attemptId)).reviewKind).toBe(
+        'independent-training-and-metric-recomputation',
+      )
+    } finally {
+      daemon.close()
+      store.close()
+    }
+  })
   test('one ledger attempt dispatches a real worker and emits a verified local receipt', async () => {
     const { store, root, campaign, protocol } = await fresh()
     const daemon = new JobDaemon({

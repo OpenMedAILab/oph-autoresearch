@@ -23,7 +23,7 @@ import {
   reconcileSyntheticRun,
   startSyntheticRun,
 } from '../research/synthetic-runner.ts'
-import { fixedResearchTemplate } from '../research/template-registry.ts'
+import { fixedResearchTemplate, researchTemplateCatalog } from '../research/template-registry.ts'
 import { publishResearchEvents } from '../research-events.ts'
 import { type ApiHandler, json } from './types.ts'
 
@@ -69,6 +69,23 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
     const conversationId = url.searchParams.get('conversationId') || undefined
     return json({
       campaigns: listResearchCampaigns(d.store, d.workspaceId, conversationId),
+      approvalUrl: d.researchApprovalUrl ?? null,
+      templates: researchTemplateCatalog(),
+      executionBackends:
+        d.researchExecutionDevices?.map((device) => ({
+          id: device.id,
+          backendPolicyHash: device.authority.backendPolicyHash,
+          trackingPolicyHash: device.authority.trackingPolicyHash ?? null,
+        })) ??
+        (d.researchDaemonBackend
+          ? [
+              {
+                id: d.researchDaemonBackend.kind ?? 'localhost-daemon',
+                backendPolicyHash: d.researchDaemonBackend.daemon.backendPolicyHash ?? null,
+                trackingPolicyHash: d.researchDaemonBackend.daemon.trackingPolicyHash ?? null,
+              },
+            ]
+          : []),
       trackingPolicyHash: d.researchDaemonBackend?.daemon.trackingPolicyHash ?? null,
       approvalChannel: d.researchHumanAuth ? 'signed-human-proof' : 'unavailable',
     })
@@ -80,6 +97,7 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
   if (id && req.method === 'GET' && !action) {
     return json({
       campaign,
+      approvalUrl: d.researchApprovalUrl ?? null,
       approvalChannel: d.researchHumanAuth ? 'signed-human-proof' : 'unavailable',
       trackingPolicyHash: d.researchDaemonBackend?.daemon.trackingPolicyHash ?? null,
     })

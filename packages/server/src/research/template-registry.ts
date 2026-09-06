@@ -19,6 +19,12 @@ import {
 } from './retinal-template.ts'
 import { verifyTrackedTemplate } from './runner-tracking.ts'
 import { sha256 } from './skill-lock.ts'
+import {
+  executeSupervisedExperiment,
+  SUPERVISED_BINDING,
+  SUPERVISED_INPUT_HASH,
+  verifySupervisedExperiment,
+} from './supervised-experiment.ts'
 import { reviewSyntheticEvidence } from './synthetic-review.ts'
 import { assertFirstPartySyntheticSkill, SYNTHETIC_SKILL_BINDING } from './synthetic-skill.ts'
 import { executeSyntheticTemplate } from './synthetic-template.ts'
@@ -36,9 +42,11 @@ export interface FixedResearchTemplate {
     | 'evaluation.json'
     | 'training-evaluation.json'
     | 'retinal-evaluation.json'
+    | 'supervised-experiment.json'
   binding: NonNullable<ResearchTaskRevision['skillBinding']>
   assertSkill(manifest?: unknown): Promise<void>
   execute(): { schema: ResearchTemplateId; inputHash: string }
+  inputHash?(): string
   verify(bytes: Uint8Array): SyntheticCompletionValidation
   reviewKind: string
 }
@@ -59,6 +67,16 @@ function summaryOutput() {
 }
 /** Single server dispatch table; API, runner, receipt and daemon consumers use these same plans. */
 const plans: Record<ResearchTemplateId, FixedResearchTemplate> = {
+  'supervised-phantom-v2': {
+    id: 'supervised-phantom-v2',
+    filename: 'supervised-experiment.json',
+    binding: SUPERVISED_BINDING,
+    async assertSkill() {},
+    inputHash: () => SUPERVISED_INPUT_HASH,
+    execute: executeSupervisedExperiment,
+    verify: verifySupervisedExperiment,
+    reviewKind: 'independent-training-and-metric-recomputation',
+  },
   'synthetic-retinal-image-v1': {
     id: 'synthetic-retinal-image-v1',
     filename: 'retinal-evaluation.json',
@@ -105,4 +123,13 @@ Object.freeze(plans)
 export function fixedResearchTemplate(id: unknown = 'synthetic-summary-v1'): FixedResearchTemplate {
   if (!isResearchTemplateId(id)) throw new Error('Unknown fixed research template')
   return plans[id]
+}
+
+export function researchTemplateCatalog() {
+  return Object.values(plans).map((plan) => ({
+    id: plan.id,
+    inputHash: plan.inputHash?.() ?? plan.execute().inputHash,
+    codeHash: plan.binding.sourceHash,
+    requiresDaemon: plan.id === 'supervised-phantom-v2',
+  }))
 }

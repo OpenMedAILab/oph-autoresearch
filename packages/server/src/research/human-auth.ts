@@ -25,6 +25,8 @@ export interface HumanAuthIssuer {
 }
 
 export interface HumanAuthVerifierConfig {
+  /** Public URL of an independent approval console; never contains its session credential. */
+  approvalUrl?: string
   issuers: Readonly<Record<string, HumanAuthIssuer>>
   now?: () => number
 }

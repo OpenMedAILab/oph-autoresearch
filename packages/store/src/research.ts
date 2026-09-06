@@ -974,7 +974,13 @@ function nextCampaign(
         !['localhost-daemon', 'ssh-daemon'].includes(owned.attempt.backend ?? '') ||
         owned.attempt.jobSpec ||
         !spec ||
-        spec.version !== 1 ||
+        (spec.version !== 1 && spec.version !== 2) ||
+        (spec.version === 1 && spec.execution !== undefined) ||
+        (spec.version === 2 &&
+          (task?.templateId !== 'supervised-phantom-v2' ||
+            spec.execution?.adapter !== 'supervised-phantom-v2' ||
+            spec.execution.codeHash !== task.skillBinding?.sourceHash ||
+            spec.execution.maxRuntimeMs !== 600_000)) ||
         (spec.trackingPolicyHash !== undefined && !SHA256.test(spec.trackingPolicyHash)) ||
         spec.trackingPolicyHash !== owned.attempt.trackingPolicyHash ||
         spec.backendPolicyHash !== owned.attempt.backendPolicyHash ||

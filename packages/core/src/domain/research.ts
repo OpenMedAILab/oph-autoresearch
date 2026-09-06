@@ -24,16 +24,19 @@ export const SYNTHETIC_SUMMARY_TEMPLATE = 'synthetic-summary-v1'
 export const SYNTHETIC_EVALUATION_TEMPLATE = 'synthetic-evaluation-v1'
 export const SYNTHETIC_TRAINING_TEMPLATE = 'synthetic-training-evaluation-v1'
 export const SYNTHETIC_RETINAL_TEMPLATE = 'synthetic-retinal-image-v1'
+export const SUPERVISED_PHANTOM_TEMPLATE = 'supervised-phantom-v2'
 export type ResearchTemplateId =
   | typeof SYNTHETIC_SUMMARY_TEMPLATE
   | typeof SYNTHETIC_EVALUATION_TEMPLATE
   | typeof SYNTHETIC_TRAINING_TEMPLATE
   | typeof SYNTHETIC_RETINAL_TEMPLATE
+  | typeof SUPERVISED_PHANTOM_TEMPLATE
 export function isResearchTemplateId(value: unknown): value is ResearchTemplateId {
   return (
     value === SYNTHETIC_SUMMARY_TEMPLATE ||
     value === SYNTHETIC_EVALUATION_TEMPLATE ||
     value === SYNTHETIC_RETINAL_TEMPLATE ||
+    value === SUPERVISED_PHANTOM_TEMPLATE ||
     value === SYNTHETIC_TRAINING_TEMPLATE
   )
 }
@@ -162,7 +165,12 @@ export type ResearchAttemptStatus =
 export interface ResearchJobSpec {
   backendPolicyHash?: string
   trackingPolicyHash?: string
-  version: 1
+  version: 1 | 2
+  execution?: {
+    adapter: 'supervised-phantom-v2'
+    codeHash: string
+    maxRuntimeMs: number
+  }
   dispatchKey: string
   campaignId: string
   taskRevisionId: string
