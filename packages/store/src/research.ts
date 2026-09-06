@@ -1,5 +1,6 @@
 import {
   type ArtifactVersion,
+  canonicalCliPreparationConfig,
   canonicalResearchBundle,
   foldResearchEvents,
   type HumanApproval,
@@ -174,28 +175,34 @@ type CliPreparationConfig = Pick<
   | 'dispatchKey'
   | 'candidateId'
   | 'adapterId'
+  | 'adapterConfigHash'
+  | 'backendPolicyHash'
   | 'model'
   | 'instructions'
   | 'inputHash'
   | 'deviceId'
   | 'maxRuntimeMs'
   | 'maxCost'
+  | 'acknowledgeUnknownCost'
 >
 
 function cliPreparationConfigHash(command: CliPreparationConfig) {
   return digest(
-    canonicalJson({
+    canonicalCliPreparationConfig({
       preparationId: command.id,
       taskRevisionId: command.taskRevisionId,
       dispatchKey: command.dispatchKey,
       candidateId: command.candidateId,
       adapterId: command.adapterId,
+      adapterConfigHash: command.adapterConfigHash,
+      backendPolicyHash: command.backendPolicyHash,
       model: command.model,
       instructions: command.instructions,
       inputHash: command.inputHash,
       deviceId: command.deviceId,
       maxRuntimeMs: command.maxRuntimeMs,
       maxCost: command.maxCost,
+      acknowledgeUnknownCost: command.acknowledgeUnknownCost,
     }),
   )
 }
@@ -209,6 +216,12 @@ function invalidateChangedApprovals(campaign: ResearchCampaign, now: number): Re
         : approval,
     ),
   }
+}
+
+function reservedCliPreparationCost(campaign: ResearchCampaign): number {
+  return (campaign.cliPreparations ?? [])
+    .filter((preparation) => preparation.status === 'claimed' || preparation.status === 'candidate')
+    .reduce((sum, preparation) => sum + preparation.maxCost, 0)
 }
 
 function validateProof(proof: {
@@ -227,7 +240,10 @@ function validateProof(proof: {
 }
 
 function taskStatus(task: ResearchTaskRevision, attempts: readonly ResearchAttempt[]) {
-  const related = attempts.filter((attempt) => attempt.taskRevisionId === task.id)
+  // A preparation produces an unadmitted candidate, never a verified scientific task result.
+  const related = attempts.filter(
+    (attempt) => attempt.taskRevisionId === task.id && !attempt.cliPreparationJobSpec,
+  )
   if (related.some((attempt) => attempt.status === 'completed')) return 'verified' as const
   if (related.some((attempt) => attempt.status === 'running')) return 'pending' as const
   if (related.some((attempt) => attempt.status === 'failed')) return 'failed' as const
@@ -461,6 +477,7 @@ function nextCampaign(
         ) ||
         (campaign.modelReviews ?? []).some((r) => r.dispatchKey === spec.dispatchKey) ||
         (campaign.modelReviews ?? []).reduce((sum, r) => sum + r.reservedCost, 0) +
+          reservedCliPreparationCost(campaign) +
           spec.reservedCost >
           campaign.budget.limit
       )
@@ -618,7 +635,8 @@ function nextCampaign(
       const error = budgetError(command.budget)
       if (error) return invalid('invalid_budget', error)
       if (
-        (campaign.modelReviews ?? []).reduce((sum, r) => sum + r.reservedCost, 0) >
+        (campaign.modelReviews ?? []).reduce((sum, r) => sum + r.reservedCost, 0) +
+          reservedCliPreparationCost(campaign) >
           command.budget.limit ||
         ((campaign.modelReviews ?? []).length &&
           command.budget.currency !== campaign.budget.currency)
@@ -639,6 +657,8 @@ function nextCampaign(
         textError(command.dispatchKey, 'dispatchKey') ??
         textError(command.candidateId, 'candidateId') ??
         textError(command.adapterId, 'adapterId') ??
+        (!SHA256.test(command.adapterConfigHash) ? 'adapterConfigHash 无效' : null) ??
+        (!SHA256.test(command.backendPolicyHash) ? 'backendPolicyHash 无效' : null) ??
         textError(command.model, 'model') ??
         textError(command.deviceId, 'deviceId') ??
         (typeof command.instructions !== 'string' ||
@@ -657,10 +677,11 @@ function nextCampaign(
           ? 'maxRuntimeMs 无效'
           : null) ??
         (!Number.isFinite(command.maxCost) ||
-        command.maxCost < 0 ||
+        command.maxCost <= 0 ||
         command.maxCost > campaign.budget.limit
           ? 'maxCost 无效'
-          : null)
+          : null) ??
+        (command.acknowledgeUnknownCost !== true ? '必须确认 CLI 实际费用未知' : null)
       if (
         error ||
         !task ||
@@ -681,6 +702,8 @@ function nextCampaign(
         dispatchKey: command.dispatchKey,
         candidateId: command.candidateId,
         adapterId: command.adapterId,
+        adapterConfigHash: command.adapterConfigHash,
+        backendPolicyHash: command.backendPolicyHash,
         model: command.model,
         instructions: command.instructions,
         inputHash: command.inputHash,
@@ -688,6 +711,8 @@ function nextCampaign(
         deviceId: command.deviceId,
         maxRuntimeMs: command.maxRuntimeMs,
         maxCost: command.maxCost,
+        acknowledgeUnknownCost: true,
+        actualCost: null,
         status: 'proposed',
         attemptId: null,
         artifactVersionId: null,
@@ -722,11 +747,13 @@ function nextCampaign(
         approval.scope.dispatchKey !== preparation.dispatchKey ||
         approval.scope.configHash !== preparation.configHash ||
         approval.scope.maxCost !== preparation.maxCost ||
-        approval.scope.executionLimits?.maxRuntimeMs !== preparation.maxRuntimeMs ||
-        approval.scope.executionLimits?.inputHash !== preparation.inputHash ||
-        approval.scope.executionLimits?.cpu !== 1 ||
-        approval.scope.executionLimits?.memoryMb !== 256 ||
-        approval.scope.executionLimits?.codeHash !== preparation.configHash ||
+        approval.scope.backendPolicyHash !== preparation.backendPolicyHash ||
+        approval.scope.preparationLimits?.maxRuntimeMs !== preparation.maxRuntimeMs ||
+        approval.scope.preparationLimits?.cpu !== 1 ||
+        approval.scope.preparationLimits?.memoryMb !== 256 ||
+        approval.scope.preparationLimits?.adapterConfigHash !== preparation.adapterConfigHash ||
+        approval.scope.preparationLimits?.acknowledgeUnknownCost !== true ||
+        reservedCliPreparationCost(campaign) + preparation.maxCost > campaign.budget.limit ||
         campaign.attempts.some((attempt) => attempt.dispatchKey === preparation.dispatchKey)
       )
         return invalid('cli_preparation_approval_required', '准备任务需要精确且未消费的人类审批')
@@ -735,6 +762,7 @@ function nextCampaign(
         taskRevisionId: task.id,
         dispatchKey: preparation.dispatchKey,
         backend: 'ssh-daemon',
+        backendPolicyHash: preparation.backendPolicyHash,
         ownerPid: process.pid,
         status: 'running',
         executionStartedAt: now,
@@ -753,6 +781,147 @@ function nextCampaign(
         ),
         approvals: campaign.approvals.map((candidate) =>
           candidate.id === approval.id ? { ...candidate, consumedBy: attempt.id } : candidate,
+        ),
+      }
+      break
+    }
+    case 'bindCliPreparationJob': {
+      const owned = ownedRunningAttempt(campaign, command.attemptId)
+      if (!owned.ok) return owned
+      const preparation = (campaign.cliPreparations ?? []).find(
+        (candidate) => candidate.attemptId === owned.attempt.id,
+      )
+      const task = campaign.taskRevisions.find(
+        (candidate) => candidate.id === owned.attempt.taskRevisionId,
+      )
+      const spec = command.spec
+      if (
+        !preparation ||
+        !task ||
+        preparation.status !== 'claimed' ||
+        owned.attempt.backend !== 'ssh-daemon' ||
+        owned.attempt.cliPreparationJobSpec ||
+        owned.attempt.jobSpec ||
+        withDerivedTaskStatuses(campaign).taskRevisions.find(
+          (candidate) => candidate.id === task.id,
+        )?.status === 'stale' ||
+        preparation.inputHash !== task.inputHash ||
+        preparation.configHash !== cliPreparationConfigHash(preparation) ||
+        !spec ||
+        spec.version !== 3 ||
+        spec.campaignId !== campaign.id ||
+        spec.taskRevisionId !== task.id ||
+        spec.templateId !== task.templateId ||
+        spec.inputHash !== preparation.inputHash ||
+        spec.dispatchKey !== owned.attempt.id ||
+        spec.backendPolicyHash !== preparation.backendPolicyHash ||
+        spec.resource?.cpu !== 1 ||
+        spec.resource?.memoryMb !== 256 ||
+        !Number.isSafeInteger(spec.lease?.fence) ||
+        spec.lease.fence < 1 ||
+        spec.lease.expiresAt <= now ||
+        textError(spec.lease.token, 'lease token') ||
+        spec.execution?.adapter !== 'cli-preparation-v1' ||
+        spec.execution.preparationId !== preparation.id ||
+        spec.execution.candidateId !== preparation.candidateId ||
+        spec.execution.clientDispatchKey !== preparation.dispatchKey ||
+        spec.execution.adapterId !== preparation.adapterId ||
+        spec.execution.adapterConfigHash !== preparation.adapterConfigHash ||
+        spec.execution.model !== preparation.model ||
+        spec.execution.instructions !== preparation.instructions ||
+        spec.execution.configHash !== preparation.configHash ||
+        spec.execution.deviceId !== preparation.deviceId ||
+        spec.execution.maxRuntimeMs !== preparation.maxRuntimeMs ||
+        spec.execution.maxCost !== preparation.maxCost
+      )
+        return invalid(
+          'invalid_cli_preparation_job',
+          'Job must bind the claimed approved preparation',
+        )
+      next = {
+        ...campaign,
+        attempts: campaign.attempts.map((attempt) =>
+          attempt.id === owned.attempt.id
+            ? {
+                ...attempt,
+                cliPreparationJobSpec: cloneJson(spec),
+                cliPreparationJobSpecHash: digest(canonicalJson(spec)),
+              }
+            : attempt,
+        ),
+      }
+      break
+    }
+    case 'finishCliPreparation': {
+      const owned = ownedRunningAttempt(campaign, command.attemptId)
+      if (!owned.ok) return owned
+      const preparation = (campaign.cliPreparations ?? []).find(
+        (candidate) => candidate.attemptId === owned.attempt.id,
+      )
+      const task = campaign.taskRevisions.find(
+        (candidate) => candidate.id === owned.attempt.taskRevisionId,
+      )
+      const spec = owned.attempt.cliPreparationJobSpec
+      const validation = command.validation
+      if (
+        owned.attempt.cancelRequestedAt !== null ||
+        !preparation ||
+        !task ||
+        preparation.status !== 'claimed' ||
+        !spec ||
+        !owned.attempt.cliPreparationJobSpecHash ||
+        withDerivedTaskStatuses(campaign).taskRevisions.find(
+          (candidate) => candidate.id === task.id,
+        )?.status === 'stale' ||
+        task.inputHash !== preparation.inputHash ||
+        !SHA256.test(command.contentHash) ||
+        textError(command.uri, 'uri') !== null ||
+        command.artifactKind !== 'cli_preparation_candidate' ||
+        !validation ||
+        validation.schema !== 'research-cli-preparation-candidate-v1' ||
+        validation.jobSpecHash !== owned.attempt.cliPreparationJobSpecHash ||
+        validation.dispatchKey !== owned.attempt.id ||
+        validation.clientDispatchKey !== preparation.dispatchKey ||
+        validation.preparationId !== preparation.id ||
+        validation.candidateId !== preparation.candidateId ||
+        validation.taskRevisionId !== task.id ||
+        validation.inputHash !== preparation.inputHash ||
+        validation.configHash !== preparation.configHash ||
+        validation.contentHash !== command.contentHash ||
+        !SHA256.test(validation.draftContentHash) ||
+        !Number.isSafeInteger(validation.byteLength) ||
+        validation.byteLength < 0 ||
+        !Number.isSafeInteger(validation.verifiedAt) ||
+        validation.verifiedAt <= 0
+      )
+        return invalid(
+          'invalid_cli_preparation_finish',
+          'Candidate receipt does not bind the frozen job',
+        )
+      const artifact: ArtifactVersion = {
+        id: randomId('rav'),
+        artifactId: `cli-preparation:${preparation.id}`,
+        version: 1,
+        uri: command.uri.trim(),
+        kind: 'cli_preparation_candidate',
+        mediaType: 'application/json',
+        dataClass: 'synthetic',
+        schemaId: 'research-cli-preparation-candidate-v1',
+        contentHash: command.contentHash,
+        createdAt: now,
+      }
+      next = {
+        ...campaign,
+        artifactVersions: [...campaign.artifactVersions, artifact],
+        attempts: campaign.attempts.map((attempt) =>
+          attempt.id === owned.attempt.id
+            ? { ...attempt, status: 'completed', endedAt: now, artifactVersionId: artifact.id }
+            : attempt,
+        ),
+        cliPreparations: (campaign.cliPreparations ?? []).map((candidate) =>
+          candidate.id === preparation.id
+            ? { ...candidate, status: 'candidate', artifactVersionId: artifact.id }
+            : candidate,
         ),
       }
       break
@@ -809,7 +978,8 @@ function nextCampaign(
                   candidate.taskRevisionId === scope.taskRevisionId &&
                   candidate.dispatchKey === scope.dispatchKey &&
                   candidate.configHash === scope.configHash &&
-                  candidate.maxCost === scope.maxCost,
+                  candidate.maxCost === scope.maxCost &&
+                  candidate.backendPolicyHash === scope.backendPolicyHash,
               )
             : undefined
         if (
@@ -830,7 +1000,8 @@ function nextCampaign(
           (scope.trackingPolicyHash !== undefined &&
             (scope.kind !== 'execution' || !SHA256.test(scope.trackingPolicyHash))) ||
           (scope.backendPolicyHash !== undefined &&
-            (scope.kind !== 'execution' || !SHA256.test(scope.backendPolicyHash))) ||
+            (!['execution', 'cli_preparation'].includes(scope.kind) ||
+              !SHA256.test(scope.backendPolicyHash))) ||
           !['protocol', 'execution', 'cli_preparation', 'model_review', 'release'].includes(
             scope.kind,
           ) ||
@@ -861,11 +1032,12 @@ function nextCampaign(
               cliPreparation.configHash !== cliPreparationConfigHash(cliPreparation) ||
               scopedTask?.status === 'stale' ||
               scopedTask?.inputHash !== cliPreparation.inputHash ||
-              scope.executionLimits?.maxRuntimeMs !== cliPreparation.maxRuntimeMs ||
-              scope.executionLimits?.cpu !== 1 ||
-              scope.executionLimits?.memoryMb !== 256 ||
-              scope.executionLimits?.inputHash !== cliPreparation.inputHash ||
-              scope.executionLimits?.codeHash !== cliPreparation.configHash))
+              scope.backendPolicyHash !== cliPreparation.backendPolicyHash ||
+              scope.preparationLimits?.maxRuntimeMs !== cliPreparation.maxRuntimeMs ||
+              scope.preparationLimits?.cpu !== 1 ||
+              scope.preparationLimits?.memoryMb !== 256 ||
+              scope.preparationLimits?.adapterConfigHash !== cliPreparation.adapterConfigHash ||
+              scope.preparationLimits?.acknowledgeUnknownCost !== true))
         )
           return invalid(
             'invalid_approval_scope',
@@ -1242,7 +1414,8 @@ function nextCampaign(
         !attempt ||
         !['localhost-daemon', 'ssh-daemon'].includes(attempt.backend ?? '') ||
         !['running', 'unknown'].includes(attempt.status) ||
-        command.jobSpecHash !== attempt.jobSpecHash ||
+        command.jobSpecHash !== (attempt.cliPreparationJobSpecHash ?? attempt.jobSpecHash) ||
+        (!attempt.cliPreparationJobSpec && !attempt.jobSpec) ||
         (attempt.ownerPid !== process.pid && ownerAlive(attempt.ownerPid))
       )
         return invalid(

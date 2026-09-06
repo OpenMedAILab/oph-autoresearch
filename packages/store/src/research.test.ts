@@ -43,12 +43,15 @@ function cliProposal(taskRevisionId: string, overrides: Record<string, unknown> 
     dispatchKey: 'prepare-fixture',
     candidateId: 'candidate_fixture',
     adapterId: 'fixture-cli',
+    adapterConfigHash: `sha256:${'d'.repeat(64)}`,
+    backendPolicyHash: `sha256:${'e'.repeat(64)}`,
     model: 'fixture-model',
     instructions: 'produce a candidate only',
     inputHash: INPUT_HASH,
     deviceId: 'fixture-device-1',
     maxRuntimeMs: 60_000,
     maxCost: 10,
+    acknowledgeUnknownCost: true as const,
     ...overrides,
   }
   return {
@@ -60,12 +63,15 @@ function cliProposal(taskRevisionId: string, overrides: Record<string, unknown> 
         dispatchKey: draft.dispatchKey,
         candidateId: draft.candidateId,
         adapterId: draft.adapterId,
+        adapterConfigHash: draft.adapterConfigHash,
+        backendPolicyHash: draft.backendPolicyHash,
         model: draft.model,
         instructions: draft.instructions,
         inputHash: draft.inputHash,
         deviceId: draft.deviceId,
         maxRuntimeMs: draft.maxRuntimeMs,
         maxCost: draft.maxCost,
+        acknowledgeUnknownCost: draft.acknowledgeUnknownCost,
       }),
     ),
   }
@@ -105,12 +111,13 @@ function approveCliPreparation(
         taskRevisionId: proposal.taskRevisionId as string,
         dispatchKey: proposal.dispatchKey as string,
         configHash: proposal.configHash,
-        executionLimits: {
+        backendPolicyHash: proposal.backendPolicyHash as string,
+        preparationLimits: {
           maxRuntimeMs: proposal.maxRuntimeMs as number,
           cpu: 1,
           memoryMb: 256,
-          codeHash: proposal.configHash,
-          inputHash: proposal.inputHash as string,
+          adapterConfigHash: proposal.adapterConfigHash as string,
+          acknowledgeUnknownCost: true,
         },
         artifactVersionIds: [],
         currency: campaign.budget.currency,
@@ -119,6 +126,39 @@ function approveCliPreparation(
       },
     },
   })
+}
+
+function cliPreparationJobSpec(
+  campaign: ReturnType<typeof created>['campaign'],
+  preparation: NonNullable<ReturnType<typeof created>['campaign']['cliPreparations']>[number],
+  attemptId: string,
+) {
+  return {
+    version: 3 as const,
+    dispatchKey: attemptId,
+    campaignId: campaign.id,
+    taskRevisionId: preparation.taskRevisionId,
+    templateId: campaign.taskRevisions.find((task) => task.id === preparation.taskRevisionId)!
+      .templateId,
+    inputHash: preparation.inputHash,
+    backendPolicyHash: preparation.backendPolicyHash,
+    resource: { cpu: 1 as const, memoryMb: 256 as const },
+    lease: { ownerId: 'daemon', token: 'lease-fixture', fence: 1, expiresAt: Date.now() + 60_000 },
+    execution: {
+      adapter: 'cli-preparation-v1' as const,
+      preparationId: preparation.id,
+      candidateId: preparation.candidateId,
+      clientDispatchKey: preparation.dispatchKey,
+      adapterId: preparation.adapterId,
+      adapterConfigHash: preparation.adapterConfigHash,
+      model: preparation.model,
+      instructions: preparation.instructions,
+      configHash: preparation.configHash,
+      deviceId: preparation.deviceId,
+      maxRuntimeMs: preparation.maxRuntimeMs,
+      maxCost: preparation.maxCost,
+    },
+  }
 }
 
 function claim(
@@ -608,12 +648,15 @@ describe('CLI preparation authorization ledger', () => {
       ['dispatchKey', 'prepare-other'],
       ['candidateId', 'candidate_other'],
       ['adapterId', 'other-cli'],
+      ['adapterConfigHash', CONTENT_HASH],
+      ['backendPolicyHash', CONTENT_HASH],
       ['model', 'other-model'],
       ['instructions', 'different instruction'],
       ['inputHash', CONTENT_HASH],
       ['deviceId', 'device-other'],
       ['maxRuntimeMs', 120_000],
       ['maxCost', 11],
+      ['acknowledgeUnknownCost', false],
     ] as const
     for (const [field, value] of fields) {
       const store = fresh()
@@ -783,6 +826,108 @@ describe('CLI preparation authorization ledger', () => {
       })
       expect(replayed.ok && replayed.replayed).toBe(true)
       if (replayed.ok) expect(replayed.campaign.attempts).toHaveLength(1)
+    } finally {
+      store.close()
+    }
+  })
+
+  test('binds a v3 CLI job to its attempt and finishes only a candidate artifact', () => {
+    const store = fresh()
+    try {
+      const taskCampaign = declareCliTask(store, created(store).campaign)
+      const proposal = cliProposal(taskCampaign.taskRevisions[0]!.id)
+      const proposed = mutateResearchCampaign(store, taskCampaign.id, {
+        idempotencyKey: 'propose-bind-finish',
+        expectedVersion: taskCampaign.version,
+        command: proposal,
+      })
+      if (!proposed.ok) throw new Error(proposed.message)
+      const approved = approveCliPreparation(
+        store,
+        proposed.campaign,
+        proposal,
+        'approve-bind-finish',
+      )
+      if (!approved.ok) throw new Error(approved.message)
+      const claimed = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'claim-bind-finish',
+        expectedVersion: approved.campaign.version,
+        command: {
+          kind: 'claimCliPreparation',
+          preparationId: proposal.preparationId,
+          approvalId: approved.campaign.approvals[0]!.id,
+        },
+      })
+      if (!claimed.ok) throw new Error(claimed.message)
+      const preparation = claimed.campaign.cliPreparations![0]!
+      const attempt = claimed.campaign.attempts[0]!
+      const spec = cliPreparationJobSpec(claimed.campaign, preparation, attempt.id)
+      const wrongDevice = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'bind-wrong-device',
+        expectedVersion: claimed.campaign.version,
+        command: {
+          kind: 'bindCliPreparationJob',
+          attemptId: attempt.id,
+          spec: { ...spec, execution: { ...spec.execution, deviceId: 'other-device' } },
+        },
+      })
+      expect(wrongDevice.ok).toBe(false)
+      const bound = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'bind-correct',
+        expectedVersion: claimed.campaign.version,
+        command: { kind: 'bindCliPreparationJob', attemptId: attempt.id, spec },
+      })
+      if (!bound.ok) throw new Error(bound.message)
+      const boundAttempt = bound.campaign.attempts[0]!
+      const specHash = sha256(canonicalJson(spec))
+      expect(boundAttempt.cliPreparationJobSpecHash).toBe(specHash)
+      const rebound = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'bind-correct',
+        expectedVersion: claimed.campaign.version,
+        command: { kind: 'bindCliPreparationJob', attemptId: attempt.id, spec },
+      })
+      expect(rebound.ok && rebound.replayed).toBe(true)
+      const finished = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'finish-candidate',
+        expectedVersion: bound.campaign.version,
+        command: {
+          kind: 'finishCliPreparation',
+          attemptId: attempt.id,
+          uri: 'research/candidates/candidate.json',
+          artifactKind: 'cli_preparation_candidate',
+          contentHash: CONTENT_HASH,
+          validation: {
+            schema: 'research-cli-preparation-candidate-v1',
+            jobSpecHash: specHash,
+            dispatchKey: attempt.id,
+            clientDispatchKey: preparation.dispatchKey,
+            preparationId: preparation.id,
+            candidateId: preparation.candidateId,
+            taskRevisionId: preparation.taskRevisionId,
+            inputHash: preparation.inputHash,
+            configHash: preparation.configHash,
+            contentHash: CONTENT_HASH,
+            draftContentHash: `sha256:${'f'.repeat(64)}`,
+            byteLength: 22,
+            verifiedAt: Date.now(),
+          },
+        },
+      })
+      if (!finished.ok) throw new Error(finished.message)
+      expect(finished.campaign.cliPreparations![0]).toMatchObject({
+        status: 'candidate',
+        actualCost: null,
+      })
+      expect(finished.campaign.artifactVersions[0]?.kind).toBe('cli_preparation_candidate')
+      expect(finished.campaign.artifactVersions[0]?.producerTaskRevisionId).toBeUndefined()
+      expect(finished.campaign.taskRevisions[0]!.status).toBe('pending')
+      const lowerBudget = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'cannot-release-unknown-cli-reservation',
+        expectedVersion: finished.campaign.version,
+        command: { kind: 'setBudget', budget: { currency: 'USD', limit: 1 } },
+      })
+      expect(lowerBudget.ok).toBe(false)
+      if (!lowerBudget.ok) expect(lowerBudget.code).toBe('reserved_budget')
     } finally {
       store.close()
     }
