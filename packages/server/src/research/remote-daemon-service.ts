@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import type { CliPreparationAdministratorConfig } from './cli-preparation-job.ts'
+import type { FormalOciAdministratorConfig } from './formal-oci.ts'
 import { type DurableJob, JobDaemon } from './job-daemon.ts'
 import type { RunnerTrackingConfig } from './runner-tracking.ts'
 
@@ -13,6 +14,7 @@ export interface RemoteDaemonServiceConfig {
   workerArgv?: readonly string[]
   tracking?: RunnerTrackingConfig
   cliPreparation?: CliPreparationAdministratorConfig
+  formalOci?: FormalOciAdministratorConfig
   executionRuntimeMs?: number
   renewalMs?: number
 }
@@ -104,6 +106,7 @@ export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
     outputRoot: config.outputRoot,
     ...(config.tracking ? { tracking: config.tracking } : {}),
     ...(config.cliPreparation ? { cliPreparation: config.cliPreparation } : {}),
+    ...(config.formalOci ? { formalOci: config.formalOci } : {}),
     ...(config.executionRuntimeMs ? { executionRuntimeMs: config.executionRuntimeMs } : {}),
     ...(config.renewalMs ? { renewalMs: config.renewalMs } : {}),
   })
@@ -284,6 +287,7 @@ export async function runRemoteDaemonService(
           'outputRoot',
           'tracking',
           'cliPreparation',
+          'formalOci',
           'executionRuntimeMs',
           'renewalMs',
         ].includes(key),

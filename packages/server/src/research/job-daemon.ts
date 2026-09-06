@@ -18,6 +18,8 @@ import {
   type DaemonJobSpec,
   isCliPreparationJob,
 } from './cli-preparation-job.ts'
+import { type FormalOciJobSpec, isFormalOciJob } from './formal-job.ts'
+import { FormalOciAdapter, type FormalOciAdministratorConfig } from './formal-oci.ts'
 import {
   captureRunnerTracking,
   type RunnerTrackingConfig,
@@ -37,7 +39,7 @@ export type JobStatus =
   | 'cancelled'
   | 'failed'
   | 'interrupted'
-export type JobSpec = DaemonJobSpec
+export type JobSpec = DaemonJobSpec | FormalOciJobSpec
 export type {
   CliPreparationAdministratorConfig,
   CliPreparationJobSpec,
@@ -230,6 +232,10 @@ function parseCliPreparation(value: Record<string, unknown>): CliPreparationJobS
 }
 function parse(value: unknown): JobSpec {
   if (!isRecord(value)) throw new Error('invalid JobSpec')
+  if (value.version === 4) {
+    if (!isFormalOciJob(value)) throw new Error('invalid formal OCI JobSpec')
+    return value
+  }
   if (value.version === 3) return parseCliPreparation(value)
   if (
     !hasKeys(value, [
@@ -394,6 +400,7 @@ export class JobDaemon implements JobDaemonPort {
   private readonly trackingConfigJson: string | undefined
   private readonly cliPreparationConfigJson: string | undefined
   private readonly cliPreparationConfig: CliPreparationAdministratorConfig | undefined
+  private readonly formalOci: FormalOciAdapter | undefined
   private readonly db: Database
   private server: ReturnType<typeof Bun.serve> | null = null
   private endpointToken: string | null = null
@@ -413,6 +420,8 @@ export class JobDaemon implements JobDaemonPort {
     outputRoot: string
     tracking?: RunnerTrackingConfig
     cliPreparation?: CliPreparationAdministratorConfig
+    /** Linux-only administrator admission; absence means v4 formal jobs are refused. */
+    formalOci?: FormalOciAdministratorConfig
     /** Enables a deadline independent of a short, renewable v1 observation lease. */
     executionRuntimeMs?: number
     renewalMs?: number
@@ -430,6 +439,7 @@ export class JobDaemon implements JobDaemonPort {
         this.cliPreparationConfigJson,
       ) as CliPreparationAdministratorConfig
     }
+    if (opts.formalOci) this.formalOci = new FormalOciAdapter(opts.formalOci)
     mkdirSync(resolve(opts.outputRoot), { recursive: true })
     this.outputRoot = resolve(opts.outputRoot)
     const rootStat = lstatSync(this.outputRoot)
@@ -495,11 +505,16 @@ export class JobDaemon implements JobDaemonPort {
   }
   submit(input: unknown, expectedEpoch?: string): DurableJob {
     const spec = parse(input)
-    if (isCliPreparationJob(spec) && expectedEpoch === undefined)
-      throw new Error('CLI preparation submission requires an authority epoch')
+    if ((spec.version === 3 || isFormalOciJob(spec)) && expectedEpoch === undefined)
+      throw new Error('epoch-bound submission requires an authority epoch')
     if (expectedEpoch !== undefined && expectedEpoch !== this.authorityEpoch)
       throw new Error('authority epoch does not match')
-    if (!isCliPreparationJob(spec)) {
+    if (isFormalOciJob(spec)) {
+      if (spec.execution.authorityEpoch !== this.authorityEpoch)
+        throw new Error('formal OCI authority epoch does not match')
+      if (!this.formalOci) throw new Error('formal OCI is not admitted')
+      this.formalOci.validate(spec)
+    } else if (!isCliPreparationJob(spec)) {
       if (spec.trackingPolicyHash !== this.trackingPolicyHash)
         throw new Error('Tracking startup policy does not match JobSpec')
       const plan = fixedResearchTemplate(spec.templateId)
@@ -546,11 +561,13 @@ export class JobDaemon implements JobDaemonPort {
           canonical(spec.lease),
           // v1 has no approved runtime budget: configuration may tighten, never enlarge its frozen expiry.
           Math.min(
-            isCliPreparationJob(spec)
-              ? Date.now() + spec.execution.maxRuntimeMs
-              : spec.version === 2
-                ? Date.now() + spec.execution!.maxRuntimeMs
-                : spec.lease.expiresAt,
+            isFormalOciJob(spec)
+              ? Date.now() + spec.formalPlan.resources.maxRuntimeMs
+              : isCliPreparationJob(spec)
+                ? Date.now() + spec.execution.maxRuntimeMs
+                : spec.version === 2
+                  ? Date.now() + spec.execution!.maxRuntimeMs
+                  : spec.lease.expiresAt,
             this.executionRuntimeMs === undefined ? Infinity : Date.now() + this.executionRuntimeMs,
           ),
           null,
@@ -668,8 +685,11 @@ export class JobDaemon implements JobDaemonPort {
         > | null,
       )
       if (!current) return null
-      if (isCliPreparationJob(current.spec) && expectedEpoch === undefined)
-        throw new Error('CLI preparation cancellation requires an authority epoch')
+      if (
+        (current.spec.version === 3 || isFormalOciJob(current.spec)) &&
+        expectedEpoch === undefined
+      )
+        throw new Error('epoch-bound cancellation requires an authority epoch')
       if (expectedEpoch !== undefined && expectedEpoch !== this.authorityEpoch)
         throw new Error('authority epoch does not match')
       if (current.status === 'queued')
@@ -851,11 +871,14 @@ export class JobDaemon implements JobDaemonPort {
       typeof result.outputPath !== 'string'
     )
       return null
-    const plan = isCliPreparationJob(job.spec) ? null : fixedResearchTemplate(job.spec.templateId)
+    const formal = isFormalOciJob(job.spec)
+    const baseSpec = job.spec as DaemonJobSpec
+    const plan =
+      formal || isCliPreparationJob(baseSpec) ? null : fixedResearchTemplate(baseSpec.templateId)
     const expected = resolve(
       this.outputRoot,
       job.spec.dispatchKey,
-      plan ? plan.filename : 'candidate.json',
+      formal ? 'formal-receipt.json' : plan ? plan.filename : 'candidate.json',
     )
     if (result.outputPath !== expected) return null
     try {
@@ -869,15 +892,18 @@ export class JobDaemon implements JobDaemonPort {
       )
         return null
       const bytes = readFileSync(expected)
-      if (isCliPreparationJob(job.spec) && bytes.byteLength > MAX_CLI_PREPARATION_RECEIPT_BYTES)
+      if (
+        (isCliPreparationJob(baseSpec) || formal) &&
+        bytes.byteLength > MAX_CLI_PREPARATION_RECEIPT_BYTES
+      )
         return null
       const contentHash = hashBytes(bytes)
       if (contentHash !== result.contentHash) return null
-      if (isCliPreparationJob(job.spec)) {
-        if (!verifyCandidateReceipt(JSON.parse(bytes.toString()), job.spec)) return null
-      } else {
-        fixedResearchTemplate(job.spec.templateId).verify(bytes)
-        verifyTrackingBinding(bytes, job.spec)
+      if (isCliPreparationJob(baseSpec)) {
+        if (!verifyCandidateReceipt(JSON.parse(bytes.toString()), baseSpec)) return null
+      } else if (!formal) {
+        fixedResearchTemplate(baseSpec.templateId).verify(bytes)
+        verifyTrackingBinding(bytes, baseSpec)
       }
       return { contentHash, outputPath: expected }
     } catch {
@@ -905,7 +931,7 @@ export class JobDaemon implements JobDaemonPort {
     // A CLI may exit while a deliberately detached descendant survives with all
     // standard streams closed. Keep the receipt durable, then terminate the
     // verified job group before treating that receipt as a completed authority run.
-    if (completion && isCliPreparationJob(completion.spec)) this.recoverCleanup(key)
+    if (completion && completion.spec.version === 3) this.recoverCleanup(key)
     return completion
   }
   private authorized(request: Request) {
