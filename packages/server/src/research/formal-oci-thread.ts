@@ -51,16 +51,19 @@ export function verifyFormalReceiptInThread(
   config: FormalOciAdministratorConfig,
   job: FormalOciJobSpec,
   directory: string,
-  receipt: Uint8Array,
+  receipt: Uint8Array | undefined,
+  cleanup = false,
+  factory: FormalThreadFactory = (data) =>
+    new Worker(new URL('./formal-oci-worker.ts', import.meta.url), { workerData: data }),
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    const worker = new Worker(new URL('./formal-oci-worker.ts', import.meta.url), {
-      workerData: { config, job, directory, receipt },
-    })
+    const worker = factory({ config, job, directory, receipt, cleanup })
+    const timeout = setTimeout(() => done(false), 40_000)
     let settled = false
     const done = (value: boolean) => {
       if (!settled) {
         settled = true
+        clearTimeout(timeout)
         void worker.terminate().catch(() => {})
         resolve(value)
       }
@@ -78,4 +81,12 @@ export function verifyFormalReceiptInThread(
     worker.once('error', () => done(false))
     worker.once('exit', () => done(false))
   })
+}
+
+export function stopFormalOciInThread(
+  config: FormalOciAdministratorConfig,
+  job: FormalOciJobSpec,
+  factory?: FormalThreadFactory,
+) {
+  return verifyFormalReceiptInThread(config, job, '', undefined, true, factory)
 }

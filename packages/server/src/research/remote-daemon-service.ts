@@ -311,7 +311,7 @@ export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
           const valid = await daemon.verifyFormalReceipt(
             job.spec,
             `${config.outputRoot}/${body.dispatchKey}`,
-            daemon.receipt(body.dispatchKey),
+            await daemon.receipt(body.dispatchKey),
           )
           return Response.json({ authorityId, valid }, { headers: authorityHeaders() })
         } catch {
@@ -341,7 +341,7 @@ export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
       }
       if (request.method === 'GET' && operation === 'receipt') {
         try {
-          return new Response(daemon.receipt(key!), {
+          return new Response(await daemon.receipt(key!), {
             headers: { 'content-type': 'application/json', ...authorityHeaders() },
           })
         } catch {

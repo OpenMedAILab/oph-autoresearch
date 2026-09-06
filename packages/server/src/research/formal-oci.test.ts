@@ -5,7 +5,12 @@ import { join } from 'node:path'
 import type { FormalExecutionPlan } from '@oph-autoresearch/core'
 import { cliPreparationExecutableHash } from './cli-preparation-job.ts'
 import { type FormalOciJobSpec, formalExecutionPlanHash } from './formal-job.ts'
-import { FormalOciAdapter, type PodmanCommand, probeRootlessPodman } from './formal-oci.ts'
+import {
+  FormalOciAdapter,
+  formalEvaluatorImplementationHash,
+  type PodmanCommand,
+  probeRootlessPodman,
+} from './formal-oci.ts'
 
 function hash(value: Uint8Array | string) {
   return `sha256:${new Bun.CryptoHasher('sha256').update(value).digest('hex')}`
@@ -87,7 +92,7 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
       dataManifestHash: hash(await Bun.file(manifest).bytes()),
       labelSetContentHash: hash(await Bun.file(labels).bytes()),
       trustedEvaluatorId: 'binary-classification-v1',
-      trustedEvaluatorHash: hash('trusted-evaluator'),
+      trustedEvaluatorHash: formalEvaluatorImplementationHash(),
       resources: {
         maxRuntimeMs: 10_000,
         cpu: 1,
@@ -111,6 +116,17 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
       command,
       'linux',
     )
+    expect(
+      () =>
+        new FormalOciAdapter(
+          {
+            ...adapter.snapshotConfig(),
+            evaluators: [{ id: 'binary-classification-v1', hash: hash('invented evaluator') }],
+          },
+          command,
+          'linux',
+        ),
+    ).toThrow('implementation identity')
     await adapter.registerCandidate({
       candidateArtifactId: plan.candidateArtifactId,
       code: await Bun.file(mainPy).bytes(),

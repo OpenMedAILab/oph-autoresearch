@@ -283,6 +283,15 @@ export class FormalOciAdapter {
       new Set(config.labels.map((item) => item.labelSetContentHash)).size !== config.labels.length
     )
       throw new Error('formal OCI administrator registry is incomplete')
+    if (
+      !config.evaluators.length ||
+      config.evaluators.some(
+        (item) =>
+          item.id !== 'binary-classification-v1' ||
+          item.hash !== formalEvaluatorImplementationHash(),
+      )
+    )
+      throw new Error('formal evaluator implementation identity does not match')
     for (const item of config.candidates) {
       if (!ID.test(item.candidateArtifactId)) throw new Error('invalid formal candidate registry')
       safeFile(item.mainPy)
@@ -433,23 +442,9 @@ export class FormalOciAdapter {
     )
   }
   stopAndConfirm(job: FormalOciJobSpec) {
-    const before = this.inspect(job.execution.containerName)
-    if (before.exitCode !== 0) return false
-    const state = new TextDecoder().decode(before.stdout).trim().split(/\s+/)
-    if (state.length !== 2 || state[0] !== job.formalPlan.ociImageDigest) return false
-    if (['exited', 'stopped'].includes(state[1]!)) return true
-    if (!['running', 'created', 'paused'].includes(state[1]!)) return false
-    const stopped = this.command.run(['stop', '--time', '1', job.execution.containerName], 10_000)
-    if (stopped.exitCode !== 0) return false
-    const inspected = this.inspect(job.execution.containerName)
-    if (inspected.exitCode !== 0) return false
-    const after = new TextDecoder().decode(inspected.stdout).trim().split(/\s+/)
-    return (
-      after.length === 2 &&
-      after[0] === job.formalPlan.ociImageDigest &&
-      ['exited', 'stopped'].includes(after[1]!)
-    )
+    return stopContainer(this.command, job)
   }
+
   run(job: FormalOciJobSpec, outputDirectory: string) {
     const result = this.command.run(
       this.argv(job, outputDirectory),
@@ -548,4 +543,54 @@ export class FormalOciAdapter {
       return false
     }
   }
+}
+
+function stopContainer(command: PodmanCommand, job: FormalOciJobSpec) {
+  const before = command.run(
+    ['inspect', '--format', '{{.ImageDigest}} {{.State.Status}}', job.execution.containerName],
+    10_000,
+  )
+  if (before.exitCode !== 0) return false
+  const state = new TextDecoder().decode(before.stdout).trim().split(/\s+/)
+  if (state.length !== 2 || state[0] !== job.formalPlan.ociImageDigest) return false
+  if (['exited', 'stopped'].includes(state[1]!)) return true
+  if (!['running', 'created', 'paused'].includes(state[1]!)) return false
+  const stopped = command.run(['stop', '--time', '1', job.execution.containerName], 10_000)
+  if (stopped.exitCode !== 0) return false
+  const inspected = command.run(
+    ['inspect', '--format', '{{.ImageDigest}} {{.State.Status}}', job.execution.containerName],
+    10_000,
+  )
+  if (inspected.exitCode !== 0) return false
+  const after = new TextDecoder().decode(inspected.stdout).trim().split(/\s+/)
+  return (
+    after.length === 2 &&
+    after[0] === job.formalPlan.ociImageDigest &&
+    ['exited', 'stopped'].includes(after[1]!)
+  )
+}
+/** Cleanup must not depend on candidate/data files still existing. */
+export function stopFormalOciContainer(
+  config: FormalOciAdministratorConfig,
+  job: FormalOciJobSpec,
+) {
+  const executable = safeFile(config.podmanExecutable)
+  if (cliPreparationExecutableHash(executable) !== config.podmanBinaryHash) return false
+  const command = systemPodmanCommand(executable)
+  probeRootlessPodman(command)
+  return stopContainer(command, job)
+}
+
+/** Identity is derived from the actual trusted implementation, never an arbitrary registry label. */
+export function formalEvaluatorImplementationHash() {
+  return bytesHash(
+    Buffer.from(
+      [
+        FormalOciAdapter.prototype.evaluate.toString(),
+        readBoundedRegular.toString(),
+        bytesHash.toString(),
+        canonical.toString(),
+      ].join('\n'),
+    ),
+  )
 }

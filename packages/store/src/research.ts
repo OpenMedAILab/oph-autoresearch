@@ -912,6 +912,8 @@ export function hasSupportedReleaseReview(
   artifactVersionIds: readonly string[],
 ): boolean {
   const expectedIds = [...artifactVersionIds].sort()
+  if (!expectedIds.length || !expectedIds.every((id) => hasExactReleasableArtifact(campaign, id)))
+    return false
   const derived = withDerivedTaskStatuses(campaign)
   return (derived.modelReviews ?? []).some((review) => {
     if (
@@ -961,7 +963,13 @@ function hasExactReleasableArtifact(
     (candidate) => candidate.id === artifact.producerTaskRevisionId,
   )
   const attempt = campaign.attempts.find((candidate) => candidate.id === artifact.producerAttemptId)
-  if (!task || !attempt) return false
+  if (
+    !task ||
+    !attempt ||
+    attempt.cancelRequestedAt != null ||
+    attempt.resultDisposition === 'quarantined'
+  )
+    return false
   if (artifact.kind === 'formal_execution_receipt') {
     const dispatch = (campaign.formalExecutionDispatches ?? []).find(
       (candidate) => candidate.attemptId === attempt.id,

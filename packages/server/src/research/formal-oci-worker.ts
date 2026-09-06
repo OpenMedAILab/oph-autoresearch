@@ -1,12 +1,17 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import type { FormalOciJobSpec } from './formal-job.ts'
-import { FormalOciAdapter, type FormalOciAdministratorConfig } from './formal-oci.ts'
+import {
+  FormalOciAdapter,
+  type FormalOciAdministratorConfig,
+  stopFormalOciContainer,
+} from './formal-oci.ts'
 
 type Input = {
   config: FormalOciAdministratorConfig
   job: FormalOciJobSpec
   directory: string
   receipt?: Uint8Array
+  cleanup?: boolean
 }
 
 const port = parentPort
@@ -14,6 +19,10 @@ if (!port) throw new Error('formal OCI worker requires a parent port')
 
 try {
   const input = workerData as Input
+  if (input.cleanup) {
+    port.postMessage({ ok: true, valid: stopFormalOciContainer(input.config, input.job) })
+    process.exit(0)
+  }
   const adapter = new FormalOciAdapter(input.config)
   if (input.receipt) {
     port.postMessage({

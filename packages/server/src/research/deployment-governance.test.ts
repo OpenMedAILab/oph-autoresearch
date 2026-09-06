@@ -172,6 +172,9 @@ test('daemon-disabled deployment rejects both CLI preparation authority injectio
         }),
       ).toThrow('Deployment launch does not match')
     }
+    expect(() => serve({ ...base, researchFormalExecution: [{ authority } as never] })).toThrow(
+      'Deployment launch does not match',
+    )
     expect(authorityAccessed).toBe(false)
   } finally {
     store.close()

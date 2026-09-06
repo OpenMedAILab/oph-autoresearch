@@ -1,6 +1,16 @@
 import { Database } from 'bun:sqlite'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+} from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import type {
   ResearchAuthorityClosureProof,
@@ -20,7 +30,7 @@ import {
 } from './cli-preparation-job.ts'
 import { type FormalOciJobSpec, isFormalOciJob } from './formal-job.ts'
 import { FormalOciAdapter, type FormalOciAdministratorConfig } from './formal-oci.ts'
-import { verifyFormalReceiptInThread } from './formal-oci-thread.ts'
+import { stopFormalOciInThread, verifyFormalReceiptInThread } from './formal-oci-thread.ts'
 import {
   captureRunnerTracking,
   type RunnerTrackingConfig,
@@ -403,6 +413,7 @@ export class JobDaemon implements JobDaemonPort {
   private readonly cliPreparationConfig: CliPreparationAdministratorConfig | undefined
   private formalOciConfigJson: string | undefined
   private formalOci: FormalOciAdapter | undefined
+  private readonly formalCleanupTasks = new Set<string>()
   private readonly db: Database
   private server: ReturnType<typeof Bun.serve> | null = null
   private endpointToken: string | null = null
@@ -469,6 +480,10 @@ export class JobDaemon implements JobDaemonPort {
       'CREATE TABLE IF NOT EXISTS local_jobs (dispatch_key TEXT PRIMARY KEY, spec TEXT NOT NULL, spec_hash TEXT NOT NULL, status TEXT NOT NULL, output_path TEXT, content_hash TEXT, error TEXT)',
     )
     const columns = this.db.query('PRAGMA table_info(local_jobs)').all() as { name: string }[]
+    if (!columns.some((c) => c.name === 'formal_cleanup_confirmed'))
+      this.db.exec(
+        'ALTER TABLE local_jobs ADD COLUMN formal_cleanup_confirmed INTEGER NOT NULL DEFAULT 0',
+      )
     if (!columns.some((c) => c.name === 'worker_pid'))
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_pid INTEGER')
     if (!columns.some((c) => c.name === 'runtime_lease'))
@@ -756,6 +771,14 @@ export class JobDaemon implements JobDaemonPort {
         this.cancel(candidate.dispatch_key, this.authorityEpoch)
       if (candidate.status === 'cancel_requested' || candidate.status === 'completion_requested')
         this.recoverCleanup(candidate.dispatch_key)
+      const formalJob = this.query(candidate.dispatch_key)
+      if (
+        formalJob &&
+        isFormalOciJob(formalJob.spec) &&
+        (candidate.status === 'cancel_requested' || candidate.status === 'completion_requested') &&
+        !this.formalCleanupConfirmed(candidate.dispatch_key)
+      )
+        continue
       if (!candidate.worker_pid || !candidate.worker_start_identity) continue
       const identity = this.processIdentityState(
         candidate.worker_pid,
@@ -882,7 +905,7 @@ export class JobDaemon implements JobDaemonPort {
   private async verifiedOutput(
     job: DurableJob,
     result: unknown,
-  ): Promise<{ contentHash: string; outputPath: string } | null> {
+  ): Promise<{ contentHash: string; outputPath: string; bytes: Uint8Array } | null> {
     if (
       !isRecord(result) ||
       !hasKeys(result, ['contentHash', 'outputPath']) ||
@@ -910,7 +933,25 @@ export class JobDaemon implements JobDaemonPort {
         !realpathSync(expected).startsWith(`${realDirectory}${sep}`)
       )
         return null
-      const bytes = readFileSync(expected)
+      const descriptor = openSync(
+        expected,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      )
+      let bytes: Buffer
+      try {
+        const opened = fstatSync(descriptor)
+        if (!opened.isFile() || opened.nlink !== 1 || opened.size > 1_000_000) return null
+        bytes = Buffer.alloc(opened.size)
+        for (let offset = 0; offset < bytes.length; ) {
+          const count = readSync(descriptor, bytes, offset, bytes.length - offset, offset)
+          if (!count) return null
+          offset += count
+        }
+        const after = fstatSync(descriptor)
+        if (after.size !== opened.size || after.nlink !== 1) return null
+      } finally {
+        closeSync(descriptor)
+      }
       if (
         (isCliPreparationJob(baseSpec) || formal) &&
         bytes.byteLength > MAX_CLI_PREPARATION_RECEIPT_BYTES
@@ -927,7 +968,7 @@ export class JobDaemon implements JobDaemonPort {
         fixedResearchTemplate(baseSpec.templateId).verify(bytes)
         verifyTrackingBinding(bytes, baseSpec)
       }
-      return { contentHash, outputPath: expected }
+      return { contentHash, outputPath: expected, bytes }
     } catch {
       return null
     }
@@ -979,7 +1020,8 @@ export class JobDaemon implements JobDaemonPort {
     // A CLI may exit while a deliberately detached descendant survives with all
     // standard streams closed. Keep the receipt durable, then terminate the
     // verified job group before treating that receipt as a completed authority run.
-    if (completion && completion.spec.version === 3) this.recoverCleanup(key)
+    if (completion && (completion.spec.version === 3 || isFormalOciJob(completion.spec)))
+      this.recoverCleanup(key)
     return completion
   }
   private authorized(request: Request) {
@@ -1020,15 +1062,15 @@ export class JobDaemon implements JobDaemonPort {
         this.cancel(job.spec.dispatchKey, this.authorityEpoch)
     }
   }
-  receipt(dispatchKey: string): Uint8Array {
+  async receipt(dispatchKey: string): Promise<Uint8Array> {
     const job = this.query(dispatchKey)
-    if (
-      !job ||
-      job.status !== 'completed' ||
-      !this.verifiedOutput(job, { contentHash: job.contentHash, outputPath: job.outputPath })
-    )
-      throw new Error('Verified daemon receipt unavailable')
-    return readFileSync(job.outputPath!)
+    if (!job || job.status !== 'completed') throw new Error('Verified daemon receipt unavailable')
+    const verified = await this.verifiedOutput(job, {
+      contentHash: job.contentHash,
+      outputPath: job.outputPath,
+    })
+    if (!verified) throw new Error('Verified daemon receipt unavailable')
+    return verified.bytes
   }
   private processIdentityState(pid: number, recorded: string): ProcessIdentityState {
     const current = this.processProbe.startIdentity(pid)
@@ -1083,6 +1125,17 @@ export class JobDaemon implements JobDaemonPort {
    * is intentionally left pending: a PGID is only safe while its recorded leader
    * still proves ownership.
    */
+  private formalCleanupConfirmed(dispatchKey: string): boolean {
+    return (
+      (
+        this.db
+          .query(
+            'SELECT formal_cleanup_confirmed AS confirmed FROM local_jobs WHERE dispatch_key=?',
+          )
+          .get(dispatchKey) as { confirmed: number } | null
+      )?.confirmed === 1
+    )
+  }
   private recoverCleanup(dispatchKey: string) {
     let job = this.query(dispatchKey)
     if (job?.status !== 'cancel_requested' && job?.status !== 'completion_requested') return
@@ -1097,7 +1150,24 @@ export class JobDaemon implements JobDaemonPort {
     }
     const startedAt = job.cleanupStartedAt
     if (startedAt === undefined) return
-    if (isFormalOciJob(job.spec) && !this.formalOci?.stopAndConfirm(job.spec)) return
+    if (isFormalOciJob(job.spec) && !this.formalCleanupConfirmed(dispatchKey)) {
+      if (!this.formalCleanupTasks.has(dispatchKey) && this.formalOciConfigJson) {
+        this.formalCleanupTasks.add(dispatchKey)
+        const frozenHash = job.specHash
+        void stopFormalOciInThread(JSON.parse(this.formalOciConfigJson), job.spec)
+          .then((confirmed) => {
+            if (!this.closed && confirmed)
+              this.db
+                .query(
+                  "UPDATE local_jobs SET formal_cleanup_confirmed=1 WHERE dispatch_key=? AND spec_hash=? AND status IN ('cancel_requested','completion_requested')",
+                )
+                .run(dispatchKey, frozenHash)
+          })
+          .catch(() => {})
+          .finally(() => this.formalCleanupTasks.delete(dispatchKey))
+      }
+      return
+    }
     const remainingMs = startedAt + 250 - Date.now()
     const existing = this.escalationTimers.get(dispatchKey)
     if (remainingMs <= 0) {

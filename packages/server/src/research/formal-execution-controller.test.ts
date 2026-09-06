@@ -11,6 +11,8 @@ import {
   createConversation,
   createResearchCampaign,
   getResearchCampaign,
+  hasSupportedReleaseReview,
+  reviewSourceContextHash,
   Store,
   upsertWorkspace,
 } from '@oph-autoresearch/store'
@@ -21,6 +23,7 @@ import {
 } from './formal-execution-controller.ts'
 import type { DurableJob } from './job-daemon.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
+import { installSupportedReviewFixture } from './supported-review.fixture.ts'
 
 const hash = (value: string | Uint8Array) => sha256(value)
 const epoch = 'fixture_epoch_0123456789'
@@ -110,7 +113,6 @@ function route(authority: FixtureAuthority): FormalExecutionRoute {
   return {
     id: 'formal-route',
     profileId: 'fixture-profile',
-    workspaceBindingHash: bindingHash,
     connectionHash,
     remoteRoot: '/srv/formal',
     authorityId: 'fixture-authority',
@@ -307,6 +309,35 @@ test('formal controller persists a frozen v4 attempt, polls to receipt, and neve
       contentHash: artifact.contentHash,
       formalPlanHash: hash(canonicalJson(seeded.frozen)),
     })
+    const reviewed = installSupportedReviewFixture(store, campaign)
+    const scientific = reviewed.modelReviews![0]!
+    scientific.artifactVersionIds = [artifact.id]
+    scientific.text = JSON.stringify({
+      decision: 'supported',
+      claims: [
+        {
+          claim: 'This local fixture supports only the validated aggregate result.',
+          artifactVersionIds: [artifact.id],
+        },
+      ],
+      limitations: ['No external scientific review was performed.'],
+    })
+    scientific.contentHash = hash(scientific.text)
+    scientific.sourceContextVersion = 2
+    scientific.sourceContextHash = reviewSourceContextHash(reviewed, 2)
+    expect(hasSupportedReleaseReview(reviewed, [artifact.id])).toBe(true)
+    const missing = structuredClone(reviewed)
+    delete missing.artifactVersions.find((item) => item.id === artifact.id)!.validation
+    expect(hasSupportedReleaseReview(missing, [artifact.id])).toBe(false)
+    const mismatched = structuredClone(reviewed)
+    const validation = mismatched.artifactVersions.find((item) => item.id === artifact.id)!
+      .validation!
+    Object.assign(validation, { jobSpecHash: hash('another execution') })
+    expect(hasSupportedReleaseReview(mismatched, [artifact.id])).toBe(false)
+    const quarantined = structuredClone(reviewed)
+    quarantined.attempts.find((item) => item.id === first.attemptId)!.resultDisposition =
+      'quarantined'
+    expect(hasSupportedReleaseReview(quarantined, [artifact.id])).toBe(false)
   } finally {
     controller.close()
     store.close()

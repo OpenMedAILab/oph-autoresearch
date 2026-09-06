@@ -198,7 +198,9 @@ export async function runResearchJobWorker(args: readonly string[]) {
             result: { contentHash: hashBytes(receipt), outputPath: path },
           }),
         })
-        return finish.ok ? 0 : 6
+        if (!finish.ok) return 6
+        // Keep the owned group leader until the authority confirms OCI and process cleanup.
+        return await new Promise<never>(() => {})
       } catch {
         return 12
       }

@@ -752,7 +752,8 @@ export class FormalExecutionController {
     return (
       route.id === binding.routeId &&
       route.profileId === binding.profileId &&
-      route.workspaceBindingHash === binding.workspaceBindingHash &&
+      (route.workspaceBindingHash === undefined ||
+        route.workspaceBindingHash === binding.workspaceBindingHash) &&
       route.connectionHash === binding.connectionHash &&
       route.remoteRoot === binding.remoteRoot &&
       route.authorityId === binding.authorityId &&
