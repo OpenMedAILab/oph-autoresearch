@@ -135,6 +135,7 @@ export interface ResearchApprovalScope {
   controllerLimits?: ResearchControllerLimits
   costEvidenceId?: string
   costEvidenceHash?: string
+  costResearchTitle?: string
   costSubjectLabel?: string
   costDescription?: string
   costSubject?: ResearchCostSubject
