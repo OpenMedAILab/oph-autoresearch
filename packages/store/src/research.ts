@@ -2387,9 +2387,13 @@ function nextCampaign(
       const dispatch = (campaign.formalExecutionDispatches ?? []).find(
         (item) => item.attemptId === attempt?.id,
       )
+      const approval = campaign.approvals.find((item) => item.id === dispatch?.approvalId)
       if (
         !attempt ||
         !dispatch ||
+        !approval ||
+        approval.status === 'revoked' ||
+        approval.consumedBy !== `formal-execution:${dispatch.id}` ||
         !currentFormalObserver(attempt, command.observer, now) ||
         attempt.cancelRequestedAt !== null ||
         !SHA256.test(command.contentHash) ||

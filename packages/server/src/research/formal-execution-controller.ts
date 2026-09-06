@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { constants } from 'node:fs'
+import { lstat, mkdir, open, realpath } from 'node:fs/promises'
+import { join, posix, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type {
   FormalExecutionAuthorityBinding,
@@ -16,9 +17,24 @@ const HASH = /^sha256:[a-f0-9]{64}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const IDEMPOTENCY = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,255}$/
 const EPOCH = /^[A-Za-z0-9_-]{16,128}$/
-const ABSOLUTE_REMOTE_ROOT = /^\/(?:[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*)?$/
 const OBSERVER_LEASE_MS = 30_000
 const DEFAULT_POLL_INTERVAL_MS = 500
+const MAX_RECEIPT_BYTES = 1024 * 1024
+
+function canonicalRemoteRoot(value: string) {
+  return (
+    value.startsWith('/') &&
+    value.length <= 4_096 &&
+    [...value].every((character) => {
+      const code = character.codePointAt(0)!
+      return code >= 0x20 && code !== 0x7f
+    }) &&
+    posix.normalize(value) === value
+  )
+}
+function within(root: string, path: string) {
+  return root === '/' ? path.startsWith('/') : path.startsWith(`${root}/`)
+}
 
 export interface FormalExecutionScope {
   workspaceId: string
@@ -107,7 +123,7 @@ export class FormalExecutionController {
           route.admission?.schema !== 'formal-rootless-oci-admission-v1' ||
           route.admission.rootlessCgroupV2 !== true ||
           ![route.id, route.profileId, route.authorityId].every((value) => ID.test(value)) ||
-          !ABSOLUTE_REMOTE_ROOT.test(route.remoteRoot) ||
+          !canonicalRemoteRoot(route.remoteRoot) ||
           ![route.connectionHash, route.admissionEvidenceHash, route.admission.evidenceHash].every(
             (value) => HASH.test(value),
           ) ||
@@ -423,21 +439,78 @@ export class FormalExecutionController {
     attemptId: string,
     receipt: Uint8Array,
   ): Promise<{ uri: string; hash: string }> {
+    if (receipt.byteLength > MAX_RECEIPT_BYTES)
+      throw new FormalExecutionControlError('正式执行回执超过 1 MiB 上限')
     const root = resolve(scope.workspaceRoot)
-    const directory = resolve(root, '.oph', 'research', scope.campaignId, attemptId)
-    if (!directory.startsWith(root.endsWith('/') ? root : `${root}/`))
-      throw new FormalExecutionControlError('回执目录无效')
-    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const rootStat = await lstat(root)
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
+      throw new FormalExecutionControlError('工作区根目录不安全')
+    const rootRealpath = await realpath(root)
+    let directory = rootRealpath
+    for (const segment of ['.oph', 'research', scope.campaignId, attemptId]) {
+      const next = join(directory, segment)
+      try {
+        await mkdir(next, { mode: 0o700 })
+      } catch (error: unknown) {
+        if (!(error && typeof error === 'object' && (error as { code?: string }).code === 'EEXIST'))
+          throw error
+      }
+      const stat = await lstat(next)
+      if (
+        !stat.isDirectory() ||
+        stat.isSymbolicLink() ||
+        !within(rootRealpath, await realpath(next))
+      )
+        throw new FormalExecutionControlError('正式执行回执目录不安全')
+      directory = next
+    }
     const file = join(directory, 'formal-receipt.json')
     const hash = sha256(receipt)
     try {
-      await writeFile(file, receipt, { flag: 'wx', mode: 0o600 })
+      const handle = await open(
+        file,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600,
+      )
+      try {
+        const stat = await handle.stat()
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size !== 0)
+          throw new FormalExecutionControlError('正式执行回执文件不安全')
+        await handle.writeFile(receipt)
+        if ((await handle.stat()).size !== receipt.byteLength)
+          throw new FormalExecutionControlError('正式执行回执写入不完整')
+      } finally {
+        await handle.close()
+      }
     } catch (error: unknown) {
       if (!(error && typeof error === 'object' && (error as { code?: string }).code === 'EEXIST'))
         throw error
       // A retry may reuse only the exact immutable receipt; a different byte sequence is
       // quarantined by refusing to overwrite it.
-      if (sha256(await readFile(file)) !== hash)
+      const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+      let existing: Uint8Array
+      try {
+        const stat = await handle.stat()
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size < 1 || stat.size > MAX_RECEIPT_BYTES)
+          throw new FormalExecutionControlError('已有正式执行回执文件不安全')
+        existing = new Uint8Array(stat.size)
+        let offset = 0
+        while (offset < existing.byteLength) {
+          const { bytesRead } = await handle.read(
+            existing,
+            offset,
+            existing.byteLength - offset,
+            offset,
+          )
+          if (bytesRead === 0) throw new FormalExecutionControlError('已有正式执行回执在读取时变化')
+          offset += bytesRead
+        }
+        if ((await handle.stat()).size !== existing.byteLength)
+          throw new FormalExecutionControlError('已有正式执行回执在读取时变化')
+      } finally {
+        await handle.close()
+      }
+      if (sha256(existing!) !== hash)
         throw new FormalExecutionControlError('已有回执与 authority 回执哈希不一致')
     }
     return { uri: pathToFileURL(file).toString(), hash }
@@ -466,6 +539,7 @@ export class FormalExecutionController {
   ) {
     if (this.closed || this.observing.has(attemptId)) return
     this.observing.add(attemptId)
+    let resume = false
     try {
       let deadline = Date.now() + 30_000
       while (!this.closed && Date.now() < deadline) {
@@ -498,23 +572,43 @@ export class FormalExecutionController {
             return
           }
           if (first) {
-            const beforeStage = await this.fresh(scope, attemptId, route, held)
-            if (!beforeStage) return
-            await this.stageCandidate(route, held.spec.formalPlan, beforeStage.campaign, held.epoch)
-            if (!(await this.fresh(scope, attemptId, route, held))) return
-            try {
-              await route.authority.submit(held.spec, held.epoch)
-            } catch {
-              // Lost response is deliberately resolved by query below with this same dispatch key.
+            const beforeDispatch = await this.fresh(scope, attemptId, route, held, true)
+            if (!beforeDispatch) return
+            if (beforeDispatch.attempt.cancelRequestedAt !== null) {
+              // A persisted cancellation can survive a process restart before the first send.
+              // It is never allowed to stage or submit a new job.
+              await route.authority.cancel(attemptId, held.epoch)
+            } else {
+              const beforeStage = await this.fresh(scope, attemptId, route, held)
+              if (!beforeStage) return
+              await this.stageCandidate(
+                route,
+                held.spec.formalPlan,
+                beforeStage.campaign,
+                held.epoch,
+              )
+              if (!(await this.fresh(scope, attemptId, route, held))) return
+              try {
+                await route.authority.submit(held.spec, held.epoch)
+              } catch {
+                // Lost response is deliberately resolved by query below with this same dispatch key.
+              }
+              if (!(await this.fresh(scope, attemptId, route, held))) return
+              this.mutate(scope, `ack-formal:${attemptId}:${held.observer.generation}`, {
+                kind: 'acknowledgeFormalExecutionDispatch',
+                attemptId,
+                instanceId: held.observer.instanceId,
+                generation: held.observer.generation,
+                expectedEpoch: held.epoch,
+              })
             }
-            if (!(await this.fresh(scope, attemptId, route, held))) return
-            this.mutate(scope, `ack-formal:${attemptId}:${held.observer.generation}`, {
-              kind: 'acknowledgeFormalExecutionDispatch',
-              attemptId,
-              instanceId: held.observer.instanceId,
-              generation: held.observer.generation,
-              expectedEpoch: held.epoch,
-            })
+          }
+          const beforeQuery = await this.fresh(scope, attemptId, route, held, true)
+          if (!beforeQuery) return
+          if (beforeQuery.attempt.cancelRequestedAt !== null) {
+            // Repeat the idempotent authority cancellation on every recovery pass. A restarted
+            // controller must not merely observe a still-running container forever.
+            await route.authority.cancel(attemptId, held.epoch)
           }
           const job = await route.authority.query(attemptId, held.epoch)
           const current = await this.fresh(scope, attemptId, route, held, true)
@@ -523,6 +617,7 @@ export class FormalExecutionController {
             !job ||
             ['queued', 'running', 'cancel_requested', 'completion_requested'].includes(job.status)
           ) {
+            resume = true
             await Bun.sleep(this.pollIntervalMs)
             continue
           }
@@ -534,6 +629,7 @@ export class FormalExecutionController {
               status: job.status as 'cancelled' | 'failed' | 'interrupted',
               error: job.error ?? `authority reported ${job.status}`,
             })
+            resume = false
             return
           }
           if (job.status === 'completed' && current.attempt.cancelRequestedAt !== null) {
@@ -545,6 +641,7 @@ export class FormalExecutionController {
               error: 'Authority completed after cancellation; result quarantined',
               lateCompleted: true,
             })
+            resume = false
             return
           }
           if (job.status !== 'completed' || !job.contentHash) {
@@ -552,17 +649,47 @@ export class FormalExecutionController {
             return
           }
           const receipt = await route.authority.receipt(attemptId, held.epoch)
-          if (!(await this.fresh(scope, attemptId, route, held))) return
+          if (!(await this.fresh(scope, attemptId, route, held))) {
+            if (
+              this.campaign(scope).attempts.find((item) => item.id === attemptId)
+                ?.cancelRequestedAt !== null
+            ) {
+              resume = true
+              await Bun.sleep(this.pollIntervalMs)
+              continue
+            }
+            return
+          }
           const verified = await route.authority.verifyReceipt(held.spec, receipt)
           // Receipt I/O and verification can be slow. Reacquire current state before it is
           // admitted so cancellation, revocation, route drift, or a newer observer wins.
-          if (!(await this.fresh(scope, attemptId, route, held))) return
+          if (!(await this.fresh(scope, attemptId, route, held))) {
+            if (
+              this.campaign(scope).attempts.find((item) => item.id === attemptId)
+                ?.cancelRequestedAt !== null
+            ) {
+              resume = true
+              await Bun.sleep(this.pollIntervalMs)
+              continue
+            }
+            return
+          }
           if (sha256(receipt) !== job.contentHash || !verified) {
             await this.markUnknown(scope, attemptId, held)
             return
           }
           const saved = await this.receiptFile(scope, attemptId, receipt)
-          if (!(await this.fresh(scope, attemptId, route, held))) return
+          if (!(await this.fresh(scope, attemptId, route, held))) {
+            if (
+              this.campaign(scope).attempts.find((item) => item.id === attemptId)
+                ?.cancelRequestedAt !== null
+            ) {
+              resume = true
+              await Bun.sleep(this.pollIntervalMs)
+              continue
+            }
+            return
+          }
           this.mutate(scope, `finish-formal:${attemptId}:${held.observer.generation}`, {
             kind: 'finishFormalExecution',
             attemptId,
@@ -571,14 +698,23 @@ export class FormalExecutionController {
             contentHash: saved.hash,
             receiptHash: saved.hash,
           })
+          resume = false
           return
         } catch {
           await this.markUnknown(scope, attemptId, held)
-          return
+          // A transient transport error is not a terminal fact. Continue query-only recovery
+          // with the same frozen key and never reconstruct the submission.
+          resume = true
+          await Bun.sleep(this.pollIntervalMs)
         }
       }
     } finally {
       this.observing.delete(attemptId)
+      if (resume && !this.closed) {
+        const attempt = this.campaign(scope).attempts.find((item) => item.id === attemptId)
+        if (attempt && ['running', 'unknown'].includes(attempt.status))
+          setTimeout(() => this.startObservation(scope, attemptId, route), this.pollIntervalMs)
+      }
     }
   }
   private routeMatches(

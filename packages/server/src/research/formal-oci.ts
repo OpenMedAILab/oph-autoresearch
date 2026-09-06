@@ -273,7 +273,6 @@ export class FormalOciAdapter {
     if (cliPreparationExecutableHash(executable) !== config.podmanBinaryHash)
       throw new Error('admitted Podman binary changed')
     if (
-      !config.candidates.length ||
       !config.datasets.length ||
       !config.labels.length ||
       !config.evaluators.length ||

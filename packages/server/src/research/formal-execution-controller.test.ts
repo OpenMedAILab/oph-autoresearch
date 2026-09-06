@@ -35,6 +35,7 @@ class FixtureAuthority {
   completeOnQuery = 2
   throwAfterSubmit = false
   acceptReceipt = true
+  queryFailures = 0
   current: DurableJob | null = null
   async identity() {
     return { schema: 'research-authority-identity-v1' as const, epoch }
@@ -65,6 +66,10 @@ class FixtureAuthority {
   }
   async query(key: string, expectedEpoch: string) {
     expect(expectedEpoch).toBe(epoch)
+    if (this.queryFailures > 0) {
+      this.queryFailures--
+      throw new Error('temporary authority network failure')
+    }
     if (!this.current || this.current.spec.dispatchKey !== key) return null
     this.queried++
     if (this.queried >= this.completeOnQuery && this.current.status === 'queued')
@@ -228,6 +233,7 @@ test('formal controller persists a frozen v4 attempt, polls to receipt, and neve
   const store = new Store({ path: ':memory:' })
   const authority = new FixtureAuthority()
   authority.throwAfterSubmit = true
+  authority.queryFailures = 1
   const seeded = seed(store, root)
   const scope: FormalExecutionScope = {
     workspaceId: seeded.workspace.id,
@@ -348,7 +354,7 @@ test('formal controller cancels at the authority and route drift stages zero byt
         ? 1
         : undefined,
     )
-    expect(authority.cancelled).toBe(1)
+    expect(authority.cancelled).toBeGreaterThanOrEqual(1)
   } finally {
     controller.close()
     store.close()

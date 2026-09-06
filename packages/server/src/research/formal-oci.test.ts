@@ -21,8 +21,10 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
   const labels = join(root, 'labels.json')
   const manifest = join(root, 'manifest.json')
   const dataFile = join(dataset, 'case-a.bin')
+  const staging = join(root, 'candidate-staging')
   await mkdir(dataset)
   await mkdir(output)
+  await mkdir(staging)
   await writeFile(podman, '#!/bin/sh\nexit 0\n')
   await chmod(podman, 0o755)
   await writeFile(mainPy, 'print("fixed candidate")\n')
@@ -100,7 +102,8 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
       {
         podmanExecutable: podman,
         podmanBinaryHash: cliPreparationExecutableHash(podman),
-        candidates: [{ candidateArtifactId: plan.candidateArtifactId, mainPy, candidateReceipt }],
+        candidates: [],
+        candidateStagingRoot: staging,
         datasets: [{ dataManifestHash: plan.dataManifestHash, manifest, root: dataset }],
         labels: [{ labelSetContentHash: plan.labelSetContentHash, path: labels }],
         evaluators: [{ id: 'binary-classification-v1', hash: plan.trustedEvaluatorHash }],
@@ -108,6 +111,13 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
       command,
       'linux',
     )
+    await adapter.registerCandidate({
+      candidateArtifactId: plan.candidateArtifactId,
+      code: await Bun.file(mainPy).bytes(),
+      codeHash: plan.codeHash,
+      candidateReceipt: await Bun.file(candidateReceipt).bytes(),
+      candidateReceiptHash: plan.candidateReceiptHash,
+    })
     const job: FormalOciJobSpec = {
       version: 4,
       dispatchKey: 'formal-1',
