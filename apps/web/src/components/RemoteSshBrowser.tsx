@@ -11,7 +11,7 @@ import {
 } from 'solid-js'
 import { renderMarkdown } from '../lib/markdown.ts'
 import { loaded } from '../lib/resource.ts'
-import { client, explainApiError, openSettings } from '../lib/store/index.ts'
+import { client, explainApiError, openSettings, workspace } from '../lib/store/index.ts'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { CodeView, sanitizeOfficeHtml } from './FileView.tsx'
 import {
@@ -121,10 +121,14 @@ export default function RemoteSshBrowser() {
   /** 连接失败时自增一档，让认证字段拿回焦点等用户重输。 */
   const [credentialFocusTick, setCredentialFocusTick] = createSignal(0)
 
+  let connectionGeneration = 0
   const connect = async (
     target: SshTargetDraft = { username: username(), host: host(), port: port() },
     startPath?: string,
+    bound?: { workspaceId: string; profile: SshProfileRow },
   ) => {
+    const startedWorkspace = workspace()?.id
+    const generation = ++connectionGeneration
     setConnecting(true)
     setNotice({ text: '正在建立 SSH 连接…' })
     try {
@@ -146,6 +150,7 @@ export default function RemoteSshBrowser() {
               : {}),
         }),
       })
+      if (workspace()?.id !== startedWorkspace || generation !== connectionGeneration) return
       setPassword('')
       setPrivateKey('')
       setPrivateKeyPassphrase('')
@@ -160,11 +165,12 @@ export default function RemoteSshBrowser() {
       setPath(initialPath)
       setPathDraft(initialPath)
       setSelected(null)
-      setOpenedWorkspace(null)
-      setReadOnly(true)
+      setOpenedWorkspace(bound?.profile ?? null)
+      setReadOnly(bound?.profile.readOnly ?? true)
       setNotice({ text: result.message })
       await refetchProfiles()
     } catch (error) {
+      if (workspace()?.id !== startedWorkspace || generation !== connectionGeneration) return
       const text = explainApiError(error, 'SSH 连接失败')
       setNotice({ text, bad: true })
       // 连接没成，刚输过的凭证作废：清掉并让认证字段接住焦点等重输。
@@ -175,17 +181,57 @@ export default function RemoteSshBrowser() {
       setPrivateKeyError('')
       setCredentialFocusTick((n) => n + 1)
     } finally {
-      setConnecting(false)
+      if (generation === connectionGeneration) setConnecting(false)
     }
   }
 
   const disconnect = () => {
+    ++connectionGeneration
+    setConnecting(false)
     setSession(null)
     setPath('')
     setPathDraft('')
     setSelected(null)
     setOpenedWorkspace(null)
     setNotice(null)
+  }
+
+  createEffect((previous: string | undefined) => {
+    const current = workspace()?.id
+    if (previous !== current) disconnect()
+    return current
+  }, workspace()?.id)
+
+  const openBoundDirectory = async () => {
+    const current = workspace()
+    if (!current?.serverBinding) return
+    const generation = ++connectionGeneration
+    setConnecting(true)
+    setNotice(null)
+    try {
+      const bound = await client.api<{ profile: SshProfileRow }>(
+        `/api/workspaces/${encodeURIComponent(current.id)}/server-binding`,
+      )
+      if (workspace()?.id !== current.id || generation !== connectionGeneration) return
+      const profile = bound.profile
+      const recent = loaded(profiles)?.recentConnections.find(
+        (item) =>
+          item.host === profile.host &&
+          item.username === profile.username &&
+          item.port === profile.port,
+      )
+      setPassword('')
+      setPrivateKey('')
+      setPrivateKeyPassphrase('')
+      setAuthMode(recent?.authMode ?? 'system-key')
+      setAcceptNewHost(profile.hostKeyPolicy === 'accept-new')
+      await connect(profile, profile.root, { workspaceId: current.id, profile })
+    } catch (error) {
+      if (workspace()?.id === current.id && generation === connectionGeneration)
+        setNotice({ text: explainApiError(error, '项目绑定目录不可用'), bad: true })
+    } finally {
+      if (generation === connectionGeneration) setConnecting(false)
+    }
   }
 
   /** 最近连接删除后：移除条目 + 清凭证，然后刷新列表。 */
@@ -330,7 +376,7 @@ export default function RemoteSshBrowser() {
         <div>
           <span class="eyebrow">REMOTE SSH</span>
           <h2>远程数据工作区</h2>
-          <p>连接服务器，选择数据目录，再将该目录开放给科研 Agent。</p>
+          <p>连接服务器，管理数据目录。研究项目使用各自绑定的实验目录。</p>
         </div>
         <Show when={session()}>
           <button class="btn-ghost" type="button" onClick={disconnect}>
@@ -339,12 +385,28 @@ export default function RemoteSshBrowser() {
         </Show>
       </header>
 
+      <Show when={workspace()?.serverBinding}>
+        {(binding) => (
+          <section class="remote-recent" aria-label="当前项目服务器目录">
+            <p>当前项目服务器目录</p>
+            <p style={{ 'overflow-wrap': 'anywhere' }}>{binding().remoteRoot}</p>
+            <button
+              class="btn-ghost"
+              type="button"
+              disabled={connecting()}
+              onClick={() => void openBoundDirectory()}
+            >
+              {connecting() ? '正在连接…' : '打开绑定目录'}
+            </button>
+          </section>
+        )}
+      </Show>
       <Show
         when={session()}
         fallback={
           <ConnectionStart
-            profiles={profiles()?.profiles ?? []}
-            recentConnections={profiles()?.recentConnections ?? []}
+            profiles={loaded(profiles)?.profiles ?? []}
+            recentConnections={loaded(profiles)?.recentConnections ?? []}
             username={username()}
             setUsername={setUsername}
             host={host()}
@@ -398,7 +460,7 @@ export default function RemoteSshBrowser() {
               <Show when={openedWorkspace()}>
                 {(workspace) => (
                   <span class="remote-opened">
-                    <IconCheck size={12} /> Agent 工作区：{workspace().root}
+                    <IconCheck size={12} /> 已保存目录：{workspace().root}
                   </span>
                 )}
               </Show>
@@ -445,7 +507,7 @@ export default function RemoteSshBrowser() {
                 disabled={opening() || listing.loading || Boolean(listing.error)}
                 onClick={() => void openFolder()}
               >
-                <IconFolder size={13} /> {opening() ? '正在设置…' : '设为 Agent 工作区'}
+                <IconFolder size={13} /> {opening() ? '正在设置…' : '保存服务器目录'}
               </button>
               <span id="remote-directory-help">
                 可直接输入路径，也可在下方逐级进入文件夹；当前目录为 {path()}。
@@ -578,7 +640,7 @@ export default function RemoteSshBrowser() {
                       <span>
                         {openedWorkspace()
                           ? '支持 PDF、Markdown、Office、代码与常见图片'
-                          : '在左侧进入目录后，点击上方“设为 Agent 工作区”'}
+                          : '在左侧进入目录后，点击上方“保存服务器目录”'}
                       </span>
                     </div>
                   }

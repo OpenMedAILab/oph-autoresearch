@@ -20,7 +20,10 @@ import {
   upsertWorkspace,
 } from '@oph-autoresearch/store'
 import { ensureResearchWorkspace } from '../research-template.ts'
-import { verifyWorkspaceServerBinding } from '../workspace-binding.ts'
+import {
+  resolveWorkspaceServerBinding,
+  verifyWorkspaceServerBinding,
+} from '../workspace-binding.ts'
 import { type ApiHandler, json } from './types.ts'
 
 /**
@@ -305,6 +308,15 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
   }
 
   const bindingPath = /^\/api\/workspaces\/([^/]+)\/server-binding$/.exec(p)
+  if (bindingPath && req.method === 'GET') {
+    const workspace = getWorkspace(d.store, bindingPath[1] as never)
+    if (!workspace) return json({ error: '研究项目不存在' }, 404)
+    try {
+      return json(await resolveWorkspaceServerBinding(workspace))
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : '绑定不可用' }, 409)
+    }
+  }
   if (bindingPath && req.method === 'POST') {
     const workspace = getWorkspace(d.store, bindingPath[1] as never)
     if (!workspace) return json({ error: '研究项目不存在' }, 404)

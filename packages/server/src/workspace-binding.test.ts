@@ -91,6 +91,14 @@ describe('研究项目与服务器目录绑定', () => {
     const again = await call('/api/workspaces', { path: data.workspace.rootPath })
     expect(again?.status).toBe(200)
     expect(inspect).toHaveBeenCalledTimes(1)
+    const resolved = await call(`/api/workspaces/${data.workspace.id}/server-binding`)
+    expect(resolved?.status).toBe(200)
+    expect(await resolved!.json()).toMatchObject({
+      profile: { id: profile.id, root: '/research/project' },
+      localRoot: data.workspace.rootPath,
+    })
+    profiles.mockResolvedValue([{ ...profile, host: 'changed.example.org' }])
+    expect((await call(`/api/workspaces/${data.workspace.id}/server-binding`))?.status).toBe(409)
   })
   test('无绑定、无效服务器和不可写目录都不会创建项目或目录', async () => {
     for (const serverBinding of [
