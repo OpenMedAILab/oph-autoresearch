@@ -375,20 +375,33 @@ export class CliPreparationController {
             attemptId,
             bytes,
           )
-          this.mutate(scope, `finish-cli:${attemptId}`, {
-            kind: 'finishCliPreparation',
-            attemptId,
-            uri,
-            artifactKind: 'cli_preparation_candidate',
+          const validation = {
+            ...binding,
             contentHash: sha256(bytes),
-            validation: {
-              ...binding,
-              contentHash: sha256(bytes),
-              draftContentHash: draft.contentHash,
-              byteLength: bytes.byteLength,
-              verifiedAt: Date.now(),
-            },
-          })
+            draftContentHash: draft.contentHash,
+            byteLength: bytes.byteLength,
+            verifiedAt: Date.now(),
+          }
+          this.mutate(
+            scope,
+            `${attempt.cancelRequestedAt !== null ? 'quarantine' : 'finish'}-cli:${attemptId}`,
+            attempt.cancelRequestedAt !== null
+              ? {
+                  kind: 'quarantineCliPreparationResult',
+                  attemptId,
+                  uri,
+                  contentHash: sha256(bytes),
+                  validation,
+                }
+              : {
+                  kind: 'finishCliPreparation',
+                  attemptId,
+                  uri,
+                  artifactKind: 'cli_preparation_candidate',
+                  contentHash: sha256(bytes),
+                  validation,
+                },
+          )
           return
         }
         if (job.status === 'cancelled') {

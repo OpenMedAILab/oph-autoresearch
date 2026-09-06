@@ -37,6 +37,7 @@ class FakeAuthority {
   queried: string[] = []
   current: DurableJob | null = null
   unavailable = false
+  cancelKeepsRemoteState = false
   receiptBytes = new Uint8Array()
   readonly backendPolicyHash = backendPolicyHash
   submit(spec: CliPreparationJobSpec) {
@@ -50,7 +51,7 @@ class FakeAuthority {
     return this.current?.spec.dispatchKey === key ? this.current : null
   }
   cancel(key: string) {
-    if (this.current?.spec.dispatchKey === key)
+    if (this.current?.spec.dispatchKey === key && !this.cancelKeepsRemoteState)
       this.current = { ...this.current, status: 'cancelled' }
     return this.current
   }
@@ -202,6 +203,66 @@ test('controller submits one approved immutable attempt and records only a candi
     await Bun.sleep(0)
     expect(authority.queried).toHaveLength(queriesBeforeTerminalRecovery)
     removedRouteController.close()
+    controller.close()
+  } finally {
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('quarantines a verified completed receipt when local cancellation wins admission', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'oph-cli-controller-'))
+  const store = new SqlStore({ path: ':memory:' })
+  try {
+    const { workspace, campaign, task } = setup(store, root)
+    const authority = new FakeAuthority()
+    authority.cancelKeepsRemoteState = true
+    const controller = new CliPreparationController(store, [route(authority)], () => {})
+    const scope = { workspaceId: workspace.id, workspaceRoot: root, campaignId: campaign.id }
+    const proposed = controller.propose(scope, {
+      expectedVersion: campaign.version,
+      idempotencyKey: 'proposal-cancelled-result',
+      routeId: 'fixture-route',
+      taskRevisionId: task.id,
+      instructions: 'candidate only',
+      maxRuntimeMs: 1_000,
+      maxCost: 1,
+      acknowledgeUnknownCost: true,
+    })
+    const approval = controller.approval(scope, proposed.preparationId)
+    const approved = mutateResearchCampaign(store, campaign.id, {
+      expectedVersion: approval.expectedVersion,
+      idempotencyKey: approval.idempotencyKey,
+      command: {
+        kind: 'approve',
+        bundleHash: approval.bundleHash,
+        scope: approval.scope,
+        reviewer: { reviewerId: 'human', proofId: 'proof', verifiedAt: Date.now() },
+      },
+    })
+    if (!approved.ok) throw new Error(approved.message)
+    const accepted = await controller.submit(scope, {
+      preparationId: proposed.preparationId,
+      approvalId: approved.campaign.approvals[0]!.id,
+      expectedVersion: approved.campaign.version,
+    })
+    const spec = await waitFor(() => authority.submitted[0], 'transport submit')
+    authority.receiptBytes = Buffer.from(JSON.stringify(candidateReceipt(spec, draft(spec))))
+    authority.current = job(spec, 'completed')
+    await controller.cancel(scope, accepted.attemptId)
+    const quarantined = await waitFor(() => {
+      const current = getResearchCampaign(store, campaign.id)
+      return current?.attempts[0]?.resultDisposition === 'quarantined' ? current : undefined
+    }, 'quarantined completion')
+    expect(quarantined.attempts[0]).toMatchObject({
+      status: 'cancelled',
+      executionOutcome: 'completed',
+      resultDisposition: 'quarantined',
+    })
+    expect(quarantined.taskRevisions[0]!.status).toBe('pending')
+    expect(quarantined.cliPreparations?.[0]?.status).toBe('claimed')
+    expect(quarantined.cliPreparations?.[0]?.actualCost).toBeNull()
+    expect(quarantined.artifactVersions[0]?.kind).toBe('cli_preparation_quarantined_candidate')
     controller.close()
   } finally {
     store.close()

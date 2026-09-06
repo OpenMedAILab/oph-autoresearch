@@ -943,6 +943,80 @@ function nextCampaign(
       }
       break
     }
+    case 'quarantineCliPreparationResult': {
+      const owned = ownedRunningAttempt(campaign, command.attemptId)
+      if (!owned.ok) return owned
+      const preparation = (campaign.cliPreparations ?? []).find(
+        (candidate) => candidate.attemptId === owned.attempt.id,
+      )
+      const task = campaign.taskRevisions.find(
+        (candidate) => candidate.id === owned.attempt.taskRevisionId,
+      )
+      const spec = owned.attempt.cliPreparationJobSpec
+      const validation = command.validation
+      const approval = campaign.approvals.find(
+        (candidate) => candidate.consumedBy === owned.attempt.id,
+      )
+      if (
+        (owned.attempt.cancelRequestedAt === null && approval?.status !== 'revoked') ||
+        !preparation ||
+        !task ||
+        preparation.status !== 'claimed' ||
+        !spec ||
+        !owned.attempt.cliPreparationJobSpecHash ||
+        !SHA256.test(command.contentHash) ||
+        textError(command.uri, 'uri') !== null ||
+        !validation ||
+        validation.schema !== 'research-cli-preparation-candidate-v1' ||
+        validation.jobSpecHash !== owned.attempt.cliPreparationJobSpecHash ||
+        validation.dispatchKey !== owned.attempt.id ||
+        validation.clientDispatchKey !== preparation.dispatchKey ||
+        validation.preparationId !== preparation.id ||
+        validation.candidateId !== preparation.candidateId ||
+        validation.taskRevisionId !== task.id ||
+        validation.inputHash !== preparation.inputHash ||
+        validation.configHash !== preparation.configHash ||
+        validation.contentHash !== command.contentHash ||
+        !SHA256.test(validation.draftContentHash) ||
+        !Number.isSafeInteger(validation.byteLength) ||
+        validation.byteLength < 0 ||
+        !Number.isSafeInteger(validation.verifiedAt) ||
+        validation.verifiedAt <= 0
+      )
+        return invalid(
+          'invalid_cli_preparation_quarantine',
+          'Quarantined receipt does not bind the original cancelled preparation',
+        )
+      const artifact: ArtifactVersion = {
+        id: randomId('rav'),
+        artifactId: `cli-preparation-quarantine:${preparation.id}`,
+        version: 1,
+        uri: command.uri.trim(),
+        kind: 'cli_preparation_quarantined_candidate',
+        mediaType: 'application/json',
+        dataClass: task.dataClass,
+        schemaId: 'research-cli-preparation-candidate-v1',
+        contentHash: command.contentHash,
+        createdAt: now,
+      }
+      next = {
+        ...campaign,
+        artifactVersions: [...campaign.artifactVersions, artifact],
+        attempts: campaign.attempts.map((attempt) =>
+          attempt.id === owned.attempt.id
+            ? {
+                ...attempt,
+                status: 'cancelled',
+                endedAt: now,
+                artifactVersionId: artifact.id,
+                executionOutcome: 'completed',
+                resultDisposition: 'quarantined',
+              }
+            : attempt,
+        ),
+      }
+      break
+    }
     case 'recordArtifact': {
       const error =
         textError(command.artifactId, 'artifactId') ??
@@ -1144,7 +1218,16 @@ function nextCampaign(
       if (error) return invalid('invalid_revocation', error)
       const found = campaign.approvals.find((approval) => approval.id === command.approvalId)
       if (!found) return invalid('unknown_approval', '找不到 approvalId')
-      if (found.status !== 'active') return invalid('inactive_approval', '该审批已经失效或撤销')
+      if (found.status !== 'active' && !(found.status === 'invalidated' && found.consumedBy))
+        return invalid('inactive_approval', '该审批已经失效或撤销')
+      const consumedAttempt = found.consumedBy
+        ? campaign.attempts.find((attempt) => attempt.id === found.consumedBy)
+        : undefined
+      const cliPreparationAttempt = consumedAttempt
+        ? (campaign.cliPreparations ?? []).some(
+            (preparation) => preparation.attemptId === consumedAttempt.id,
+          )
+        : false
       next = {
         ...campaign,
         approvals: campaign.approvals.map((approval) =>
@@ -1157,6 +1240,17 @@ function nextCampaign(
               }
             : approval,
         ),
+        attempts:
+          consumedAttempt &&
+          cliPreparationAttempt &&
+          ['running', 'unknown'].includes(consumedAttempt.status) &&
+          consumedAttempt.cancelRequestedAt === null
+            ? campaign.attempts.map((attempt) =>
+                attempt.id === consumedAttempt.id
+                  ? { ...attempt, cancelRequestedAt: now }
+                  : attempt,
+              )
+            : campaign.attempts,
       }
       break
     }
