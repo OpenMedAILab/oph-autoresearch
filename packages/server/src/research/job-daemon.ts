@@ -43,6 +43,46 @@ export interface JobDaemonEndpoint {
   token: string
 }
 
+/**
+ * A PID is not a durable process identity: operating systems may reuse it after an
+ * authority restart.  The start marker is deliberately platform-specific and is
+ * only used as an equality token; when it cannot be obtained, the daemon keeps a
+ * job non-terminal rather than guessing.
+ */
+export interface ProcessProbe {
+  startIdentity(pid: number): string | null
+}
+
+function platformProcessStartIdentity(pid: number): string | null {
+  if (!Number.isSafeInteger(pid) || pid < 1) return null
+  try {
+    if (process.platform === 'linux') {
+      // /proc/<pid>/stat field 22 is the process start time.  comm may contain
+      // spaces and ')' characters, so split only after its final delimiter.
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+      const tail = stat
+        .slice(stat.lastIndexOf(')') + 1)
+        .trim()
+        .split(/\s+/)
+      const startTime = tail[19]
+      return startTime ? `linux:${startTime}` : null
+    }
+    if (process.platform === 'darwin') {
+      const result = Bun.spawnSync(['ps', '-o', 'lstart=', '-p', String(pid)], {
+        stdout: 'pipe',
+        stderr: 'ignore',
+      })
+      const started = new TextDecoder().decode(result.stdout).trim()
+      return started ? `darwin:${started}` : null
+    }
+  } catch {
+    // Permission and process-exit races are both unknown, never proof of exit.
+  }
+  return null
+}
+
+type ProcessIdentityState = 'match' | 'missing' | 'mismatch' | 'unknown'
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
   if (value && typeof value === 'object') {
@@ -196,12 +236,14 @@ export class JobDaemon implements JobDaemonPort {
   private server: ReturnType<typeof Bun.serve> | null = null
   private endpointToken: string | null = null
   private readonly workers = new Map<string, Bun.Subprocess>()
+  private readonly escalationTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private closed = false
   readonly outputRoot: string
   private readonly outputRootRealpath: string
   private readonly executionRuntimeMs: number | undefined
   private readonly renewalMs: number
   private readonly watchdog: ReturnType<typeof setInterval>
+  private readonly processProbe: ProcessProbe
 
   constructor(opts: {
     dbPath: string
@@ -210,6 +252,8 @@ export class JobDaemon implements JobDaemonPort {
     /** Enables a deadline independent of a short, renewable v1 observation lease. */
     executionRuntimeMs?: number
     renewalMs?: number
+    /** Injectable so restart and PID-reuse handling can be tested without signalling arbitrary PIDs. */
+    processProbe?: ProcessProbe
   }) {
     if (opts.tracking) {
       const captured = captureRunnerTracking(opts.tracking)
@@ -233,6 +277,7 @@ export class JobDaemon implements JobDaemonPort {
       throw new Error('invalid renewal interval')
     this.executionRuntimeMs = opts.executionRuntimeMs
     this.renewalMs = opts.renewalMs ?? 15_000
+    this.processProbe = opts.processProbe ?? { startIdentity: platformProcessStartIdentity }
     this.db = new Database(opts.dbPath)
     this.db.exec('PRAGMA busy_timeout = 5000')
     this.db.exec(
@@ -249,6 +294,8 @@ export class JobDaemon implements JobDaemonPort {
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_heartbeat_at INTEGER')
     if (!columns.some((c) => c.name === 'worker_pgid'))
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_pgid INTEGER')
+    if (!columns.some((c) => c.name === 'worker_start_identity'))
+      this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_start_identity TEXT')
     // Authority-owned watchdog: localhost jobs must not depend on a reconnecting observer.
     this.watchdog = setInterval(() => {
       if (!this.closed) {
@@ -306,10 +353,10 @@ export class JobDaemon implements JobDaemonPort {
       this.db
         .query("UPDATE local_jobs SET status='cancelled' WHERE dispatch_key=? AND status='queued'")
         .run(dispatchKey)
-    if (job.status === 'running') {
+    if (job.status === 'running' || job.status === 'completion_requested') {
       this.db
         .query(
-          "UPDATE local_jobs SET status='cancel_requested' WHERE dispatch_key=? AND status='running'",
+          "UPDATE local_jobs SET status='cancel_requested' WHERE dispatch_key=? AND status IN ('running','completion_requested')",
         )
         .run(dispatchKey)
       this.stopWorkerTree(dispatchKey)
@@ -319,13 +366,14 @@ export class JobDaemon implements JobDaemonPort {
   reconcileInterrupted(): DurableJob[] {
     const candidates = this.db
       .query(
-        "SELECT dispatch_key,status,worker_pid,worker_pgid,execution_deadline_at,runtime_lease FROM local_jobs WHERE status IN ('running','cancel_requested','completion_requested')",
+        "SELECT dispatch_key,status,worker_pid,worker_pgid,worker_start_identity,execution_deadline_at,runtime_lease FROM local_jobs WHERE status IN ('running','cancel_requested','completion_requested')",
       )
       .all() as {
       dispatch_key: string
       status: string
       worker_pid: number | null
       worker_pgid: number | null
+      worker_start_identity: string | null
       execution_deadline_at: number | null
       runtime_lease: string | null
     }[]
@@ -336,13 +384,15 @@ export class JobDaemon implements JobDaemonPort {
       ) {
         this.cancel(candidate.dispatch_key)
       }
-      if (!candidate.worker_pid) continue // A missing process identity cannot prove termination.
-      try {
-        process.kill(candidate.worker_pid, 0)
-        continue
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue
-      }
+      if (!candidate.worker_pid || !candidate.worker_start_identity) continue
+      const identity = this.processIdentityState(
+        candidate.worker_pid,
+        candidate.worker_start_identity,
+      )
+      // PID reuse and failed process inspection are not evidence that this job's
+      // worker has stopped.  Keep the authority state pending for an operator or
+      // a later observable transition.
+      if (identity === 'match' || identity === 'mismatch' || identity === 'unknown') continue
       if (candidate.worker_pgid && this.processGroupAlive(candidate.worker_pgid)) continue
       this.db
         .query('UPDATE local_jobs SET status=?, error=? WHERE dispatch_key=? AND status=?')
@@ -377,13 +427,16 @@ export class JobDaemon implements JobDaemonPort {
       !leaseMatches(job.runtimeLease ?? job.spec.lease, lease)
     )
       return null
+    const workerStartIdentity = this.processProbe.startIdentity(workerPid)
+    const launched = this.workers.get(key)
     const updated = this.db
       .query(
-        "UPDATE local_jobs SET status='running', worker_pid=?, worker_pgid=?, worker_heartbeat_at=? WHERE dispatch_key=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested'))",
+        "UPDATE local_jobs SET status='running', worker_pid=?, worker_pgid=?, worker_start_identity=?, worker_heartbeat_at=? WHERE dispatch_key=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested'))",
       )
       .run(
         workerPid,
-        this.workers.get(key)?.pid === workerPid && process.platform !== 'win32' ? workerPid : null,
+        launched?.pid === workerPid && process.platform !== 'win32' ? workerPid : null,
+        workerStartIdentity,
         Date.now(),
         key,
       )
@@ -433,15 +486,19 @@ export class JobDaemon implements JobDaemonPort {
     )
       return null
     const identity = this.db
-      .query('SELECT worker_pid,worker_pgid FROM local_jobs WHERE dispatch_key=?')
-      .get(key) as { worker_pid: number | null; worker_pgid: number | null } | null
-    if (!identity?.worker_pid) return job
-    try {
-      process.kill(identity.worker_pid, 0)
+      .query(
+        'SELECT worker_pid,worker_pgid,worker_start_identity FROM local_jobs WHERE dispatch_key=?',
+      )
+      .get(key) as {
+      worker_pid: number | null
+      worker_pgid: number | null
+      worker_start_identity: string | null
+    } | null
+    if (!identity?.worker_pid || !identity.worker_start_identity) return job
+    if (
+      this.processIdentityState(identity.worker_pid, identity.worker_start_identity) !== 'missing'
+    )
       return job
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return job
-    }
     if (identity.worker_pgid && this.processGroupAlive(identity.worker_pgid)) return job
     this.db
       .query(
@@ -551,20 +608,65 @@ export class JobDaemon implements JobDaemonPort {
       throw new Error('Verified daemon receipt unavailable')
     return readFileSync(job.outputPath!)
   }
-  private stopWorkerTree(dispatchKey: string) {
-    const child = this.workers.get(dispatchKey)
-    const pid = child?.pid
-    // Workers are spawned detached below, so their PID is also their process-group id.
-    // On Windows group probing is unavailable; retain cancel_requested until the worker exits.
-    if (pid && process.platform !== 'win32') {
-      try {
-        process.kill(-pid, 'SIGTERM')
-        return
-      } catch {
-        // A launch race or an unsupported platform falls back to the direct child.
-      }
+  private processIdentityState(pid: number, recorded: string): ProcessIdentityState {
+    const current = this.processProbe.startIdentity(pid)
+    if (current !== null) return current === recorded ? 'match' : 'mismatch'
+    try {
+      process.kill(pid, 0)
+      return 'unknown'
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'missing' : 'unknown'
     }
-    child?.kill()
+  }
+  private signalOwnedWorker(
+    identity: {
+      worker_pid: number | null
+      worker_pgid: number | null
+      worker_start_identity: string | null
+    },
+    signal: NodeJS.Signals,
+  ): boolean {
+    if (
+      !identity.worker_pid ||
+      !identity.worker_start_identity ||
+      this.processIdentityState(identity.worker_pid, identity.worker_start_identity) !== 'match'
+    )
+      return false
+    // The process group is associated with this job only while its recorded
+    // leader still has the same start identity.  Once the leader exits, an
+    // extant PGID could no longer be attributed safely and is left pending.
+    if (!identity.worker_pgid || process.platform === 'win32') return false
+    try {
+      process.kill(-identity.worker_pgid, signal)
+      return true
+    } catch {
+      return false
+    }
+  }
+  private persistedWorkerIdentity(dispatchKey: string) {
+    return this.db
+      .query(
+        'SELECT worker_pid,worker_pgid,worker_start_identity FROM local_jobs WHERE dispatch_key=?',
+      )
+      .get(dispatchKey) as {
+      worker_pid: number | null
+      worker_pgid: number | null
+      worker_start_identity: string | null
+    } | null
+  }
+  private stopWorkerTree(dispatchKey: string) {
+    const identity = this.persistedWorkerIdentity(dispatchKey)
+    if (!identity || !this.signalOwnedWorker(identity, 'SIGTERM')) return
+    const prior = this.escalationTimers.get(dispatchKey)
+    if (prior) clearTimeout(prior)
+    const timer = setTimeout(() => {
+      this.escalationTimers.delete(dispatchKey)
+      const job = this.query(dispatchKey)
+      if (job?.status !== 'cancel_requested') return
+      const latest = this.persistedWorkerIdentity(dispatchKey)
+      if (latest) this.signalOwnedWorker(latest, 'SIGKILL')
+    }, 250)
+    this.escalationTimers.set(dispatchKey, timer)
   }
   private processGroupAlive(pgid: number): boolean {
     if (process.platform === 'win32') return true // conservative: only worker exit can prove termination.
@@ -656,8 +758,15 @@ export class JobDaemon implements JobDaemonPort {
   close() {
     this.closed = true
     clearInterval(this.watchdog)
-    for (const [key] of this.workers) this.stopWorkerTree(key)
+    for (const [key, child] of this.workers) {
+      this.stopWorkerTree(key)
+      // These are children launched by this exact daemon, so close may clean
+      // them up even when platform identity inspection is unavailable.
+      child.kill()
+    }
     this.workers.clear()
+    for (const timer of this.escalationTimers.values()) clearTimeout(timer)
+    this.escalationTimers.clear()
     this.stopHttp()
     this.db.close()
   }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JobDaemon, type JobSpec, type JobTemplate } from './job-daemon.ts'
@@ -146,10 +146,10 @@ describe('durable localhost job daemon', () => {
     restarted.close()
   })
 
-  test('a cancellation acknowledgement cannot terminalize a job while its recorded worker PID is live', async () => {
+  test('a restarted daemon cancels the original verified worker group and persists its exit', async () => {
     const { root, daemon } = await fresh()
     const key = 'live-cancel-ack'
-    const submitted = daemon.submit(spec(key))
+    daemon.submit(spec(key))
     const worker = await daemon.launchWorker(key, { waitAfterClaim: true })
     let observer: JobDaemon | undefined
     try {
@@ -159,16 +159,43 @@ describe('durable localhost job daemon', () => {
         dbPath: join(root, 'jobs.sqlite'),
         outputRoot: join(root, 'out'),
       })
-      const { endpoint, token } = observer.startHttp()
+      observer.startHttp()
       expect(observer.cancel(key)).toMatchObject({ status: 'cancel_requested' })
-      const acknowledged = await fetch(`${endpoint}/cancelled/${key}`, {
-        method: 'POST',
-        headers: authenticated(token),
-        body: JSON.stringify({ lease: submitted.spec.lease }),
+      await worker.exited
+      await waitFor(observer, key, 'cancelled')
+      expect(observer.query(key)).toMatchObject({ status: 'cancelled' })
+      expect(daemon.query(key)).toMatchObject({ status: 'cancelled' })
+    } finally {
+      if (
+        (await Promise.race([worker.exited.then(() => true), Bun.sleep(1).then(() => false)])) ===
+        false
+      )
+        worker.kill()
+      observer?.close()
+      daemon.close()
+    }
+  })
+
+  test('a restarted daemon never signals a live PID whose start identity no longer matches', async () => {
+    const { root, daemon } = await fresh()
+    const key = 'reused-pid'
+    daemon.submit(spec(key))
+    const worker = await daemon.launchWorker(key, { waitAfterClaim: true })
+    let observer: JobDaemon | undefined
+    try {
+      await waitFor(daemon, key, 'running')
+      observer = new JobDaemon({
+        dbPath: join(root, 'jobs.sqlite'),
+        outputRoot: join(root, 'out'),
+        processProbe: { startIdentity: (pid) => `different-process:${pid}` },
       })
-      expect(acknowledged.status).toBe(200)
+      expect(observer.cancel(key)).toMatchObject({ status: 'cancel_requested' })
+      // Give the TERM and KILL windows time to run. The worker is one this test
+      // launched, and a PID-reuse observation must leave it alone.
+      expect(
+        await Promise.race([worker.exited.then(() => false), Bun.sleep(350).then(() => true)]),
+      ).toBe(true)
       expect(observer.query(key)).toMatchObject({ status: 'cancel_requested' })
-      expect(daemon.query(key)).toMatchObject({ status: 'cancel_requested' })
     } finally {
       worker.kill()
       await worker.exited
@@ -176,6 +203,83 @@ describe('durable localhost job daemon', () => {
       daemon.close()
     }
   })
+
+  if (process.platform !== 'win32') {
+    test('escalates a verified stubborn worker group from TERM to KILL after the grace period', async () => {
+      const { daemon } = await fresh()
+      const key = 'stubborn-group'
+      daemon.submit(spec(key))
+      const stubbornWorker = `
+        import { mkdirSync, writeFileSync } from 'node:fs'
+        import { join } from 'node:path'
+        const [endpoint, dispatchKey, root, token] = process.argv.slice(1)
+        const headers = { authorization: 'Bearer ' + token }
+        const job = await fetch(endpoint + '/jobs/' + encodeURIComponent(dispatchKey), { headers }).then((r) => r.json())
+        process.on('SIGTERM', () => {})
+        const descendant = Bun.spawn([process.execPath, '-e', "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdout: 'ignore', stderr: 'ignore' })
+        mkdirSync(join(root, dispatchKey), { recursive: true })
+        writeFileSync(join(root, dispatchKey, 'stubborn-child.pid'), String(descendant.pid))
+        const claimed = await fetch(endpoint + '/claim/' + encodeURIComponent(dispatchKey), {
+          method: 'POST', headers, body: JSON.stringify({ lease: job.spec.lease, workerPid: process.pid }),
+        })
+        if (!claimed.ok) process.exit(4)
+        setInterval(() => {}, 1000)
+      `
+      const worker = await daemon.launchWorker(key, {
+        workerArgv: [process.execPath, '-e', stubbornWorker],
+      })
+      await waitFor(daemon, key, 'running')
+      const descendantPid = Number(
+        await readFile(join(daemon.outputRoot, key, 'stubborn-child.pid'), 'utf8'),
+      )
+      expect(descendantPid).toBeGreaterThan(0)
+      expect(daemon.cancel(key)).toMatchObject({ status: 'cancel_requested' })
+      await worker.exited
+      await waitFor(daemon, key, 'cancelled')
+      expect(() => process.kill(descendantPid, 0)).toThrow()
+      daemon.close()
+    })
+
+    test('leaves a descendant-only group pending when its recorded leader has exited', async () => {
+      const { daemon } = await fresh()
+      const key = 'orphaned-group'
+      daemon.submit(spec(key))
+      const orphaningWorker = `
+        import { mkdirSync, writeFileSync } from 'node:fs'
+        import { join } from 'node:path'
+        const [endpoint, dispatchKey, root, token] = process.argv.slice(1)
+        const headers = { authorization: 'Bearer ' + token }
+        const job = await fetch(endpoint + '/jobs/' + encodeURIComponent(dispatchKey), { headers }).then((r) => r.json())
+        const descendant = Bun.spawn([process.execPath, '-e', "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdout: 'ignore', stderr: 'ignore' })
+        mkdirSync(join(root, dispatchKey), { recursive: true })
+        writeFileSync(join(root, dispatchKey, 'orphaned-child.pid'), String(descendant.pid))
+        const claimed = await fetch(endpoint + '/claim/' + encodeURIComponent(dispatchKey), {
+          method: 'POST', headers, body: JSON.stringify({ lease: job.spec.lease, workerPid: process.pid }),
+        })
+        process.exit(claimed.ok ? 0 : 4)
+      `
+      const worker = await daemon.launchWorker(key, {
+        workerArgv: [process.execPath, '-e', orphaningWorker],
+      })
+      await worker.exited
+      await waitFor(daemon, key, 'running')
+      const descendantPid = Number(
+        await readFile(join(daemon.outputRoot, key, 'orphaned-child.pid'), 'utf8'),
+      )
+      try {
+        expect(daemon.cancel(key)).toMatchObject({ status: 'cancel_requested' })
+        await Bun.sleep(350)
+        expect(daemon.query(key)).toMatchObject({ status: 'cancel_requested' })
+      } finally {
+        // This test created and recorded this exact descendant; clean it up
+        // directly without asking the daemon to infer an unprovable PGID owner.
+        process.kill(descendantPid, 'SIGKILL')
+        await Bun.sleep(20)
+        daemon.reconcileInterrupted()
+        daemon.close()
+      }
+    })
+  }
 
   test('reconciliation leaves a live worker running because its exit cannot be confirmed', async () => {
     const { daemon } = await fresh()
@@ -236,19 +340,25 @@ describe('durable localhost job daemon', () => {
     const submitted = daemon.submit(spec('renewable', 1, 'synthetic-summary-v1', Date.now() + 30))
     const { endpoint, token } = daemon.startHttp()
     const claimed = await fetch(`${endpoint}/claim/renewable`, {
-      method: 'POST', headers: authenticated(token),
+      method: 'POST',
+      headers: authenticated(token),
       body: JSON.stringify({ lease: submitted.spec.lease, workerPid: 999_999 }),
     })
     expect(claimed.ok).toBe(true)
-    const runtime = (await claimed.json() as JobSpec & { runtimeLease?: JobSpec['lease'] }).runtimeLease
+    const runtime = ((await claimed.json()) as JobSpec & { runtimeLease?: JobSpec['lease'] })
+      .runtimeLease
     expect(runtime).toBeDefined()
     const renewed = await fetch(`${endpoint}/renew/renewable`, {
-      method: 'POST', headers: authenticated(token), body: JSON.stringify({ lease: runtime }),
+      method: 'POST',
+      headers: authenticated(token),
+      body: JSON.stringify({ lease: runtime }),
     })
     expect(renewed.ok).toBe(true)
     // Simulate a dropped renewal response: the worker retries its prior generation.
     const replay = await fetch(`${endpoint}/renew/renewable`, {
-      method: 'POST', headers: authenticated(token), body: JSON.stringify({ lease: runtime }),
+      method: 'POST',
+      headers: authenticated(token),
+      body: JSON.stringify({ lease: runtime }),
     })
     expect(replay.ok).toBe(true)
     const observed = daemon.query('renewable')!
@@ -262,22 +372,30 @@ describe('durable localhost job daemon', () => {
     const root = await mkdtemp(join(tmpdir(), 'oph-job-daemon-'))
     roots.push(root)
     const daemon = new JobDaemon({
-      dbPath: join(root, 'jobs.sqlite'), outputRoot: join(root, 'out'),
-      executionRuntimeMs: 90, renewalMs: 40,
+      dbPath: join(root, 'jobs.sqlite'),
+      outputRoot: join(root, 'out'),
+      executionRuntimeMs: 90,
+      renewalMs: 40,
     })
     const submitted = daemon.submit(spec('deadline', 1, 'synthetic-summary-v1', Date.now() + 20))
     const { endpoint, token } = daemon.startHttp()
     const claim = await fetch(`${endpoint}/claim/deadline`, {
-      method: 'POST', headers: authenticated(token),
+      method: 'POST',
+      headers: authenticated(token),
       body: JSON.stringify({ lease: submitted.spec.lease, workerPid: 999_998 }),
     })
-    const initial = (await claim.json()) as { runtimeLease: JobSpec['lease']; executionDeadlineAt: number }
+    const initial = (await claim.json()) as {
+      runtimeLease: JobSpec['lease']
+      executionDeadlineAt: number
+    }
     const deadline = initial.executionDeadlineAt
     expect(deadline).toBeLessThanOrEqual(submitted.spec.lease.expiresAt)
     await Bun.sleep(Math.max(1, deadline - Date.now() + 5))
     daemon.enforceRuntimeLimits()
     daemon.reconcileInterrupted()
-    expect(daemon.query('deadline')?.status).toBe('cancelled')
+    // The worker PID was synthetic, so no durable start identity was captured.
+    // Deadline cancellation is recorded but cannot be terminalized by guessing.
+    expect(daemon.query('deadline')?.status).toBe('cancel_requested')
     daemon.close()
   })
 })
