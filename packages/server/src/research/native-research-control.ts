@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import type { ResearchControlPort } from '@oph-autoresearch/core'
 import type { ApiRequestDeps } from '../api/types.ts'
 import type { NativeResearchControlBridge } from '../cli-conversation.ts'
 import { ResearchControlApiAdapter, type ResearchControlRequest } from './research-service.ts'
@@ -53,6 +54,24 @@ export function createNativeResearchControlBridge(
     close: () => {
       signal.removeEventListener('abort', close)
       close()
+    },
+  }
+}
+
+/** Same campaign/action scope for API-model tools; this is a capability, not a signer. */
+export function createResearchControlPort(
+  deps: ApiRequestDeps,
+  campaignIds: readonly string[],
+): ResearchControlPort {
+  const allowed = new Set(campaignIds)
+  const adapter = new ResearchControlApiAdapter(deps)
+  return {
+    async execute(input) {
+      if (!allowed.has(input.campaignId))
+        return { ok: false, status: 403, data: { error: 'campaign_not_allowed' } }
+      const response = await adapter.execute(input)
+      const data = await response.json().catch(() => ({ error: 'invalid_research_response' }))
+      return { ok: response.ok, status: response.status, data }
     },
   }
 }

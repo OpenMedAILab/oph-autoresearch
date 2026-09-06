@@ -5,6 +5,7 @@
  * 而它们都要这个类型。放在任何一边都会让两个模块互相 import。
  */
 
+import type { ResearchControlPort } from '@oph-autoresearch/core'
 import type { OphConfig } from '@oph-autoresearch/runtime'
 import type { ContentStore, Store } from '@oph-autoresearch/store'
 import type { ServerWebSocket } from 'bun'
@@ -34,6 +35,12 @@ export interface CommandDeps {
     campaignIds: readonly string[]
     signal: AbortSignal
   }) => NativeResearchControlBridge & { close(): void }
+  researchControlPortFactory?: (input: {
+    workspaceId: string
+    workspaceRoot: string
+    conversationId: string
+    campaignIds: readonly string[]
+  }) => ResearchControlPort
 }
 
 /** 每条 WebSocket 连接自带的状态。握手前 `authed` 为 false。 */

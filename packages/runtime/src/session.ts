@@ -41,6 +41,7 @@ import type {
   EffortLevel,
   FollowUp,
   GoalWriteResult,
+  ResearchControlPort,
   ResearchExecutionBoundary,
   RunId,
   RunInterruption,
@@ -117,6 +118,7 @@ import { RuntimeSink } from './sink.ts'
 import { buildHistory } from './transcript.ts'
 
 export interface SessionOptions {
+  researchControl?: ResearchControlPort
   researchRequestGuard?: ResearchRequestGuard
   /** Logical campaign workspace; evidence-only execution still uses an isolated scratch root. */
   researchWorkspaceId?: string
@@ -244,6 +246,7 @@ export class Session {
       delegate: opts.delegate !== undefined,
       plugins: opts.plugins !== undefined,
       mcpConfig: true,
+      researchControl: opts.researchControl !== undefined,
     }
     if (opts.researchEvidenceOnly && !opts.researchSkills)
       throw new Error('Evidence-only research requires a locked skill port')
@@ -951,6 +954,7 @@ export class Session {
     return {
       researchBoundary: this.opts.researchBoundary ?? 'standard',
       ...(this.opts.researchSkills ? { researchSkills: this.opts.researchSkills } : {}),
+      ...(this.opts.researchControl ? { researchControl: this.opts.researchControl } : {}),
       workspaceRoot: this.opts.workspaceRoot,
       conversationId,
       runId,

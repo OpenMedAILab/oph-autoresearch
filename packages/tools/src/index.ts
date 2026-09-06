@@ -144,6 +144,7 @@ export {
 
 import { readHistoryTool } from './history.ts'
 import { installPluginTool } from './plugin-install.ts'
+import { researchControlTool } from './research-control.ts'
 import { subagentTool } from './subagent.ts'
 import { defineSubagentTool } from './subagent-define.ts'
 import { workflowTool } from './workflow.ts'
@@ -158,7 +159,12 @@ import { workflowTool } from './workflow.ts'
  */
 export function registerBuiltinTools(
   registry: ToolRegistry,
-  opts: { delegate?: boolean; plugins?: boolean; mcpConfig?: boolean } = {},
+  opts: {
+    delegate?: boolean
+    plugins?: boolean
+    mcpConfig?: boolean
+    researchControl?: boolean
+  } = {},
 ): void {
   const shell = commandShell()
   for (const spec of [
@@ -186,6 +192,7 @@ export function registerBuiltinTools(
     readSkillTool,
     writeSkillTool,
     moveSkillTool,
+    ...(opts.researchControl ? [researchControlTool] : []),
     ...(opts.mcpConfig ? [writeMcpServerTool, moveMcpServerTool] : []),
     createScheduleTool,
     listSchedulesTool,

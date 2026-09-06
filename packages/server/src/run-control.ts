@@ -144,6 +144,17 @@ export async function startRun(
           signal: controller.signal,
         })
       : undefined
+  const researchControlPort =
+    !isNativeCli && deps.researchControlPortFactory
+      ? deps.researchControlPortFactory({
+          workspaceId: ws.id,
+          workspaceRoot: ws.rootPath,
+          conversationId,
+          campaignIds: listResearchCampaigns(deps.store, ws.id, conversationId).map(
+            (campaign) => campaign.id,
+          ),
+        })
+      : undefined
 
   const session = isNativeCli
     ? new CliConversationSession({
@@ -159,6 +170,7 @@ export async function startRun(
         content: deps.content,
         workspaceRoot: ws.rootPath,
         signal: controller.signal,
+        ...(researchControlPort ? { researchControl: researchControlPort } : {}),
         // 派活通道只给顶层会话。成员会话（`team-run.ts`）不传，因此它那边连
         // `subagent` 工具都不注册——子 agent 再派活没有终止条件。
         delegate: makeDelegate({ deps, workspaceRoot: ws.rootPath, conversationId }),

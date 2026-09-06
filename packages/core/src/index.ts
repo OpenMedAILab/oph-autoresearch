@@ -175,6 +175,7 @@ export {
   workflowGroupId,
   workflowTransitionOf,
 } from './domain/workflow.ts'
+export type { ResearchControlOperation, ResearchControlPort } from './ports/research-control.ts'
 // 服务端 → 客户端的事件
 export type {
   ActionDescriptor,

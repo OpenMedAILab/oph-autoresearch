@@ -51,7 +51,10 @@ import { handleHello } from './handshake.ts'
 import { CORS_HEADERS, hostLabel, serveStatic, withCors } from './http-util.ts'
 import { extractToken, Pairing, preferredLanAddress } from './pairing.ts'
 import { sanitizeProcessExitObservation } from './process-exit.ts'
-import { createNativeResearchControlBridge } from './research/native-research-control.ts'
+import {
+  createNativeResearchControlBridge,
+  createResearchControlPort,
+} from './research/native-research-control.ts'
 import { publishResearchEvents } from './research-events.ts'
 import { ensureResearchWorkspace } from './research-template.ts'
 import { startRun } from './run-control.ts'
@@ -337,6 +340,29 @@ export function serve(opts: ServeOptions) {
   let boundPort = opts.port
 
   let lanPort = 0
+  const researchControlDeps = (workspaceId: string, workspaceRoot: string) => ({
+    store: opts.store,
+    config: opts.config,
+    bus,
+    runs,
+    pairing,
+    token,
+    port: boundPort,
+    enableLan,
+    disableLan,
+    lanEnabled,
+    lanPort: () => lanPort,
+    startRun: () => {},
+    watchGit: () => gitWatch.retarget(),
+    workspaceId,
+    workspaceRoot,
+    ...(researchHumanAuth ? { researchHumanAuth } : {}),
+    researchRequireApproval,
+    ...(researchLiteratureCollector ? { researchLiteratureCollector } : {}),
+    ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
+    ...(!restricted && opts.researchReviewCli ? { researchReviewCli: opts.researchReviewCli } : {}),
+    ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
+  })
 
   /**
    * 局域网监听用**另一个端口**，不是主端口。
@@ -471,33 +497,14 @@ export function serve(opts: ServeOptions) {
                 runs,
                 researchControlFactory: ({ workspaceId, workspaceRoot, campaignIds, signal }) =>
                   createNativeResearchControlBridge(
-                    {
-                      store: opts.store,
-                      config: opts.config,
-                      bus,
-                      runs,
-                      pairing,
-                      token,
-                      port: srv.port ?? opts.port,
-                      enableLan,
-                      disableLan,
-                      lanEnabled,
-                      lanPort: () => lanPort,
-                      startRun: () => {},
-                      watchGit: () => gitWatch.retarget(),
-                      workspaceId,
-                      workspaceRoot,
-                      ...(researchHumanAuth ? { researchHumanAuth } : {}),
-                      researchRequireApproval,
-                      ...(researchLiteratureCollector ? { researchLiteratureCollector } : {}),
-                      ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
-                      ...(!restricted && opts.researchReviewCli
-                        ? { researchReviewCli: opts.researchReviewCli }
-                        : {}),
-                      ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
-                    },
+                    researchControlDeps(workspaceId, workspaceRoot),
                     campaignIds,
                     signal,
+                  ),
+                researchControlPortFactory: ({ workspaceId, workspaceRoot, campaignIds }) =>
+                  createResearchControlPort(
+                    researchControlDeps(workspaceId, workspaceRoot),
+                    campaignIds,
                   ),
               })
             },
@@ -565,34 +572,12 @@ export function serve(opts: ServeOptions) {
           runs,
           researchControlFactory: ({ workspaceId, workspaceRoot, campaignIds, signal }) =>
             createNativeResearchControlBridge(
-              {
-                store: opts.store,
-                config: opts.config,
-                bus,
-                runs,
-                pairing,
-                token,
-                port: srv.port ?? opts.port,
-                enableLan,
-                disableLan,
-                lanEnabled,
-                lanPort: () => lanPort,
-                startRun: () => {},
-                watchGit: () => gitWatch.retarget(),
-                workspaceId,
-                workspaceRoot,
-                ...(researchHumanAuth ? { researchHumanAuth } : {}),
-                researchRequireApproval,
-                ...(researchLiteratureCollector ? { researchLiteratureCollector } : {}),
-                ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
-                ...(!restricted && opts.researchReviewCli
-                  ? { researchReviewCli: opts.researchReviewCli }
-                  : {}),
-                ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
-              },
+              researchControlDeps(workspaceId, workspaceRoot),
               campaignIds,
               signal,
             ),
+          researchControlPortFactory: ({ workspaceId, workspaceRoot, campaignIds }) =>
+            createResearchControlPort(researchControlDeps(workspaceId, workspaceRoot), campaignIds),
         })
       },
       close(ws: ServerWebSocket<SocketData>) {

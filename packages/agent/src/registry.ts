@@ -19,6 +19,7 @@ import type {
   GoalAction,
   GoalWriteResult,
   IntermediateResourceRef,
+  ResearchControlPort,
   ResourceCoverage,
   TodoItem,
   ToolOutcomeWire,
@@ -407,6 +408,8 @@ export interface ToolContext {
   researchBoundary?: import('@oph-autoresearch/core').ResearchExecutionBoundary
   /** Trusted research assembly provides a locked content reader; never supplied by tool arguments. */
   researchSkills?: { read(name: string): Promise<string> }
+  /** Caller-scoped research control; models cannot obtain approvals or releases through it. */
+  researchControl?: ResearchControlPort
   /**
    * 这一轮那个模型的上下文窗口。
    *
