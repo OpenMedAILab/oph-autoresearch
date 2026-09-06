@@ -44,6 +44,12 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
           ),
           stderr: new Uint8Array(),
         }
+      if (argv[0] === 'inspect')
+        return {
+          exitCode: 0,
+          stdout: Buffer.from(`sha256:${'a'.repeat(64)} exited`),
+          stderr: new Uint8Array(),
+        }
       return { exitCode: 0, stdout: Buffer.from('worker output'), stderr: new Uint8Array() }
     },
   }
@@ -108,6 +114,7 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
     expect(argv).not.toContain('--rm')
     expect(argv.slice(-3)).toEqual([plan.ociImageDigest, 'python3', 'main.py'])
     expect(adapter.run(job, output).exitCode).toBe(0)
+    expect(adapter.stopAndConfirm(job)).toBe(true)
     expect(calls[0]).toEqual(['info', '--format', 'json'])
 
     await writeFile(
