@@ -157,6 +157,32 @@ export async function startSyntheticRun(
   input: StartSyntheticRunInput,
   hooks: SyntheticRunnerTestHooks = {},
 ): Promise<SyntheticRunResult> {
+  const claimed = await claimSyntheticRun(input, hooks)
+  if ('result' in claimed) return claimed.result
+  return completeClaimedSyntheticRun(input, hooks, claimed)
+}
+
+/**
+ * Returns only after the immutable attempt claim is durable.  The detached
+ * completion retains the normal runner's cancellation map and ledger writes;
+ * callers can immediately inspect, cancel, reconcile, or fetch its receipt.
+ */
+export async function startSyntheticRunBackground(
+  input: StartSyntheticRunInput,
+  hooks: SyntheticRunnerTestHooks = {},
+): Promise<SyntheticRunResult> {
+  const claimed = await claimSyntheticRun(input, hooks)
+  if ('result' in claimed) return claimed.result
+  void completeClaimedSyntheticRun(input, hooks, claimed).catch(() => undefined)
+  return {
+    ok: true,
+    campaign: claimed.claim.campaign,
+    attemptId: claimed.attempt.id,
+    replayed: false,
+  }
+}
+
+async function claimSyntheticRun(input: StartSyntheticRunInput, hooks: SyntheticRunnerTestHooks) {
   let inputHash: string
   let plan: FixedResearchTemplate
   try {
@@ -169,7 +195,13 @@ export async function startSyntheticRun(
     assertId(input.campaignId, 'campaignId')
     assertId(input.dispatchKey, 'dispatchKey')
   } catch (error) {
-    return { ok: false, error: errorMessage(error), code: 'invalid_synthetic_runner_input' }
+    return {
+      result: {
+        ok: false,
+        error: errorMessage(error),
+        code: 'invalid_synthetic_runner_input',
+      } as SyntheticRunResult,
+    }
   }
 
   const claim = mutateResearchCampaign(input.store, input.campaignId, {
@@ -195,15 +227,43 @@ export async function startSyntheticRun(
       inputHash,
     },
   })
-  if (!claim.ok) return { ok: false, error: claim.message, code: claim.code }
+  if (!claim.ok)
+    return { result: { ok: false, error: claim.message, code: claim.code } as SyntheticRunResult }
   notify(input, claim.campaign)
   const attempt = claim.campaign.attempts.find(
     (candidate) => candidate.dispatchKey === input.dispatchKey,
   )
-  if (!attempt) return { ok: false, error: '账本没有返回合成尝试', code: 'missing_attempt' }
+  if (!attempt)
+    return {
+      result: {
+        ok: false,
+        error: '账本没有返回合成尝试',
+        code: 'missing_attempt',
+      } as SyntheticRunResult,
+    }
   if (claim.replayed)
-    return { ok: true, campaign: claim.campaign, attemptId: attempt.id, replayed: true }
+    return {
+      result: {
+        ok: true,
+        campaign: claim.campaign,
+        attemptId: attempt.id,
+        replayed: true,
+      } as SyntheticRunResult,
+    }
 
+  return { claim, attempt, plan }
+}
+
+async function completeClaimedSyntheticRun(
+  input: StartSyntheticRunInput,
+  hooks: SyntheticRunnerTestHooks,
+  claimed: {
+    claim: Extract<Awaited<ReturnType<typeof mutateResearchCampaign>>, { ok: true }>
+    attempt: NonNullable<ResearchCampaign['attempts'][number]>
+    plan: FixedResearchTemplate
+  },
+): Promise<SyntheticRunResult> {
+  const { attempt, plan } = claimed
   const controller = new AbortController()
   active.set(attempt.id, controller)
   try {

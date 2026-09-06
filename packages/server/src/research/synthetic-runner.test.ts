@@ -10,7 +10,11 @@ import {
   Store,
   upsertWorkspace,
 } from '@oph-autoresearch/store'
-import { cancelSyntheticRun, startSyntheticRun } from './synthetic-runner.ts'
+import {
+  cancelSyntheticRun,
+  startSyntheticRun,
+  startSyntheticRunBackground,
+} from './synthetic-runner.ts'
 import { FIRST_PARTY_SYNTHETIC_SKILL } from './synthetic-skill.ts'
 
 const roots: string[] = []
@@ -142,6 +146,84 @@ describe('固定合成摘要运行器', () => {
 
     expect(replay).toMatchObject({ ok: true, replayed: true, attemptId: first.attemptId })
     expect(getResearchCampaign(store, campaign.id)?.attempts).toHaveLength(1)
+  })
+
+  test('后台提交在 durable claim 后立即返回；丢失响应重放不新增 attempt', async () => {
+    const { store, workspaceRoot, campaign } = await fresh()
+    let release!: () => void
+    let entered!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const atWrite = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const request = {
+      store,
+      workspaceRoot,
+      campaignId: campaign.id,
+      expectedVersion: campaign.version,
+      dispatchKey: 'background-once',
+    }
+    const accepted = await startSyntheticRunBackground(request, {
+      beforeWrite: async () => {
+        entered()
+        await waiting
+      },
+    })
+    expect(accepted).toMatchObject({ ok: true, replayed: false })
+    if (!accepted.ok) return
+    await atWrite
+    const replay = await startSyntheticRunBackground(request)
+    expect(replay).toMatchObject({ ok: true, replayed: true, attemptId: accepted.attemptId })
+    expect(getResearchCampaign(store, campaign.id)?.attempts).toHaveLength(1)
+    release()
+  })
+
+  test('后台提交 can be cancelled while completion is detached', async () => {
+    const { store, workspaceRoot, campaign } = await fresh()
+    let release!: () => void
+    let entered!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const atWrite = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const accepted = await startSyntheticRunBackground(
+      {
+        store,
+        workspaceRoot,
+        campaignId: campaign.id,
+        expectedVersion: campaign.version,
+        dispatchKey: 'background-cancel',
+      },
+      {
+        beforeWrite: async () => {
+          entered()
+          await waiting
+        },
+      },
+    )
+    if (!accepted.ok) throw new Error(accepted.error)
+    await atWrite
+    const current = getResearchCampaign(store, campaign.id)!
+    expect(
+      cancelSyntheticRun({
+        store,
+        campaignId: campaign.id,
+        expectedVersion: current.version,
+        attemptId: accepted.attemptId,
+      }).ok,
+    ).toBe(true)
+    release()
+    for (
+      let i = 0;
+      i < 20 && getResearchCampaign(store, campaign.id)?.attempts[0]?.status !== 'cancelled';
+      i++
+    )
+      await Bun.sleep(5)
+    expect(getResearchCampaign(store, campaign.id)?.attempts[0]?.status).toBe('cancelled')
   })
 
   test('写入时发现已有文件不覆盖，保留 attempt 目录并把账本置 failed', async () => {

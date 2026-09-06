@@ -79,6 +79,7 @@ export class ResearchControlApiAdapter {
       path += `/${encodeURIComponent(campaignId!)}${suffix ? `/${suffix}` : ''}`
     }
     const url = new URL(`http://research-control.invalid${path}`)
+    if (request.operation === 'submit') url.searchParams.set('accepted', 'true')
     if (method === 'GET' && request.body && typeof request.body === 'object') {
       for (const [key, value] of Object.entries(request.body as Record<string, unknown>)) {
         if (typeof value === 'string') url.searchParams.set(key, value)

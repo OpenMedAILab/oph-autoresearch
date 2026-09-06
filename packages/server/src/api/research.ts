@@ -22,6 +22,7 @@ import {
   cancelSyntheticRun,
   reconcileSyntheticRun,
   startSyntheticRun,
+  startSyntheticRunBackground,
 } from '../research/synthetic-runner.ts'
 import { fixedResearchTemplate, researchTemplateCatalog } from '../research/template-registry.ts'
 import { publishResearchEvents } from '../research-events.ts'
@@ -427,7 +428,9 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
     ) {
       return json({ error: 'invalid_synthetic_request' }, 400)
     }
-    const result = await startSyntheticRun({
+    const start =
+      url.searchParams.get('accepted') === 'true' ? startSyntheticRunBackground : startSyntheticRun
+    const result = await start({
       ...(executionBackend ? { daemonBackend: executionBackend } : {}),
       requireApproval: d.researchRequireApproval ?? false,
       ...(typeof body.approvalId === 'string' ? { approvalId: body.approvalId } : {}),
