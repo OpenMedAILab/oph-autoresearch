@@ -957,6 +957,51 @@ describe('CLI preparation authorization ledger', () => {
         command: { kind: 'bindCliPreparationJob', attemptId: attempt.id, spec },
       })
       expect(rebound.ok && rebound.replayed).toBe(true)
+      // Imported historical ledgers can contain a revoked consumed approval
+      // without the newer cancelRequestedAt marker. A normal finish must not
+      // admit that receipt as a candidate.
+      const historicallyRevoked = {
+        ...bound.campaign,
+        approvals: bound.campaign.approvals.map((approval) =>
+          approval.consumedBy === attempt.id
+            ? { ...approval, status: 'revoked' as const }
+            : approval,
+        ),
+      }
+      store.db
+        .query('UPDATE research_campaigns SET snapshot = ? WHERE id = ?')
+        .run(JSON.stringify(historicallyRevoked), historicallyRevoked.id)
+      const revokedFinish = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'finish-revoked-candidate',
+        expectedVersion: bound.campaign.version,
+        command: {
+          kind: 'finishCliPreparation',
+          attemptId: attempt.id,
+          uri: 'research/candidates/candidate.json',
+          artifactKind: 'cli_preparation_candidate',
+          contentHash: CONTENT_HASH,
+          validation: {
+            schema: 'research-cli-preparation-candidate-v1',
+            jobSpecHash: specHash,
+            dispatchKey: attempt.id,
+            clientDispatchKey: preparation.dispatchKey,
+            preparationId: preparation.id,
+            candidateId: preparation.candidateId,
+            taskRevisionId: preparation.taskRevisionId,
+            inputHash: preparation.inputHash,
+            configHash: preparation.configHash,
+            contentHash: CONTENT_HASH,
+            draftContentHash: `sha256:${'f'.repeat(64)}`,
+            byteLength: 22,
+            verifiedAt: Date.now(),
+          },
+        },
+      })
+      expect(revokedFinish.ok).toBe(false)
+      if (!revokedFinish.ok) expect(revokedFinish.code).toBe('invalid_cli_preparation_finish')
+      store.db
+        .query('UPDATE research_campaigns SET snapshot = ? WHERE id = ?')
+        .run(JSON.stringify(bound.campaign), bound.campaign.id)
       const finished = mutateResearchCampaign(store, proposed.campaign.id, {
         idempotencyKey: 'finish-candidate',
         expectedVersion: bound.campaign.version,

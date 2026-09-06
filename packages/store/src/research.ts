@@ -880,8 +880,12 @@ function nextCampaign(
       )
       const spec = owned.attempt.cliPreparationJobSpec
       const validation = command.validation
+      const consumedApproval = campaign.approvals.find(
+        (candidate) => candidate.consumedBy === owned.attempt.id,
+      )
       if (
         owned.attempt.cancelRequestedAt !== null ||
+        consumedApproval?.status === 'revoked' ||
         !preparation ||
         !task ||
         preparation.status !== 'claimed' ||

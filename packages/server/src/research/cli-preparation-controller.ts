@@ -382,26 +382,42 @@ export class CliPreparationController {
             byteLength: bytes.byteLength,
             verifiedAt: Date.now(),
           }
-          this.mutate(
-            scope,
-            `${attempt.cancelRequestedAt !== null ? 'quarantine' : 'finish'}-cli:${attemptId}`,
-            attempt.cancelRequestedAt !== null
-              ? {
-                  kind: 'quarantineCliPreparationResult',
-                  attemptId,
-                  uri,
-                  contentHash: sha256(bytes),
-                  validation,
-                }
-              : {
-                  kind: 'finishCliPreparation',
-                  attemptId,
-                  uri,
-                  artifactKind: 'cli_preparation_candidate',
-                  contentHash: sha256(bytes),
-                  validation,
-                },
-          )
+          // Receipt retrieval and persistence may take long enough for a local
+          // cancellation or approval revocation to commit. Re-read and classify
+          // the result in the same SQLite transaction as the terminal command.
+          // The finish reducer retains the same revoked/cancelled guard as a
+          // defense in depth for callers outside this controller.
+          this.store.tx(() => {
+            const current = this.campaign(scope)
+            const currentAttempt = current.attempts.find((item) => item.id === attemptId)
+            if (!currentAttempt) throw new CliPreparationControlError('准备执行记录不存在', 404)
+            const consumedApproval = current.approvals.find((item) => item.consumedBy === attemptId)
+            const quarantine =
+              currentAttempt.cancelRequestedAt !== null || consumedApproval?.status === 'revoked'
+            this.mutate(
+              scope,
+              `${quarantine ? 'quarantine' : 'finish'}-cli:${attemptId}`,
+              quarantine
+                ? {
+                    kind: 'quarantineCliPreparationResult',
+                    attemptId,
+                    uri,
+                    contentHash: sha256(bytes),
+                    validation,
+                  }
+                : {
+                    kind: 'finishCliPreparation',
+                    attemptId,
+                    uri,
+                    artifactKind: 'cli_preparation_candidate',
+                    contentHash: sha256(bytes),
+                    validation,
+                  },
+              current.version,
+              false,
+            )
+          })
+          this.notifyAfterCommit()
           return
         }
         if (job.status === 'cancelled') {
