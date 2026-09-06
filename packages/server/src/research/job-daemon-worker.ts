@@ -180,6 +180,10 @@ export async function runResearchJobWorker(args: readonly string[]) {
       try {
         adapter = new FormalOciAdapter(config)
         const result = adapter.run(job.spec, directory)
+        // Podman output is diagnostic only.  Keep both streams bounded by the
+        // adapter and never feed worker-reported metrics into the evaluator.
+        await writeFile(join(directory, 'formal-stdout.log'), result.stdout, { flag: 'wx' })
+        await writeFile(join(directory, 'formal-stderr.log'), result.stderr, { flag: 'wx' })
         if (result.exitCode !== 0 || terminationRequested) return 11
         const receipt = Buffer.from(`${JSON.stringify(adapter.evaluate(job.spec, directory))}\n`)
         const path = join(directory, 'formal-receipt.json')
