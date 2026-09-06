@@ -333,6 +333,9 @@ export interface FormalReviewDispatch {
   status: 'reserved' | 'sending' | 'done' | 'failed' | 'unknown'
   ownerPid: number
   reviewId: string
+  /** Original fully validated plan; recovery must never rebuild it from mutable inputs. */
+  plan: FormalExecutionPlan
+  preparationId: string
   requestId?: string
   result?: FormalCodeReviewResult
   actualCost?: number | null

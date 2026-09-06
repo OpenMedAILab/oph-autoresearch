@@ -206,6 +206,11 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       plans: campaign.formalExecutionPlans ?? [],
       reviews: campaign.formalCodeReviews ?? [],
       dispatches: campaign.formalReviewDispatches ?? [],
+      drafts: (campaign.formalReviewDispatches ?? []).map((item) => ({
+        plan: item.plan,
+        preparationId: item.preparationId,
+        dispatchId: item.id,
+      })),
       catalog: deps.researchFormalCatalog ?? { images: [], datasets: [], evaluators: [] },
       admittedBackend: false,
       admissionReason: '未配置通过验证的 Linux OCI 执行后端',
@@ -359,6 +364,8 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
           maxInputCharacters: quote.maxInputCharacters,
           maxOutputTokens: quote.maxOutputTokens,
           reviewId,
+          plan: built.plan,
+          preparationId: parsed.preparationId,
         },
       },
     })

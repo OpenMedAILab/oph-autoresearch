@@ -1833,6 +1833,9 @@ function nextCampaign(
         spec.reservedCost <= 0 ||
         !spec.dispatchKey ||
         !spec.reviewId ||
+        !validFormalExecutionPlan(spec.plan) ||
+        !spec.preparationId ||
+        formalExecutionPlanHash(spec.plan) !== spec.formalPlanHash ||
         (campaign.formalReviewDispatches ?? []).some(
           (item) => item.dispatchKey === spec.dispatchKey,
         ) ||
