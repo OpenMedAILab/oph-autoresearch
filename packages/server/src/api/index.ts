@@ -15,6 +15,7 @@ import type { Store } from '@oph-autoresearch/store'
 import { getWorkspace, mostRecentWorkspace } from '@oph-autoresearch/store'
 import { handleAttachmentsApi } from './attachments.ts'
 import { handleConfigApi } from './config.ts'
+import { handleResearchControlApi } from './controller-bridge.ts'
 import { handleConversationsApi } from './conversations.ts'
 import { handleExtrasApi } from './extras.ts'
 import { handleGitApi } from './git.ts'
@@ -74,6 +75,7 @@ const HANDLERS: ApiHandler[] = [
   handlePluginsApi,
   handleTeamApi,
   handleUsageApi,
+  handleResearchControlApi,
   handleResearchApi,
   handleConversationsApi,
   handleWorkspaceFsApi,

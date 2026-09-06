@@ -49,6 +49,7 @@ import { runMcp } from './mcp.ts'
 import { runPlugins } from './plugins.ts'
 import { runProbe } from './probe.ts'
 import { renderQr } from './qr.ts'
+import { runResearchControl } from './research-control.ts'
 import { runTui } from './tui.ts'
 import { runUsage } from './usage.ts'
 
@@ -158,6 +159,7 @@ async function main(argv: string[]): Promise<number> {
   if (cmd === 'usage') return runUsage(rest)
   if (cmd === 'export') return runExport(rest)
   if (cmd === 'probe') return runProbe(rest)
+  if (cmd === 'research') return runResearchControl(rest)
   if (cmd === 'exec') return runExec(rest)
   /*
    * 命令 runner 那一侧。**不写进 USAGE**：它不是给人用的子命令，是

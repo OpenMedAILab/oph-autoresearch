@@ -80,6 +80,8 @@ export async function runCli(
      * 它写了什么在结束之前一个字都看不到。
      */
     onChunk?: (text: string) => void
+    /** A caller-scoped bridge; never inherit ambient controller credentials. */
+    env?: Record<string, string>
   },
 ): Promise<CliRunResult> {
   const template = input.resume ? (agent.resumeArgs ?? agent.args) : agent.args
@@ -114,6 +116,7 @@ export async function runCli(
       CI: '1',
       NO_COLOR: '1',
       TERM: 'dumb',
+      ...(input.env ?? {}),
     },
   })
 
