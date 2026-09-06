@@ -9,11 +9,13 @@
  * 子进程结束后立即删除。
  */
 
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import type { ToolSpec } from '@oph-autoresearch/agent'
+import type { Workspace } from '@oph-autoresearch/core'
 import { collectProcess } from './sandbox.ts'
 import { globalScopeRoot } from './scopes.ts'
 
@@ -26,6 +28,36 @@ export interface SshProfile {
   root: string
   readOnly: boolean
   hostKeyPolicy: 'strict' | 'accept-new'
+}
+
+/** Credentials are excluded; changes to server identity or permitted scope require a new binding. */
+export function sshProfileConnectionHash(profile: SshProfile): string {
+  return `sha256:${createHash('sha256')
+    .update(
+      JSON.stringify([
+        profile.host,
+        profile.username ?? '',
+        profile.port,
+        profile.root,
+        profile.readOnly,
+        profile.hostKeyPolicy,
+      ]),
+    )
+    .digest('hex')}`
+}
+
+export function scopeSshProfile(
+  profile: SshProfile,
+  binding: NonNullable<Workspace['serverBinding']>,
+): SshProfile {
+  if (
+    profile.id !== binding.profileId ||
+    sshProfileConnectionHash(profile) !== binding.connectionHash
+  )
+    throw new Error('项目绑定的服务器配置已变化，请重新核对；不会切换服务器')
+  const root = resolveSshPath(profile, binding.remoteRoot)
+  if (root !== binding.remoteRoot) throw new Error('项目服务器工作目录无效')
+  return { ...profile, root }
 }
 
 /** 自动探测得到的执行端能力；不代表实验审批或结果证据。 */
@@ -721,11 +753,17 @@ export async function connectSshTarget(
 }
 
 /** 校验并返回可作为工作区的真实远程目录。 */
-export async function inspectSshDirectory(profile: SshProfile, requested: string): Promise<string> {
+export async function inspectSshDirectory(
+  profile: SshProfile,
+  requested: string,
+  requireWritable = false,
+): Promise<string> {
+  if (requireWritable && profile.readOnly)
+    throw new Error('研究工作目录需要可写连接，请先修改服务器访问模式')
   const path = resolveSshPath(profile, requested)
   const result = await sshExec(
     profile,
-    `${remotePathGuard(profile, path)}test -d "$path" || exit 67; cd "$path" && pwd -P`,
+    `${remotePathGuard(profile, path)}test -d "$path" || exit 67; ${requireWritable ? 'test -w "$path" && test -x "$path" || exit 68; ' : ''}cd "$path" && pwd -P`,
     { timeoutMs: 20_000 },
   )
   if (result.exitCode !== 0) throw new Error(sshError(result))
@@ -903,10 +941,11 @@ export async function readSshWholeText(
   }
 }
 
-async function findProfile(id: string): Promise<SshProfile> {
+async function findProfile(id: string, binding?: Workspace['serverBinding']): Promise<SshProfile> {
+  if (binding && id !== binding.profileId) throw new Error('该服务器不属于当前研究项目')
   const profile = (await loadSshProfiles()).find((p) => p.id === id)
   if (!profile) throw new Error(`找不到 SSH 连接：${id}`)
-  return profile
+  return binding ? scopeSshProfile(profile, binding) : profile
 }
 
 export const sshListTool: ToolSpec = {
@@ -931,9 +970,12 @@ export const sshListTool: ToolSpec = {
   permissionEffect: 'network',
   parallelSafe: true,
   resourceKeys: (a) => [`ssh:${String(a.profile)}:${String(a.path ?? '.')}`],
-  async fn(args) {
+  async fn(args, ctx) {
     if (args.profile === undefined) {
-      const profiles = (await loadSshProfiles()).map((profile) => ({
+      const available = ctx.projectServerBinding
+        ? [await findProfile(ctx.projectServerBinding.profileId, ctx.projectServerBinding)]
+        : await loadSshProfiles()
+      const profiles = available.map((profile) => ({
         id: profile.id,
         name: profile.name,
         root: profile.root,
@@ -946,7 +988,10 @@ export const sshListTool: ToolSpec = {
         data: { profiles },
       }
     }
-    const profile = await findProfile(String(args.profile))
+    const profile = await findProfile(
+      String(args.profile ?? ctx.projectServerBinding?.profileId),
+      ctx.projectServerBinding,
+    )
     const entries = await listSshFiles(
       profile,
       typeof args.path === 'string' ? args.path : undefined,
@@ -984,7 +1029,10 @@ export const sshReadTool: ToolSpec = {
   parallelSafe: true,
   resourceKeys: (a) => [`ssh:${String(a.profile)}:${String(a.path)}`],
   async fn(args, ctx) {
-    const profile = await findProfile(String(args.profile))
+    const profile = await findProfile(
+      String(args.profile ?? ctx.projectServerBinding?.profileId),
+      ctx.projectServerBinding,
+    )
     const path = resolveSshPath(profile, String(args.path))
     if (IMAGE_EXT.test(path)) {
       if (ctx.vision === false) {
@@ -1050,7 +1098,10 @@ export const sshRunTool: ToolSpec = {
   targetExtractor: (a) => String(a.profile),
   permissionEffect: 'execute',
   async fn(args, ctx) {
-    const profile = await findProfile(String(args.profile))
+    const profile = await findProfile(
+      String(args.profile ?? ctx.projectServerBinding?.profileId),
+      ctx.projectServerBinding,
+    )
     if (profile.readOnly) {
       return {
         status: 'failure',

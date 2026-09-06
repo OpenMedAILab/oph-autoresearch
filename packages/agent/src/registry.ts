@@ -400,6 +400,8 @@ export interface HistoryPort {
 }
 
 export interface ToolContext {
+  /** Bound by the local workspace ledger, never by model tool arguments. */
+  projectServerBinding?: import('@oph-autoresearch/core').Workspace['serverBinding']
   workspaceRoot: string
   conversationId: string
   runId: string

@@ -18,7 +18,9 @@ import {
   type SshProfile,
   saveSshCredential,
   saveSshProfiles,
+  scopeSshProfile,
   sshConfigPath,
+  sshProfileConnectionHash,
 } from './ssh.ts'
 
 const profile: SshProfile = {
@@ -273,4 +275,27 @@ describe('SSH 忘掉最近连接', () => {
       expect(await loadSshCredential(targetA)).toBeUndefined()
     })
   })
+})
+
+test('项目绑定缩小 SSH 根目录并拒绝配置变化及跨服务器', () => {
+  const binding = {
+    version: 1 as const,
+    profileId: profile.id,
+    remoteRoot: '/data/oph/project',
+    connectionHash: sshProfileConnectionHash(profile),
+    verifiedAt: Date.now(),
+  }
+  const scoped = scopeSshProfile(profile, binding)
+  expect(scoped.root).toBe('/data/oph/project')
+  expect(() => resolveSshPath(scoped, '../other')).toThrow('越过允许根目录')
+  for (const changed of [
+    { ...profile, id: 'other' },
+    { ...profile, port: 2200 },
+    { ...profile, root: '/data' },
+    { ...profile, readOnly: false },
+    { ...profile, username: 'other' },
+  ]) {
+    expect(() => scopeSshProfile(changed, binding)).toThrow()
+  }
+  expect(scopeSshProfile({ ...profile, name: 'Renamed' }, binding).root).toBe(binding.remoteRoot)
 })

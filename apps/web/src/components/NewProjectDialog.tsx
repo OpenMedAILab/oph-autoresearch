@@ -1,6 +1,7 @@
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
 import { client, pickWorkspace, type WorkspaceInput } from '../lib/store/index.ts'
 import { IconFolder, IconPlus } from './Icons.tsx'
+import { ProjectServerDirectory } from './ProjectServerDirectory.tsx'
 
 /** 创建研究项目；Web 端通过本地服务浏览文件夹，桌面端使用系统选择器。 */
 export function NewProjectDialog(props: {
@@ -10,6 +11,11 @@ export function NewProjectDialog(props: {
   onCreate: (input: WorkspaceInput) => Promise<void>
   onClose: () => void
 }) {
+  const [serverBinding, setServerBinding] = createSignal<{
+    profileId: string
+    remoteRoot: string
+  } | null>(null)
+  let resumeDraft = false
   const [name, setName] = createSignal('')
   const [folder, setFolder] = createSignal<string | null>(null)
   const [browsing, setBrowsing] = createSignal(false)
@@ -45,9 +51,15 @@ export function NewProjectDialog(props: {
   // 每次打开都是干净的一张表：留着上一次的输入读起来像是它记住了什么。
   createEffect(() => {
     if (props.open) {
+      if (resumeDraft) {
+        resumeDraft = false
+        setServerBinding(null)
+        return
+      }
       setBrowsing(false)
       setDirectory(null)
       setName('')
+      setServerBinding(null)
       setFolder(null)
       setError(null)
       setBusy(false)
@@ -86,10 +98,15 @@ export function NewProjectDialog(props: {
   }
 
   const create = async () => {
+    if (!serverBinding()) {
+      setError('请选择服务器工作目录')
+      return
+    }
     setError(null)
     setBusy(true)
     try {
       await props.onCreate({
+        serverBinding: serverBinding()!,
         ...(folder() ? { path: folder() as string } : {}),
         ...(name().trim() ? { name: name().trim() } : {}),
       })
@@ -120,7 +137,7 @@ export function NewProjectDialog(props: {
           </label>
 
           <div class="np-field">
-            <span class="np-label">源文件夹</span>
+            <span class="np-label">本机项目工作目录</span>
             <Show
               when={folder()}
               fallback={
@@ -150,6 +167,14 @@ export function NewProjectDialog(props: {
               )}
             </Show>
           </div>
+
+          <ProjectServerDirectory
+            onChange={setServerBinding}
+            onConfigure={() => {
+              resumeDraft = true
+              props.onClose()
+            }}
+          />
 
           <Show when={browsing()}>
             <section class="np-browser" aria-label="选择本机项目文件夹">
@@ -218,7 +243,7 @@ export function NewProjectDialog(props: {
             <button
               class="btn-primary"
               type="button"
-              disabled={busy() || !effectiveName()}
+              disabled={busy() || !effectiveName() || !serverBinding()}
               onClick={() => void create()}
             >
               {busy() ? '创建中…' : '创建项目'}

@@ -452,6 +452,7 @@ export function openFileInPanel(path: string): void {
  * 对应的可变状态，只有 `workspaces` 表和每条请求自带的参数。
  */
 export interface WorkspaceInfo {
+  serverBinding?: import('@oph-autoresearch/core').Workspace['serverBinding']
   id: string
   root: string
   name: string

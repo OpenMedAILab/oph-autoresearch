@@ -18,6 +18,7 @@ import {
 } from '@oph-autoresearch/store'
 import { findCli, runCli } from '@oph-autoresearch/team'
 import { cliCatalogSnapshot } from './cli-catalog.ts'
+import { resolveWorkspaceServerBinding } from './workspace-binding.ts'
 
 export const CLI_PROVIDER_PREFIX = 'cli:'
 const MODEL_CLI = new Set(['codex', 'claude', 'grok'])
@@ -104,8 +105,9 @@ export class CliConversationSession {
         throw new Error(`${cliId} CLI 未安装或不在服务进程的 PATH 中，请安装后刷新模型列表。`)
       if (model !== 'default' && !supportsCliModel(cliId))
         throw new Error('该 CLI 请使用默认模型，并在 CLI 自身配置中切换模型。')
+      const boundServer = ws.serverBinding ? await resolveWorkspaceServerBinding(ws) : null
       const remoteCapabilities = cliCatalogSnapshot()
-        .agents.filter((a) => a.profileId)
+        .agents.filter((a) => boundServer && a.profileId === boundServer.binding.profileId)
         .map((a) => ({
           profile: a.profileId,
           location: a.location,
@@ -123,7 +125,10 @@ export class CliConversationSession {
       const controlInstruction = control
         ? `\n受控研究操作只能通过 \`${controlCommand} research\` 调用本轮注入的本地桥。它只允许 campaign ${control.campaignIds.join(', ') || '（无可用 campaign）'} 的 prepare/propose/submit/status/events/cancel/reconcile/receipt/request_review；它不能审批、签名或发布。每次变更都必须带 ledger 要求的 expectedVersion 和 idempotencyKey。\n`
         : ''
-      const input = `远程执行端能力清单（仅状态，不是实验执行授权）：${JSON.stringify(remoteCapabilities)}。本机负责规划与审核；远程 CLI 用于受控实验，不是主控模型。${controlInstruction}
+      const bindingContext = boundServer
+        ? `本机项目工作目录：${ws.rootPath}；绑定的服务器工作目录：${boundServer.binding.remoteRoot}。本机保存对话、方案和产物索引，服务器目录用于代码与实验；目录绑定不代表自动文件同步。`
+        : '此历史项目尚未绑定服务器工作目录，请先在项目侧栏完成绑定再安排远程实验。'
+      const input = `${bindingContext}\n远程执行端能力清单（仅状态，不是实验执行授权）：${JSON.stringify(remoteCapabilities)}。本机负责规划与审核；远程 CLI 用于受控实验，不是主控模型。${controlInstruction}
 你正在项目 ${this.opts.workspaceRoot} 中处理研究对话。以下历史仅作为上下文，回答最后一条用户消息。\n${history.join('\n\n')}\n\nuser: ${prompt}`
       if (Buffer.byteLength(input) > 96_000)
         throw new Error(

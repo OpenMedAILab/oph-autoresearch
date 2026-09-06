@@ -95,7 +95,7 @@ export async function handleApi(url: URL, req: Request, d: ApiDeps): Promise<Res
     // 空状态只允许项目创建、目录浏览和不依赖项目的系统配置。
     // 项目相关接口继续拒绝，避免空路径被解释为进程当前目录。
     const globalDeps = { ...d, workspaceRoot: '', workspaceId: '' }
-    for (const handler of [handleConfigApi, handleHostApi]) {
+    for (const handler of [handleConfigApi, handleHostApi, handleSshApi]) {
       const response = await handler(url, req, globalDeps)
       if (response) return response
     }

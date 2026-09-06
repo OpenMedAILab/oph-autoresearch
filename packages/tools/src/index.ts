@@ -126,9 +126,11 @@ export {
   type SshRecentConnection,
   saveSshCredential,
   saveSshProfiles,
+  scopeSshProfile,
   sshCommandProfile,
   sshConfigPath,
   sshCredentialKey,
+  sshProfileConnectionHash,
   sshTargetProfile,
   testSshProfile,
 } from './ssh.ts'

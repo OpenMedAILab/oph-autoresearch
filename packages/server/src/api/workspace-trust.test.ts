@@ -14,19 +14,23 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isWorkspaceTrusted, loadConfig } from '@oph-autoresearch/runtime'
+import { Store } from '@oph-autoresearch/store'
 import type { ApiRequestDeps } from './types.ts'
 import { handleWorkspaceApi } from './workspace.ts'
 
 const dirs: string[] = []
+let store: Store
 const prevHome = process.env.OPH_AUTORESEARCH_HOME
 
 beforeEach(async () => {
+  store = new Store({ path: ':memory:' })
   const home = await mkdtemp(join(tmpdir(), 'oph-autoresearch-wshome-'))
   dirs.push(home)
   process.env.OPH_AUTORESEARCH_HOME = home
 })
 
 afterEach(async () => {
+  store.close()
   if (prevHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
   else process.env.OPH_AUTORESEARCH_HOME = prevHome
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true }).catch(() => {})
@@ -35,6 +39,7 @@ afterEach(async () => {
 function call(root: string, path: string, init?: RequestInit): Promise<Response | null> {
   const url = new URL(`http://x${path}`)
   return handleWorkspaceApi(url, new Request(url.href, init), {
+    store,
     workspaceRoot: root,
     workspaceId: 'ws_test',
   } as unknown as ApiRequestDeps)

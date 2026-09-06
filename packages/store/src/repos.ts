@@ -108,6 +108,42 @@ export function upsertWorkspace(store: Store, rootPath: string, name: string): W
  * 「哪个是最近打开的」由 `mostRecentWorkspace` 单独回答——那是**启动挂哪儿**的
  * 判据，和**显示顺序**不是一件事，合用一条查询就是这次跳动的根因。
  */
+/** Initial binding is immutable: opening an existing project never silently changes its server. */
+export function bindWorkspaceServer(
+  store: Store,
+  workspaceId: WorkspaceId,
+  binding: NonNullable<Workspace['serverBinding']>,
+): Workspace {
+  if (
+    binding.version !== 1 ||
+    !binding.profileId.trim() ||
+    !binding.remoteRoot.startsWith('/') ||
+    Array.from(binding.remoteRoot).some((char) => char.charCodeAt(0) < 32) ||
+    binding.remoteRoot.split('/').some((part) => part === '.' || part === '..') ||
+    !/^sha256:[a-f0-9]{64}$/.test(binding.connectionHash) ||
+    !Number.isSafeInteger(binding.verifiedAt) ||
+    binding.verifiedAt <= 0
+  )
+    throw new Error('服务器目录绑定无效')
+  return store.tx(() => {
+    const existing = getWorkspace(store, workspaceId)
+    if (!existing) throw new Error('研究项目不存在')
+    const previous = existing.serverBinding
+    if (
+      previous &&
+      (previous.profileId !== binding.profileId ||
+        previous.remoteRoot !== binding.remoteRoot ||
+        previous.connectionHash !== binding.connectionHash)
+    )
+      throw new Error('项目已绑定其他服务器目录，请新建项目；不能静默改派')
+    if (!previous)
+      store.db
+        .query('UPDATE workspaces SET server_binding = ? WHERE id = ?')
+        .run(JSON.stringify(binding), workspaceId)
+    return getWorkspace(store, workspaceId)!
+  })
+}
+
 export function listWorkspaces(store: Store): Workspace[] {
   return store.db
     .query<WorkspaceRow, []>(
@@ -1550,7 +1586,11 @@ export function listSteps(store: Store, runId: RunId): Step[] {
 // ─────────────────────────────── 行 → 领域对象 ───────────────────────────────
 
 function rowToWorkspace(r: WorkspaceRow): Workspace {
+  const binding = r.server_binding
+    ? (JSON.parse(r.server_binding) as Workspace['serverBinding'])
+    : undefined
   return {
+    ...(binding ? { serverBinding: binding } : {}),
     id: r.id,
     name: r.name,
     rootPath: r.root_path,

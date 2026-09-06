@@ -390,6 +390,7 @@ export function trustWorkspace(trusted: boolean): Promise<{ trusted: boolean }> 
  * 用来做「最近打开」——不必每次都开目录选择器翻一遍。
  */
 export interface KnownWorkspace {
+  serverBinding?: import('@oph-autoresearch/core').Workspace['serverBinding']
   id: string
   rootPath: string
   name: string
@@ -461,6 +462,7 @@ export function revealWorkspace(path: string): Promise<void> {
  * 分成两个端点等于两条路写同一个字段，而那个字段正是分支监听和缺省 `?ws=` 的判据。
  */
 export interface WorkspaceInput {
+  serverBinding?: { profileId: string; remoteRoot: string }
   /** 本机已存在的目录。不给就在 `~/.oph-autoresearch/workspaces/<name>/` 建一个。 */
   path?: string
   /** 显示名。不给且给了 `path` 时取目录名。两个都不给回 422。 */

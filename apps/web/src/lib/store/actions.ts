@@ -79,7 +79,12 @@ export async function activateWorkspace(input: WorkspaceInput): Promise<void> {
   const { workspace: ws, conversations } = await addWorkspace(input)
   const first = conversations[0]
   if (!first) throw new Error('项目没有可用会话')
-  setWorkspace({ id: ws.id, root: ws.rootPath, name: ws.name })
+  setWorkspace({
+    id: ws.id,
+    root: ws.rootPath,
+    name: ws.name,
+    ...(ws.serverBinding ? { serverBinding: ws.serverBinding } : {}),
+  })
   setOpenFile(null)
   closeAllPanelTabs()
   setState({ conversations, activeConversation: null, fileChanges: [], git: null })

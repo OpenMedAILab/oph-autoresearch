@@ -20,6 +20,7 @@ export {
   appendTextToStep,
   archiveConversation,
   archiveWorkspaceConversations,
+  bindWorkspaceServer,
   conversationTreeIds,
   countConversations,
   createConversation,

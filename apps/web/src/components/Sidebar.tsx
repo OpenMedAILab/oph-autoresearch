@@ -2,6 +2,7 @@ import { createEffect, createResource, createSignal, For, Show } from 'solid-js'
 import { loaded } from '../lib/resource.ts'
 import {
   activateWorkspace,
+  client,
   creatingProject,
   isDesktopShell,
   type KnownWorkspace,
@@ -12,6 +13,7 @@ import {
   selectConversation,
   setCenterView,
   setCreatingProject,
+  setWorkspace,
   state,
   toggleSidebar,
   workspace,
@@ -20,6 +22,7 @@ import { ConversationRow } from './ConversationRow.tsx'
 import { IconEye, IconPanel, IconPlus, IconSettings } from './Icons.tsx'
 import { NewProjectDialog } from './NewProjectDialog.tsx'
 import { ProjectRow } from './ProjectRow.tsx'
+import { ProjectServerDirectory } from './ProjectServerDirectory.tsx'
 
 /**
  * 左侧导航。
@@ -58,6 +61,38 @@ export function Sidebar(props: { onClose?: () => void }) {
    * 切过去只是换一个 `?ws=`；新建只填名字的话由服务端建目录。
    * 桌面端使用系统文件夹选择器，Web 端通过本地服务浏览目录。
    */
+  const [bindingProject, setBindingProject] = createSignal<KnownWorkspace | null>(null)
+  const [bindingInput, setBindingInput] = createSignal<{
+    profileId: string
+    remoteRoot: string
+  } | null>(null)
+  const [bindingBusy, setBindingBusy] = createSignal(false)
+  const [bindingError, setBindingError] = createSignal<string | null>(null)
+  const saveBinding = async () => {
+    const target = bindingProject()
+    const input = bindingInput()
+    if (!target || !input) return
+    setBindingBusy(true)
+    setBindingError(null)
+    try {
+      const result = await client.api<{ workspace: KnownWorkspace }>(
+        `/api/workspaces/${encodeURIComponent(target.id)}/server-binding`,
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        },
+      )
+      const current = workspace()
+      if (current?.id === target.id)
+        setWorkspace({ ...current, serverBinding: result.workspace.serverBinding })
+      setBindingProject(null)
+      void refetchWorkspaces()
+    } catch (e) {
+      setBindingError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBindingBusy(false)
+    }
+  }
   const desktop = isDesktopShell()
   const [known, { refetch: refetchWorkspaces }] = createResource(loadKnownWorkspaces)
   const [error, setError] = createSignal<string | null>(null)
@@ -188,6 +223,32 @@ export function Sidebar(props: { onClose?: () => void }) {
                     而用户同一时刻也只看得见一个。 */}
                 <Show when={isCurrent()}>
                   <section class="project-conversation-section" aria-label="研究对话">
+                    <Show
+                      when={w.serverBinding}
+                      fallback={
+                        <button
+                          class="ghost-btn"
+                          type="button"
+                          onClick={() => {
+                            setBindingInput(null)
+                            setBindingError(null)
+                            setBindingProject(w)
+                          }}
+                        >
+                          绑定服务器工作目录
+                        </button>
+                      }
+                    >
+                      {(binding) => (
+                        <p
+                          class="np-hint"
+                          title={`本机：${w.rootPath}\n服务器：${binding().remoteRoot}`}
+                          style={{ 'overflow-wrap': 'anywhere', padding: '0 12px' }}
+                        >
+                          服务器目录 · {binding().remoteRoot}
+                        </p>
+                      )}
+                    </Show>
                     <ul class="nav-list project-conversations">
                       <For each={state.conversations}>
                         {(c) => (
@@ -231,11 +292,54 @@ export function Sidebar(props: { onClose?: () => void }) {
       </footer>
 
       {/* 新建 work：项目名称 + 源文件夹（可留空，留空就建默认工作区）。 */}
+      <Show when={bindingProject()}>
+        <div class="sheet-backdrop">
+          <section
+            class="new-project"
+            role="dialog"
+            aria-modal="true"
+            aria-label="绑定服务器工作目录"
+          >
+            <h3>绑定服务器工作目录</h3>
+            <p class="np-hint">本机项目：{bindingProject()?.rootPath}</p>
+            <ProjectServerDirectory
+              onChange={setBindingInput}
+              onConfigure={() => setBindingProject(null)}
+            />
+            <Show when={bindingError()}>
+              {(message) => (
+                <p class="side-error" role="alert">
+                  {message()}
+                </p>
+              )}
+            </Show>
+            <div class="confirm-actions">
+              <button
+                class="btn-ghost"
+                type="button"
+                disabled={bindingBusy()}
+                onClick={() => setBindingProject(null)}
+              >
+                取消
+              </button>
+              <button
+                class="btn-primary"
+                type="button"
+                disabled={bindingBusy() || !bindingInput()}
+                onClick={() => void saveBinding()}
+              >
+                {bindingBusy() ? '正在验证…' : '绑定目录'}
+              </button>
+            </div>
+          </section>
+        </div>
+      </Show>
       <NewProjectDialog
         open={creating()}
         canPickFolder={desktop}
         onCreate={async (input) => {
           await activateWorkspace(input)
+          setCenterView('chat')
           void refetchWorkspaces()
         }}
         onClose={() => setCreating(false)}

@@ -1138,6 +1138,11 @@ ALTER TABLE provider_requests ADD COLUMN purpose TEXT NOT NULL DEFAULT 'turn'
     name: 'run_usage_reporting',
     sql: `ALTER TABLE runs ADD COLUMN usage_unavailable INTEGER NOT NULL DEFAULT 0 CHECK (usage_unavailable IN (0, 1));`,
   },
+  {
+    id: 39,
+    name: 'workspace_server_binding',
+    sql: 'ALTER TABLE workspaces ADD COLUMN server_binding TEXT;',
+  },
 ]
 
 /**
@@ -1167,6 +1172,7 @@ export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.id
  */
 
 export interface WorkspaceRow {
+  server_binding: string | null
   id: WorkspaceId
   name: string
   root_path: string
@@ -1319,6 +1325,7 @@ export const ROW_COLUMNS: Record<string, readonly string[]> = {
     'created_at',
     'removed_at',
     'pinned_at',
+    'server_binding',
   ],
   conversations: [
     'id',

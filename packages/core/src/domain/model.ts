@@ -1195,6 +1195,14 @@ export interface CompactionFacts {
 // ─────────────────────────────── 工作区 ───────────────────────────────
 
 export interface Workspace {
+  /** Verified server work directory; credentials remain in the SSH configuration. */
+  serverBinding?: {
+    version: 1
+    profileId: string
+    remoteRoot: string
+    connectionHash: string
+    verifiedAt: number
+  }
   id: WorkspaceId
   name: string
   rootPath: string

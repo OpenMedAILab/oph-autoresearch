@@ -2,7 +2,12 @@ import { expect, test } from 'bun:test'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readSshWholeText, type SshProfile } from '@oph-autoresearch/tools'
+import {
+  inspectSshDirectory,
+  readSshWholeText,
+  type SshProfile,
+  sshProfileConnectionHash,
+} from '@oph-autoresearch/tools'
 import { sshListTool, sshRunTool } from '../../../tools/src/ssh.ts'
 import { handleSshApi } from './ssh.ts'
 import type { ApiRequestDeps } from './types.ts'
@@ -103,6 +108,37 @@ eval "$command"
       )
       expect(await sshRunTool.fn(args, context)).toMatchObject({ status: 'success' })
       expect(await readFile(join(folder, 'result.txt'), 'utf8')).toBe('processed')
+      const projectDirectory = join(folder, 'project')
+      await mkdir(projectDirectory)
+      expect(await inspectSshDirectory(writable.profile, projectDirectory, true)).toBe(
+        projectDirectory,
+      )
+      await expect(inspectSshDirectory(initial.profile, projectDirectory, true)).rejects.toThrow()
+      const boundContext = {
+        ...context,
+        projectServerBinding: {
+          version: 1 as const,
+          profileId: writable.profile.id,
+          remoteRoot: projectDirectory,
+          connectionHash: sshProfileConnectionHash(writable.profile),
+          verifiedAt: Date.now(),
+        },
+      }
+      expect(await sshListTool.fn({}, boundContext)).toMatchObject({
+        data: { profiles: [{ id: writable.profile.id, root: projectDirectory }] },
+      })
+      expect(
+        await sshRunTool.fn({ ...args, command: "printf 'bound' > result.txt" }, boundContext),
+      ).toMatchObject({ status: 'success' })
+      expect(await readFile(join(projectDirectory, 'result.txt'), 'utf8')).toBe('bound')
+      expect(await readFile(join(folder, 'result.txt'), 'utf8')).toBe('processed')
+      await expect(
+        sshRunTool.fn({ ...args, profile: 'other-server' }, boundContext),
+      ).rejects.toThrow('不属于当前研究项目')
+      await expect(
+        sshListTool.fn({ profile: writable.profile.id, path: folder }, boundContext),
+      ).rejects.toThrow('越过允许根目录')
+
       expect(((await (await save(true)).json()) as { profile: SshProfile }).profile.readOnly).toBe(
         true,
       )

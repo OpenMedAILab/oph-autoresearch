@@ -16,7 +16,7 @@
  * 问的是哪个项目——那张表就是「哪个根」的权威，假不了。
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,6 +45,7 @@ import {
   upsertWorkspace,
 } from '@oph-autoresearch/store'
 import { canonicalJson, sha256 } from '../research/skill-lock.ts'
+import * as workspaceBinding from '../workspace-binding.ts'
 import type { ModelsResponse } from './conversations.ts'
 import { type ApiDeps, handleApi } from './index.ts'
 
@@ -401,18 +402,51 @@ describe('移除项目', () => {
   describe('新建项目', () => {
     let home = ''
     const prev = process.env.OPH_AUTORESEARCH_HOME
+    let verifier: ReturnType<typeof spyOn>
     beforeEach(async () => {
       home = await mkdtemp(join(tmpdir(), 'oph-autoresearch-newproj-'))
       process.env.OPH_AUTORESEARCH_HOME = home
+      verifier = spyOn(workspaceBinding, 'verifyWorkspaceServerBinding').mockImplementation(
+        async (input: unknown) => {
+          if (!input) throw new Error('新建研究项目必须选择服务器工作目录')
+          return {
+            version: 1,
+            profileId: 'test-server',
+            remoteRoot: '/research/test',
+            connectionHash: `sha256:${'a'.repeat(64)}`,
+            verifiedAt: Date.now(),
+          }
+        },
+      )
     })
     afterEach(async () => {
+      verifier.mockRestore()
       if (prev === undefined) delete process.env.OPH_AUTORESEARCH_HOME
       else process.env.OPH_AUTORESEARCH_HOME = prev
       await rm(home, { recursive: true, force: true }).catch(() => {})
     })
 
     const post = (body: unknown, d: ApiDeps) =>
-      call('/api/workspaces', { method: 'POST', body: JSON.stringify(body) }, d)
+      call(
+        '/api/workspaces',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            serverBinding: { profileId: 'test-server', remoteRoot: '/research/test' },
+            ...(body as object),
+          }),
+        },
+        d,
+      )
+
+    test('缺少服务器绑定时不创建本机目录或账本', async () => {
+      const d = deps()
+      expect((await post({ name: 'missing-binding', serverBinding: undefined }, d))?.status).toBe(
+        422,
+      )
+      expect(listWorkspaces(d.store)).toHaveLength(1)
+      expect(await stat(join(home, 'workspaces')).catch(() => null)).toBeNull()
+    })
 
     test('只给名字 —— 在默认根下建一个同名文件夹', async () => {
       const d = deps()
@@ -956,6 +990,7 @@ describe('按 ?ws= 解析项目', () => {
   test('加项目：已经有了就只更新「最近打开」，不插第二行', async () => {
     const store = new Store({ path: ':memory:' })
     const here = process.cwd()
+    upsertWorkspace(store, here, 'existing')
     const d = {
       store,
       config: {

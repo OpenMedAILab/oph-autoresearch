@@ -4,11 +4,14 @@ import { homedir } from 'node:os'
 import { mkdir, readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import type { ToolSpec } from '@oph-autoresearch/agent'
+import type { Workspace } from '@oph-autoresearch/core'
 import { configDir } from '@oph-autoresearch/runtime'
 import {
   archiveWorkspaceConversations,
+  bindWorkspaceServer,
   countConversations,
   createConversation,
+  getWorkspace,
   getWorkspaceByPath,
   listConversations,
   listWorkspaces,
@@ -17,6 +20,7 @@ import {
   upsertWorkspace,
 } from '@oph-autoresearch/store'
 import { ensureResearchWorkspace } from '../research-template.ts'
+import { verifyWorkspaceServerBinding } from '../workspace-binding.ts'
 import { type ApiHandler, json } from './types.ts'
 
 /**
@@ -143,13 +147,43 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
      * upsert 之后再发一次列表请求，并为新项目另开一次写事务。
      */
     if (req.method === 'POST') {
-      const body = (await req.json().catch(() => ({}))) as { path?: string; name?: string }
-      const rawPath = body.path?.trim()
-      const rawName = body.name?.trim()
+      const body = (await req.json().catch(() => null)) as {
+        path?: unknown
+        name?: unknown
+        serverBinding?: unknown
+      } | null
+      if (
+        !body ||
+        typeof body !== 'object' ||
+        Array.isArray(body) ||
+        (body.path !== undefined && typeof body.path !== 'string') ||
+        (body.name !== undefined && typeof body.name !== 'string')
+      )
+        return json({ error: '项目参数无效' }, 422)
+      const rawPath = typeof body.path === 'string' ? body.path.trim() : ''
+      const rawName = typeof body.name === 'string' ? body.name.trim() : ''
+      const known = rawPath ? getWorkspaceByPath(d.store, resolve(rawPath)) : null
+      let binding: Workspace['serverBinding']
+      if (!known || body.serverBinding !== undefined) {
+        try {
+          binding = await verifyWorkspaceServerBinding(body.serverBinding)
+        } catch (error) {
+          return json({ error: error instanceof Error ? error.message : '服务器目录校验失败' }, 422)
+        }
+      }
+      if (
+        known?.serverBinding &&
+        binding &&
+        (known.serverBinding.profileId !== binding.profileId ||
+          known.serverBinding.remoteRoot !== binding.remoteRoot ||
+          known.serverBinding.connectionHash !== binding.connectionHash)
+      )
+        return json({ error: '项目已有服务器绑定，不能静默更换' }, 409)
 
       const activate = (path: string, name: string) =>
         d.store.tx(() => {
-          const workspace = upsertWorkspace(d.store, path, name)
+          let workspace = upsertWorkspace(d.store, path, name)
+          if (binding) workspace = bindWorkspaceServer(d.store, workspace.id, binding)
           const existing = listConversations(d.store, workspace.id)
           const conversations =
             existing.length > 0
@@ -270,6 +304,18 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
     return json({ archived: archiveWorkspaceConversations(d.store, id as never) })
   }
 
+  const bindingPath = /^\/api\/workspaces\/([^/]+)\/server-binding$/.exec(p)
+  if (bindingPath && req.method === 'POST') {
+    const workspace = getWorkspace(d.store, bindingPath[1] as never)
+    if (!workspace) return json({ error: '研究项目不存在' }, 404)
+    try {
+      const binding = await verifyWorkspaceServerBinding(await req.json())
+      return json({ workspace: bindWorkspaceServer(d.store, workspace.id, binding) })
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : '绑定失败' }, 409)
+    }
+  }
+
   // 这一次请求问的是哪个项目（`?ws=` 解析的结果，见 api/index.ts）。
   // 名字取目录名；取不出来（根目录）时回落到整条路径，不回空串。
   if (p === '/api/workspace') {
@@ -292,6 +338,9 @@ export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
       root: d.workspaceRoot,
       name: basename(d.workspaceRoot) || d.workspaceRoot,
       pendingTrust,
+      ...(getWorkspace(d.store, d.workspaceId as never)?.serverBinding
+        ? { serverBinding: getWorkspace(d.store, d.workspaceId as never)!.serverBinding }
+        : {}),
     })
   }
 
