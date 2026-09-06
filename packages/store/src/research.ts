@@ -11,6 +11,7 @@ import {
   type ResearchCampaignInput,
   type ResearchCliPreparation,
   type ResearchCommand,
+  type ResearchControllerLimits,
   type ResearchCostSubject,
   type ResearchEvent,
   type ResearchTaskRevision,
@@ -134,6 +135,23 @@ function progressControl(campaign: ResearchCampaign) {
   return campaign.progressControl ?? DEFAULT_PROGRESS_CONTROL
 }
 
+function validControllerLimits(limits: ResearchControllerLimits | undefined): boolean {
+  return Boolean(
+    limits &&
+      Number.isSafeInteger(limits.maxAdvances) &&
+      limits.maxAdvances > 0 &&
+      Number.isSafeInteger(limits.maxModelRequests) &&
+      limits.maxModelRequests > 0 &&
+      Number.isSafeInteger(limits.maxOutputTokens) &&
+      limits.maxOutputTokens > 0 &&
+      Number.isSafeInteger(limits.maxInputCharacters) &&
+      limits.maxInputCharacters > 0 &&
+      Number.isSafeInteger(limits.deadlineAt) &&
+      limits.deadlineAt > 0 &&
+      (limits.stopAfter === 'candidate' || limits.stopAfter === 'review'),
+  )
+}
+
 function eventOf(row: EventRow): ResearchEvent {
   return {
     id: row.id,
@@ -240,6 +258,12 @@ function reservationForSubject(
       ? preparation.maxCost
       : null
   }
+  if (subject.kind === 'controller') {
+    return (
+      (campaign.controllerReservations ?? []).find((item) => item.id === subject.id)
+        ?.reservedCost ?? null
+    )
+  }
   const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
   return review ? review.reservedCost : null
 }
@@ -250,8 +274,14 @@ function knownActualCost(campaign: ResearchCampaign, subject: ResearchCostSubjec
     subject.kind === 'model_review'
       ? (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
       : undefined
+  const controller =
+    subject.kind === 'controller'
+      ? (campaign.controllerReservations ?? []).find((item) => item.id === subject.id)
+      : undefined
   if (review?.actualCost !== null && review?.actualCost !== undefined)
     amounts.push(review.actualCost)
+  if (controller?.actualCost !== null && controller?.actualCost !== undefined)
+    amounts.push(controller.actualCost)
   for (const evidence of campaign.costEvidence ?? []) {
     if (costSubjectKey(evidence.subject) === costSubjectKey(subject)) amounts.push(evidence.amount)
   }
@@ -294,6 +324,10 @@ function committedCost(campaign: ResearchCampaign): number {
       kind: 'model_review' as const,
       id: review.id,
     })),
+    ...(campaign.controllerReservations ?? []).map((reservation) => ({
+      kind: 'controller' as const,
+      id: reservation.id,
+    })),
     ...settled.map((settlement) => settlement.subject),
   ]
   const unique = [
@@ -331,6 +365,10 @@ export function researchCostSummary(campaign: ResearchCampaign) {
     ...(campaign.modelReviews ?? []).map((review) => ({
       kind: 'model_review' as const,
       id: review.id,
+    })),
+    ...(campaign.controllerReservations ?? []).map((reservation) => ({
+      kind: 'controller' as const,
+      id: reservation.id,
     })),
   ]
   const rows = subjects.map((subject) => {
@@ -370,7 +408,9 @@ function validCostSubject(
   if (!subject || typeof subject !== 'object' || Array.isArray(subject)) return false
   const value = subject as { kind?: unknown; id?: unknown }
   if (
-    (value.kind !== 'cli_preparation' && value.kind !== 'model_review') ||
+    (value.kind !== 'cli_preparation' &&
+      value.kind !== 'model_review' &&
+      value.kind !== 'controller') ||
     typeof value.id !== 'string' ||
     value.id !== value.id.trim() ||
     textError(value.id, 'cost subject id')
@@ -383,10 +423,18 @@ function costSubjectLabel(campaign: ResearchCampaign, subject: ResearchCostSubje
   const entries =
     subject.kind === 'cli_preparation'
       ? (campaign.cliPreparations ?? [])
-      : (campaign.modelReviews ?? [])
+      : subject.kind === 'model_review'
+        ? (campaign.modelReviews ?? [])
+        : (campaign.controllerReservations ?? [])
   const index = entries.findIndex((entry) => entry.id === subject.id)
   if (index < 0) return null
-  return `第 ${index + 1} 次${subject.kind === 'cli_preparation' ? '代码准备' : '独立复核'}`
+  return `第 ${index + 1} 次${
+    subject.kind === 'cli_preparation'
+      ? '代码准备'
+      : subject.kind === 'model_review'
+        ? '独立复核'
+        : '有界主控'
+  }`
 }
 
 function subjectExecutionIsTerminal(
@@ -398,6 +446,16 @@ function subjectExecutionIsTerminal(
     const attempt = campaign.attempts.find((item) => item.id === preparation?.attemptId)
     return Boolean(
       attempt && ['completed', 'failed', 'cancelled', 'interrupted'].includes(attempt.status),
+    )
+  }
+  if (subject.kind === 'controller') {
+    const reservation = (campaign.controllerReservations ?? []).find(
+      (item) => item.id === subject.id,
+    )
+    return Boolean(
+      reservation &&
+        ['completed', 'exhausted'].includes(reservation.status) &&
+        reservation.requests.every((request) => request.status === 'done'),
     )
   }
   const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
@@ -416,6 +474,8 @@ export function costEvidenceApprovalScope(
 ) {
   const evidence = (campaign.costEvidence ?? []).find((item) => item.id === evidenceId)
   if (!evidence) throw new Error('Unknown cost evidence')
+  if (!subjectExecutionIsTerminal(campaign, evidence.subject))
+    throw new Error('Cost evidence subject is not terminal')
   const label = costSubjectLabel(campaign, evidence.subject)
   if (!label) throw new Error('Unknown cost evidence subject')
   return {
@@ -431,6 +491,48 @@ export function costEvidenceApprovalScope(
     maxCost: evidence.amount,
     expiresAt,
   }
+}
+
+export function controllerApprovalScope(
+  campaign: ResearchCampaign,
+  input: {
+    configHash: string
+    reservedCost: number
+    limits: ResearchControllerLimits
+    expiresAt: number
+  },
+) {
+  return {
+    kind: 'controller' as const,
+    configHash: input.configHash,
+    controllerLimits: cloneJson(input.limits),
+    artifactVersionIds: [],
+    currency: campaign.budget.currency,
+    maxCost: input.reservedCost,
+    expiresAt: input.expiresAt,
+  }
+}
+
+export function canStartControllerRequest(
+  campaign: ResearchCampaign,
+  reservationId: string,
+  generation: number,
+  now = Date.now(),
+): boolean {
+  const control = progressControl(campaign)
+  const reservation = (campaign.controllerReservations ?? []).find(
+    (item) => item.id === reservationId,
+  )
+  return Boolean(
+    reservation &&
+      reservation.status === 'active' &&
+      control.mode === 'bounded' &&
+      control.state === 'active' &&
+      control.reservationRef === reservation.id &&
+      control.generation === generation &&
+      reservation.limits.deadlineAt > now &&
+      reservation.requests.length < reservation.limits.maxModelRequests,
+  )
 }
 
 function validateProof(proof: {
@@ -700,11 +802,232 @@ function nextCampaign(
           'progress_generation_conflict',
           'Manual progress control requires the current generation',
         )
+      if (control.mode === 'bounded' && control.state === 'exhausted' && command.state === 'active')
+        return invalid('bounded_exhausted', 'An exhausted bounded controller cannot become active')
       next = {
         ...campaign,
         progressControl: {
-          mode: 'manual',
+          mode: control.mode,
           state: command.state,
+          ...('reservationRef' in control && control.reservationRef
+            ? { reservationRef: control.reservationRef }
+            : {}),
+          generation: control.generation + 1,
+        },
+      }
+      break
+    }
+    case 'activateBoundedResearch': {
+      const control = progressControl(campaign)
+      const approval = campaign.approvals.find((item) => item.id === command.approvalId)
+      const scope = approval?.scope
+      if (
+        control.mode !== 'manual' ||
+        control.state !== 'active' ||
+        control.generation !== command.expectedGeneration ||
+        !validControllerLimits(command.limits) ||
+        command.limits.deadlineAt <= now ||
+        textError(command.reservationId, 'reservationId') ||
+        !SHA256.test(command.configHash) ||
+        !Number.isFinite(command.reservedCost) ||
+        command.reservedCost <= 0 ||
+        command.currency !== campaign.budget.currency ||
+        saturatedCostSum([committedCost(campaign), command.reservedCost]) > campaign.budget.limit ||
+        !approval ||
+        approval.status !== 'active' ||
+        approval.consumedBy ||
+        approval.bundleHash !== campaign.bundleHash ||
+        scope?.kind !== 'controller' ||
+        scope.configHash !== command.configHash ||
+        scope.currency !== command.currency ||
+        scope.maxCost !== command.reservedCost ||
+        scope.controllerLimits === undefined ||
+        canonicalJson(scope.controllerLimits) !== canonicalJson(command.limits) ||
+        (campaign.controllerReservations ?? []).some((item) => item.id === command.reservationId)
+      )
+        return invalid(
+          'controller_approval_required',
+          'Bounded controller requires an exact active approval',
+        )
+      next = {
+        ...campaign,
+        controllerReservations: [
+          ...(campaign.controllerReservations ?? []),
+          {
+            id: command.reservationId.trim(),
+            approvalId: approval.id,
+            configHash: command.configHash,
+            currency: command.currency,
+            reservedCost: command.reservedCost,
+            limits: cloneJson(command.limits),
+            requests: [],
+            advancesUsed: 0,
+            advanceKeys: [],
+            status: 'active',
+            actualCost: null,
+            createdAt: now,
+          },
+        ],
+        progressControl: {
+          mode: 'bounded',
+          state: 'active',
+          reservationRef: command.reservationId.trim(),
+          generation: control.generation + 1,
+        },
+        approvals: campaign.approvals.map((item) =>
+          item.id === approval.id
+            ? { ...item, consumedBy: `controller:${command.reservationId.trim()}` }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'startControllerRequest': {
+      const control = progressControl(campaign)
+      const reservation = (campaign.controllerReservations ?? []).find(
+        (item) => item.id === command.reservationId,
+      )
+      if (
+        !reservation ||
+        reservation.status !== 'active' ||
+        control.mode !== 'bounded' ||
+        control.state !== 'active' ||
+        control.reservationRef !== reservation.id ||
+        control.generation !== command.generation ||
+        reservation.limits.deadlineAt <= now ||
+        textError(command.requestId, 'requestId') ||
+        reservation.requests.length >= reservation.limits.maxModelRequests ||
+        reservation.requests.some((item) => item.id === command.requestId)
+      )
+        return invalid('controller_request_denied', 'Bounded controller request is not available')
+      next = {
+        ...campaign,
+        controllerReservations: campaign.controllerReservations!.map((item) =>
+          item.id === reservation.id
+            ? {
+                ...item,
+                requests: [
+                  ...item.requests,
+                  {
+                    id: command.requestId.trim(),
+                    startedAt: now,
+                    status: 'sending',
+                    actualCost: null,
+                  },
+                ],
+              }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'finishControllerRequest': {
+      const reservation = (campaign.controllerReservations ?? []).find(
+        (item) => item.id === command.reservationId,
+      )
+      const request = reservation?.requests.find((item) => item.id === command.requestId)
+      if (
+        !reservation ||
+        !request ||
+        request.status !== 'sending' ||
+        (command.actualCost !== null &&
+          (!Number.isFinite(command.actualCost) || command.actualCost < 0))
+      )
+        return invalid('controller_request_denied', 'Only a persisted sending request may finish')
+      const requests = reservation.requests.map((item) =>
+        item.id === request.id
+          ? {
+              ...item,
+              finishedAt: now,
+              status: command.completed ? ('done' as const) : ('unknown' as const),
+              actualCost: command.actualCost,
+            }
+          : item,
+      )
+      const exhausted =
+        requests.length >= reservation.limits.maxModelRequests ||
+        now >= reservation.limits.deadlineAt
+      const actualCost = requests.every((item) => item.actualCost !== null)
+        ? saturatedCostSum(requests.map((item) => item.actualCost!))
+        : null
+      next = {
+        ...campaign,
+        controllerReservations: campaign.controllerReservations!.map((item) =>
+          item.id === reservation.id
+            ? { ...item, requests, actualCost, status: exhausted ? 'exhausted' : item.status }
+            : item,
+        ),
+        ...(exhausted
+          ? {
+              progressControl: {
+                mode: 'bounded' as const,
+                state: 'exhausted' as const,
+                reservationRef: reservation.id,
+                generation: progressControl(campaign).generation + 1,
+              },
+            }
+          : {}),
+      }
+      break
+    }
+    case 'reserveControllerAdvance': {
+      const control = progressControl(campaign)
+      const reservation = (campaign.controllerReservations ?? []).find(
+        (item) => item.id === command.reservationId,
+      )
+      if (
+        !reservation ||
+        reservation.status !== 'active' ||
+        control.mode !== 'bounded' ||
+        control.state !== 'active' ||
+        control.reservationRef !== reservation.id ||
+        control.generation !== command.generation ||
+        reservation.limits.deadlineAt <= now ||
+        textError(command.actionKey, 'actionKey') ||
+        reservation.advancesUsed >= reservation.limits.maxAdvances ||
+        reservation.advanceKeys.includes(command.actionKey)
+      )
+        return invalid('controller_advance_denied', 'Bounded controller advance is not available')
+      next = {
+        ...campaign,
+        controllerReservations: campaign.controllerReservations!.map((item) =>
+          item.id === reservation.id
+            ? {
+                ...item,
+                advancesUsed: item.advancesUsed + 1,
+                advanceKeys: [...item.advanceKeys, command.actionKey.trim()],
+              }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'completeBoundedResearch': {
+      const control = progressControl(campaign)
+      const reservation = (campaign.controllerReservations ?? []).find(
+        (item) => item.id === command.reservationId,
+      )
+      if (
+        !reservation ||
+        !['active', 'held', 'exhausted'].includes(reservation.status) ||
+        control.mode !== 'bounded' ||
+        control.reservationRef !== reservation.id ||
+        control.generation !== command.generation ||
+        reservation.requests.some((item) => item.status === 'sending' || item.status === 'unknown')
+      )
+        return invalid(
+          'controller_complete_denied',
+          'Bounded controller cannot complete with unresolved requests',
+        )
+      next = {
+        ...campaign,
+        controllerReservations: campaign.controllerReservations!.map((item) =>
+          item.id === reservation.id ? { ...item, status: 'completed' } : item,
+        ),
+        progressControl: {
+          mode: 'bounded',
+          state: 'exhausted',
+          reservationRef: reservation.id,
           generation: control.generation + 1,
         },
       }
@@ -1510,6 +1833,7 @@ function nextCampaign(
             'model_review',
             'release',
             'cost_settlement',
+            'controller',
           ].includes(scope.kind) ||
           !Number.isSafeInteger(scope.expiresAt) ||
           scope.expiresAt <= now ||
@@ -1560,7 +1884,15 @@ function nextCampaign(
                 (settlement) =>
                   settlement.evidenceId === costEvidence.id ||
                   costSubjectKey(settlement.subject) === costSubjectKey(costEvidence.subject),
-              )))
+              ))) ||
+          (scope.kind === 'controller' &&
+            (!scope.configHash ||
+              !SHA256.test(scope.configHash) ||
+              !validControllerLimits(scope.controllerLimits) ||
+              scope.maxCost <= 0 ||
+              scope.maxCost > campaign.budget.limit ||
+              scope.maxRequests !== undefined ||
+              scope.maxOutputTokens !== undefined))
         )
           return invalid(
             'invalid_approval_scope',

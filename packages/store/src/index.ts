@@ -72,6 +72,8 @@ export {
   workspaceOf,
 } from './repos.ts'
 export {
+  canStartControllerRequest,
+  controllerApprovalScope,
   costEvidenceApprovalScope,
   createResearchCampaign,
   findRunningSyntheticAttempts,

@@ -7,6 +7,8 @@ import { canonicalResearchBundle, type ResearchCampaign } from '@oph-autoresearc
 import { Store } from './db.ts'
 import { createConversation, upsertWorkspace } from './repos.ts'
 import {
+  canStartControllerRequest,
+  controllerApprovalScope,
   costEvidenceApprovalScope,
   createResearchCampaign,
   findRunningSyntheticAttempts,
@@ -1841,28 +1843,115 @@ describe('CLI preparation authorization ledger', () => {
         },
       })
       if (!evidence.ok) throw new Error(evidence.message)
-      const scope = costEvidenceApprovalScope(evidence.campaign, 'rce-running', Date.now() + 60_000)
-      const approved = mutateResearchCampaign(store, running.id, {
-        idempotencyKey: 'approve-running-cost',
-        expectedVersion: evidence.campaign.version,
+      expect(() =>
+        costEvidenceApprovalScope(evidence.campaign, 'rce-running', Date.now() + 60_000),
+      ).toThrow('not terminal')
+    } finally {
+      store.close()
+    }
+  })
+
+  test('bounded controller persists its approval, request, advance, and terminal counters', () => {
+    const store = fresh()
+    try {
+      const campaign = created(store).campaign
+      const limits = {
+        maxAdvances: 1,
+        maxModelRequests: 1,
+        maxOutputTokens: 10,
+        maxInputCharacters: 10,
+        deadlineAt: Date.now() + 60_000,
+        stopAfter: 'candidate' as const,
+      }
+      const scope = controllerApprovalScope(campaign, {
+        configHash: CONTENT_HASH,
+        reservedCost: 5,
+        limits,
+        expiresAt: Date.now() + 60_000,
+      })
+      const approved = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-controller',
+        expectedVersion: campaign.version,
         command: {
           kind: 'approve',
-          bundleHash: evidence.campaign.bundleHash,
-          reviewer: { reviewerId: 'human', proofId: 'running-cost-proof', verifiedAt: Date.now() },
+          approvalId: 'hap-controller',
+          bundleHash: campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'controller-proof', verifiedAt: Date.now() },
           scope,
         },
       })
       if (!approved.ok) throw new Error(approved.message)
-      const denied = mutateResearchCampaign(store, running.id, {
-        idempotencyKey: 'settle-running-cost',
+      const active = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'activate-controller',
         expectedVersion: approved.campaign.version,
         command: {
-          kind: 'settleCostEvidence',
-          evidenceId: 'rce-running',
-          approvalId: approved.campaign.approvals[0]!.id,
+          kind: 'activateBoundedResearch',
+          reservationId: 'rcr_1',
+          approvalId: 'hap-controller',
+          configHash: CONTENT_HASH,
+          currency: 'USD',
+          reservedCost: 5,
+          limits,
+          expectedGeneration: 0,
         },
       })
-      expect(denied).toMatchObject({ ok: false, code: 'cost_settlement_approval_required' })
+      if (!active.ok) throw new Error(active.message)
+      expect(canStartControllerRequest(active.campaign, 'rcr_1', 1)).toBe(true)
+      const started = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'start-controller',
+        expectedVersion: active.campaign.version,
+        command: {
+          kind: 'startControllerRequest',
+          reservationId: 'rcr_1',
+          requestId: 'request_1',
+          generation: 1,
+        },
+      })
+      if (!started.ok) throw new Error(started.message)
+      const replayDenied = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'start-controller-again',
+        expectedVersion: started.campaign.version,
+        command: {
+          kind: 'startControllerRequest',
+          reservationId: 'rcr_1',
+          requestId: 'request_1',
+          generation: 1,
+        },
+      })
+      expect(replayDenied).toMatchObject({ ok: false, code: 'controller_request_denied' })
+      const advanced = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'advance-controller',
+        expectedVersion: started.campaign.version,
+        command: {
+          kind: 'reserveControllerAdvance',
+          reservationId: 'rcr_1',
+          generation: 1,
+          actionKey: 'advance_1',
+        },
+      })
+      if (!advanced.ok) throw new Error(advanced.message)
+      const finished = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'finish-controller',
+        expectedVersion: advanced.campaign.version,
+        command: {
+          kind: 'finishControllerRequest',
+          reservationId: 'rcr_1',
+          requestId: 'request_1',
+          actualCost: null,
+          completed: false,
+        },
+      })
+      expect(finished).toMatchObject({
+        ok: true,
+        campaign: { controllerReservations: [{ status: 'exhausted', actualCost: null }] },
+      })
+      if (!finished.ok) return
+      const completed = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'complete-controller',
+        expectedVersion: finished.campaign.version,
+        command: { kind: 'completeBoundedResearch', reservationId: 'rcr_1', generation: 2 },
+      })
+      expect(completed).toMatchObject({ ok: false, code: 'controller_complete_denied' })
     } finally {
       store.close()
     }
