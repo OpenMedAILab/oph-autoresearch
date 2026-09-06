@@ -1,6 +1,7 @@
 import type { CliPreparationController } from '../research/cli-preparation-controller.ts'
 import type { ResearchDaemonBackend } from '../research/daemon-execution.ts'
 import type { ResearchDevice } from '../research/execution-devices.ts'
+import type { IsolatedFormalCodeReviewer } from '../research/formal-review-runner.ts'
 import type { HumanAuthVerifier } from '../research/human-auth.ts'
 import type { createLiteratureCollector } from '../research/literature-evidence.ts'
 /**
@@ -33,6 +34,13 @@ export interface ApiDeps {
   researchDaemonBackend?: ResearchDaemonBackend
   researchReviewCli?: { workerArgv?: readonly string[] }
   researchHumanAuth?: HumanAuthVerifier
+  /** A purpose-built evidence-only reviewer; never a general shell/tool runner. */
+  researchFormalCodeReviewer?: IsolatedFormalCodeReviewer
+  /** Administrator-owned evaluator implementations; clients may only select an exact configured digest. */
+  researchFormalEvaluators?: readonly {
+    id: 'binary-classification-v1'
+    implementationHash: string
+  }[]
   researchRequireApproval?: boolean
   store: Store
   config: OphConfig

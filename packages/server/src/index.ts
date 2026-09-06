@@ -24,6 +24,7 @@ export {
   isCliPreparationJob,
 } from './research/cli-preparation-job.ts'
 export { runEvidenceCliWorker } from './research/evidence-cli-worker.ts'
+export type { IsolatedFormalCodeReviewer } from './research/formal-review-runner.ts'
 export { runResearchJobWorker } from './research/job-daemon-worker.ts'
 export {
   createRemoteDaemonService,

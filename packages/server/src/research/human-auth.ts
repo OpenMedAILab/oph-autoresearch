@@ -15,7 +15,7 @@ export interface HumanAuthClaims {
   expiresAt: number
   workspaceId: string
   campaignId: string
-  action: 'approve' | 'revoke' | 'labelset'
+  action: 'approve' | 'revoke' | 'labelset' | 'formal_review'
   bodyHash: string
 }
 
@@ -36,7 +36,7 @@ export interface HumanAuthRequest {
   header: string | null | undefined
   workspaceId: string
   campaignId: string
-  action: 'approve' | 'revoke' | 'labelset'
+  action: 'approve' | 'revoke' | 'labelset' | 'formal_review'
   /** Parsed request body, re-canonicalized before its SHA-256 binding is checked. */
   body: unknown
 }
@@ -89,7 +89,10 @@ function claimsOf(value: unknown): HumanAuthClaims | null {
     !/^sha256:[a-f0-9]{64}$/.test(String(source.bodyHash)) ||
     !Number.isSafeInteger(source.issuedAt) ||
     !Number.isSafeInteger(source.expiresAt) ||
-    (source.action !== 'approve' && source.action !== 'revoke' && source.action !== 'labelset')
+    (source.action !== 'approve' &&
+      source.action !== 'revoke' &&
+      source.action !== 'labelset' &&
+      source.action !== 'formal_review')
   )
     return null
   return source as unknown as HumanAuthClaims

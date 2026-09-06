@@ -77,6 +77,7 @@ export {
   costEvidenceApprovalScope,
   createResearchCampaign,
   findRunningSyntheticAttempts,
+  formalExecutionPlanHash,
   getResearchCampaign,
   hasSupportedReleaseReview,
   listResearchCampaigns,

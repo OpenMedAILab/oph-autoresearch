@@ -2,6 +2,7 @@ import {
   type ArtifactVersion,
   type CliPreparationObserverIdentity,
   canonicalCliPreparationConfig,
+  canonicalFormalExecutionPlan,
   canonicalResearchBundle,
   canonicalResearchControllerBasis,
   foldResearchEvents,
@@ -21,6 +22,8 @@ import {
   SYNTHETIC_SUMMARY_TEMPLATE,
   validateLabelSetReference,
   validateLabelSetSuccessor,
+  validFormalCodeReviewResult,
+  validFormalExecutionPlan,
 } from '@oph-autoresearch/core'
 import type { Store } from './db.ts'
 
@@ -166,6 +169,27 @@ function validControllerLimits(limits: ResearchControllerLimits | undefined): bo
   )
 }
 
+function validFormalResources(
+  resources: import('@oph-autoresearch/core').FormalExecutionResources | undefined,
+): boolean {
+  return Boolean(
+    resources &&
+      Number.isSafeInteger(resources.maxRuntimeMs) &&
+      resources.maxRuntimeMs > 0 &&
+      resources.maxRuntimeMs <= 24 * 60 * 60 * 1000 &&
+      Number.isSafeInteger(resources.cpu) &&
+      resources.cpu > 0 &&
+      resources.cpu <= 256 &&
+      Number.isSafeInteger(resources.memoryMb) &&
+      resources.memoryMb >= 128 &&
+      resources.memoryMb <= 1_048_576 &&
+      Number.isSafeInteger(resources.pidsLimit) &&
+      resources.pidsLimit >= 1 &&
+      resources.pidsLimit <= 65_536 &&
+      resources.network === 'disabled',
+  )
+}
+
 function eventOf(row: EventRow): ResearchEvent {
   return {
     id: row.id,
@@ -206,6 +230,13 @@ function invalid(code: string, message: string): ResearchWriteResult {
 
 function bundleHash(campaign: ResearchCampaign): string {
   return digest(canonicalResearchBundle(campaign))
+}
+
+/** The exact bytes a formal-review or formal-execution approval signs. */
+export function formalExecutionPlanHash(
+  plan: import('@oph-autoresearch/core').FormalExecutionPlan,
+): string {
+  return digest(canonicalFormalExecutionPlan(plan))
 }
 
 type CliPreparationConfig = Pick<
@@ -649,6 +680,24 @@ function validateProof(proof: {
     (!Number.isSafeInteger(proof.verifiedAt) || proof.verifiedAt <= 0
       ? 'reviewer.verifiedAt 必须是正整数时间戳'
       : null)
+  )
+}
+
+function formalReviewMatchesPlan(
+  review: import('@oph-autoresearch/core').FormalCodeReviewResult,
+  plan: import('@oph-autoresearch/core').FormalExecutionPlan,
+): boolean {
+  return (
+    review.candidateArtifactId === plan.candidateArtifactId &&
+    review.taskRevisionId === plan.taskRevisionId &&
+    review.codeHash === plan.codeHash &&
+    review.candidateReceiptHash === plan.candidateReceiptHash &&
+    review.workspaceBindingHash === plan.workspaceBindingHash &&
+    review.ociImageDigest === plan.ociImageDigest &&
+    review.dataManifestHash === plan.dataManifestHash &&
+    review.labelSetContentHash === plan.labelSetContentHash &&
+    review.trustedEvaluatorId === plan.trustedEvaluatorId &&
+    review.trustedEvaluatorHash === plan.trustedEvaluatorHash
   )
 }
 
@@ -1724,6 +1773,145 @@ function nextCampaign(
       }
       break
     }
+    case 'recordFormalCodeReview': {
+      const result = command.result
+      const plan = command.plan
+      if (
+        !validFormalCodeReviewResult(result) ||
+        !validFormalExecutionPlan(plan) ||
+        !formalReviewMatchesPlan(result, plan)
+      )
+        return invalid('invalid_formal_code_review', 'Formal code review result is malformed')
+      const artifact = campaign.artifactVersions.find(
+        (item) => item.id === result.candidateArtifactId,
+      )
+      const task = withDerivedTaskStatuses(campaign).taskRevisions.find(
+        (item) => item.id === result.taskRevisionId,
+      )
+      if (
+        !artifact ||
+        !['cli_preparation_candidate', 'cli_preparation_quarantined_candidate'].includes(
+          artifact.kind,
+        ) ||
+        artifact.contentHash !== result.candidateReceiptHash ||
+        artifact.producerTaskRevisionId !== result.taskRevisionId ||
+        task?.status === 'stale' ||
+        !(campaign.labelSets ?? []).some((item) => item.contentHash === plan.labelSetContentHash) ||
+        !(task?.labelSetContentHashes ?? []).includes(plan.labelSetContentHash) ||
+        (campaign.formalCodeReviews ?? []).some((item) => item.reviewId === result.reviewId)
+      )
+        return invalid(
+          'formal_review_basis_stale',
+          'Formal review must bind one current candidate receipt',
+        )
+      if (result.reviewKind === 'isolated-api') {
+        const approval = campaign.approvals.find((item) => item.id === command.approvalId)
+        const scope = approval?.scope
+        if (
+          !approval ||
+          approval.status !== 'active' ||
+          approval.consumedBy ||
+          approval.bundleHash !== campaign.bundleHash ||
+          scope?.kind !== 'formal_code_review' ||
+          scope.expiresAt <= now ||
+          scope.formalEvaluatorId !== result.trustedEvaluatorId ||
+          scope.artifactVersionIds.length !== 1 ||
+          scope.artifactVersionIds[0] !== artifact.id ||
+          scope.formalPlanHash !== formalExecutionPlanHash(plan) ||
+          canonicalJson(scope.formalResources) !== canonicalJson(plan.resources) ||
+          !result.runnerReceiptHash ||
+          command.reviewer !== undefined
+        )
+          return invalid(
+            'formal_review_approval_required',
+            'Isolated review needs an exact independent cost approval',
+          )
+        next = {
+          ...campaign,
+          formalCodeReviews: [...(campaign.formalCodeReviews ?? []), cloneJson(result)],
+          approvals: campaign.approvals.map((item) =>
+            item.id === approval.id
+              ? { ...item, consumedBy: `formal-review:${result.reviewId}` }
+              : item,
+          ),
+        }
+      } else {
+        const proofError = command.reviewer
+          ? validateProof(command.reviewer)
+          : 'independent human proof required'
+        if (
+          proofError ||
+          command.approvalId !== undefined ||
+          result.runnerReceiptHash !== undefined ||
+          command.reviewer!.reviewerId !== result.reviewerId
+        )
+          return invalid(
+            'human_formal_review_proof_required',
+            'Human review must carry an independent signed proof',
+          )
+        next = {
+          ...campaign,
+          formalCodeReviews: [...(campaign.formalCodeReviews ?? []), cloneJson(result)],
+        }
+      }
+      break
+    }
+    case 'freezeFormalExecutionPlan': {
+      const plan = command.plan
+      const approval = campaign.approvals.find((item) => item.id === command.approvalId)
+      const scope = approval?.scope
+      const artifact = validFormalExecutionPlan(plan)
+        ? campaign.artifactVersions.find((item) => item.id === plan.candidateArtifactId)
+        : undefined
+      const task = validFormalExecutionPlan(plan)
+        ? withDerivedTaskStatuses(campaign).taskRevisions.find(
+            (item) => item.id === plan.taskRevisionId,
+          )
+        : undefined
+      const reviewed = validFormalExecutionPlan(plan)
+        ? (campaign.formalCodeReviews ?? []).some(
+            (item) => item.decision === 'accepted' && formalReviewMatchesPlan(item, plan),
+          )
+        : false
+      if (
+        !validFormalExecutionPlan(plan) ||
+        command.planHash !== formalExecutionPlanHash(plan) ||
+        !artifact ||
+        artifact.contentHash !== plan.candidateReceiptHash ||
+        !['cli_preparation_candidate', 'cli_preparation_quarantined_candidate'].includes(
+          artifact.kind,
+        ) ||
+        artifact.producerTaskRevisionId !== plan.taskRevisionId ||
+        task?.status === 'stale' ||
+        !(campaign.labelSets ?? []).some((item) => item.contentHash === plan.labelSetContentHash) ||
+        !(task?.labelSetContentHashes ?? []).includes(plan.labelSetContentHash) ||
+        !reviewed ||
+        (campaign.formalExecutionPlans ?? []).some((item) => item.planId === plan.planId) ||
+        !approval ||
+        approval.status !== 'active' ||
+        approval.consumedBy ||
+        approval.bundleHash !== campaign.bundleHash ||
+        scope?.kind !== 'formal_execution' ||
+        scope.expiresAt <= now ||
+        scope.formalPlanHash !== command.planHash ||
+        scope.formalEvaluatorId !== plan.trustedEvaluatorId ||
+        canonicalJson(scope.formalResources) !== canonicalJson(plan.resources) ||
+        scope.artifactVersionIds.length !== 1 ||
+        scope.artifactVersionIds[0] !== artifact.id
+      )
+        return invalid(
+          'formal_execution_approval_required',
+          'Formal plan requires accepted current review and exact approval',
+        )
+      next = {
+        ...campaign,
+        formalExecutionPlans: [...(campaign.formalExecutionPlans ?? []), cloneJson(plan)],
+        approvals: campaign.approvals.map((item) =>
+          item.id === approval.id ? { ...item, consumedBy: `formal-plan:${plan.planId}` } : item,
+        ),
+      }
+      break
+    }
     case 'recordLiteratureCitation': {
       const citation = command.citation
       if (
@@ -2261,6 +2449,8 @@ function nextCampaign(
             'release',
             'cost_settlement',
             'controller',
+            'formal_code_review',
+            'formal_execution',
           ].includes(scope.kind) ||
           !Number.isSafeInteger(scope.expiresAt) ||
           scope.expiresAt <= now ||
@@ -2320,7 +2510,17 @@ function nextCampaign(
               scope.maxCost <= 0 ||
               scope.maxCost > campaign.budget.limit ||
               scope.maxRequests !== undefined ||
-              scope.maxOutputTokens !== undefined))
+              scope.maxOutputTokens !== undefined)) ||
+          (['formal_code_review', 'formal_execution'].includes(scope.kind) &&
+            (!scope.formalPlanHash ||
+              !SHA256.test(scope.formalPlanHash) ||
+              textError(scope.formalEvaluatorId, 'formalEvaluatorId') ||
+              !validFormalResources(scope.formalResources) ||
+              scope.artifactVersionIds.length !== 1 ||
+              !campaign.artifactVersions.some(
+                (artifact) => artifact.id === scope.artifactVersionIds[0],
+              ) ||
+              (scope.kind === 'formal_code_review' && scope.maxCost <= 0)))
         )
           return invalid(
             'invalid_approval_scope',
@@ -3116,7 +3316,8 @@ export function mutateResearchCampaign(
     if (
       (command.kind === 'approve' ||
         command.kind === 'revokeApproval' ||
-        command.kind === 'recordLabelSet') &&
+        command.kind === 'recordLabelSet' ||
+        command.kind === 'recordFormalCodeReview') &&
       command.reviewer
     ) {
       const { verifiedAt: _observedAt, ...identity } = command.reviewer

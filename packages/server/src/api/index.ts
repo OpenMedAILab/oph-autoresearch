@@ -19,6 +19,7 @@ import { handleConfigApi } from './config.ts'
 import { handleResearchControlApi } from './controller-bridge.ts'
 import { handleConversationsApi } from './conversations.ts'
 import { handleExtrasApi } from './extras.ts'
+import { handleFormalExecutionApi } from './formal-execution.ts'
 import { handleGitApi } from './git.ts'
 import { handleHostApi } from './host.ts'
 import { handleMcpApi } from './mcp.ts'
@@ -80,6 +81,7 @@ const HANDLERS: ApiHandler[] = [
   handleResearchControlApi,
   handleResearchDocumentsApi,
   handleCliPreparationsApi,
+  handleFormalExecutionApi,
   handleResearchApi,
   handleConversationsApi,
   handleWorkspaceFsApi,

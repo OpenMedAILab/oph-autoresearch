@@ -46,6 +46,10 @@ export async function readCliCandidateView(
     throw new Error('候选内容已变化，不能作为审阅依据')
   }
   return {
+    candidateArtifactId: artifact.id,
+    taskRevisionId: spec.taskRevisionId,
+    codeHash: receipt.draft.contentHash,
+    candidateReceiptHash: artifact.contentHash,
     code: receipt.draft.code,
     patch: receipt.draft.patch,
     byteLength: bytes.length,

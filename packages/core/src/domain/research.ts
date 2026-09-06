@@ -7,6 +7,11 @@ import type {
   CliPreparationAuthorityBinding,
   CliPreparationObserverIdentity,
 } from './cli-preparation-dispatch.ts'
+import type {
+  FormalCodeReviewResult,
+  FormalExecutionPlan,
+  FormalExecutionResources,
+} from './formal-execution.ts'
 import type { LabelSetReference } from './labelset.ts'
 import type {
   ResearchControllerLimits,
@@ -17,7 +22,6 @@ import type {
   ResearchCostSettlement,
   ResearchCostSubject,
 } from './research-cost.ts'
-import type { FormalCodeReviewResult, FormalExecutionPlan } from './formal-execution.ts'
 export const RESEARCH_STAGES = [
   'question',
   'data_audit',
@@ -155,6 +159,7 @@ export interface ResearchApprovalScope {
   /** Exact frozen-plan bytes, never a mutable host execution description. */
   formalPlanHash?: string
   formalEvaluatorId?: string
+  formalResources?: FormalExecutionResources
   artifactVersionIds: string[]
 }
 
@@ -524,7 +529,12 @@ export type ResearchCommand =
       /** Required only for the no-cost independently signed human path. */
       reviewer?: TrustedHumanReviewerProof
     }
-  | { kind: 'freezeFormalExecutionPlan'; plan: FormalExecutionPlan; planHash: string; approvalId: string }
+  | {
+      kind: 'freezeFormalExecutionPlan'
+      plan: FormalExecutionPlan
+      planHash: string
+      approvalId: string
+    }
   | { kind: 'release'; approvalId: string; artifactVersionIds: string[] }
   | { kind: 'revokeApproval'; approvalId: string; reviewer: TrustedHumanReviewerProof }
   | {
