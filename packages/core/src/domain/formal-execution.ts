@@ -92,6 +92,7 @@ export function validFormalExecutionPlan(plan: unknown): plan is FormalExecution
     'dataManifestHash',
     'datasetMount',
     'entryArgv',
+    'labelSetContentHash',
     'ociImageDigest',
     'outputMount',
     'planId',
