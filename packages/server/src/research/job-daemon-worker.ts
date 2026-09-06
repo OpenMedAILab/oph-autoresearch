@@ -12,6 +12,8 @@ import {
   type DaemonJobSpec,
   isCliPreparationJob,
 } from './cli-preparation-job.ts'
+import { type FormalOciJobSpec, isFormalOciJob } from './formal-job.ts'
+import { FormalOciAdapter, type FormalOciAdministratorConfig } from './formal-oci.ts'
 import {
   captureRunnerTracking,
   collectRunnerTracking,
@@ -21,9 +23,20 @@ import { canonicalJson, sha256 } from './skill-lock.ts'
 import { fixedResearchTemplate } from './template-registry.ts'
 
 type WorkerJob = {
-  spec: DaemonJobSpec
+  spec: DaemonJobSpec | FormalOciJobSpec
   status: string
   runtimeLease?: { ownerId: string; token: string; fence: number; expiresAt: number }
+}
+
+function formalOciConfig(): FormalOciAdministratorConfig | null {
+  try {
+    const value = JSON.parse(process.env.OPH_FORMAL_OCI_ADMIN_CONFIG ?? '') as unknown
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as FormalOciAdministratorConfig)
+      : null
+  } catch {
+    return null
+  }
 }
 
 function cliPreparationConfig(): CliPreparationAdministratorConfig | null {
@@ -114,7 +127,7 @@ export async function runResearchJobWorker(args: readonly string[]) {
   const onTermination = () => {
     terminationRequested = true
   }
-  if (isCliPreparationJob(job.spec)) process.on('SIGTERM', onTermination)
+  if (job.spec.version === 3 || isFormalOciJob(job.spec)) process.on('SIGTERM', onTermination)
   let stopped = false
   let heartbeatInFlight = Promise.resolve()
   // Heartbeats only change authority runtime state. The JobSpec and its hash stay immutable.
@@ -158,6 +171,31 @@ export async function runResearchJobWorker(args: readonly string[]) {
           body: JSON.stringify({ lease: runtimeLease }),
         })
       return 0
+    }
+    if (isFormalOciJob(job.spec)) {
+      const config = formalOciConfig()
+      if (!config) return 10
+      const directory = safeOutputDirectory(root, dispatchKey)
+      let adapter: FormalOciAdapter
+      try {
+        adapter = new FormalOciAdapter(config)
+        const result = adapter.run(job.spec, directory)
+        if (result.exitCode !== 0 || terminationRequested) return 11
+        const receipt = Buffer.from(`${JSON.stringify(adapter.evaluate(job.spec, directory))}\n`)
+        const path = join(directory, 'formal-receipt.json')
+        await writeFile(path, receipt, { flag: 'wx' })
+        await heartbeatInFlight
+        const finish = await request(`/finish/${encodeURIComponent(dispatchKey)}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            lease: runtimeLease,
+            result: { contentHash: hashBytes(receipt), outputPath: path },
+          }),
+        })
+        return finish.ok ? 0 : 6
+      } catch {
+        return 12
+      }
     }
     if (isCliPreparationJob(job.spec)) {
       const cliJob = job.spec as CliPreparationJobSpec
@@ -272,9 +310,9 @@ export async function runResearchJobWorker(args: readonly string[]) {
     })
     return finish.ok ? 0 : 6
   } finally {
-    if (isCliPreparationJob(job.spec)) await awaitCancellationEscalation()
+    if (job.spec.version === 3 || isFormalOciJob(job.spec)) await awaitCancellationEscalation()
     await done()
-    if (isCliPreparationJob(job.spec)) process.off('SIGTERM', onTermination)
+    if (job.spec.version === 3 || isFormalOciJob(job.spec)) process.off('SIGTERM', onTermination)
   }
 }
 

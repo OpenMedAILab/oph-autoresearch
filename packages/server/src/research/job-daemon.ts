@@ -400,6 +400,7 @@ export class JobDaemon implements JobDaemonPort {
   private readonly trackingConfigJson: string | undefined
   private readonly cliPreparationConfigJson: string | undefined
   private readonly cliPreparationConfig: CliPreparationAdministratorConfig | undefined
+  private readonly formalOciConfigJson: string | undefined
   private readonly formalOci: FormalOciAdapter | undefined
   private readonly db: Database
   private server: ReturnType<typeof Bun.serve> | null = null
@@ -439,7 +440,10 @@ export class JobDaemon implements JobDaemonPort {
         this.cliPreparationConfigJson,
       ) as CliPreparationAdministratorConfig
     }
-    if (opts.formalOci) this.formalOci = new FormalOciAdapter(opts.formalOci)
+    if (opts.formalOci) {
+      this.formalOciConfigJson = JSON.stringify(opts.formalOci)
+      this.formalOci = new FormalOciAdapter(opts.formalOci)
+    }
     mkdirSync(resolve(opts.outputRoot), { recursive: true })
     this.outputRoot = resolve(opts.outputRoot)
     const rootStat = lstatSync(this.outputRoot)
@@ -901,7 +905,10 @@ export class JobDaemon implements JobDaemonPort {
       if (contentHash !== result.contentHash) return null
       if (isCliPreparationJob(baseSpec)) {
         if (!verifyCandidateReceipt(JSON.parse(bytes.toString()), baseSpec)) return null
-      } else if (!formal) {
+      } else if (formal) {
+        if (!this.formalOci?.verifyReceipt(job.spec as FormalOciJobSpec, directory, bytes))
+          return null
+      } else {
         fixedResearchTemplate(baseSpec.templateId).verify(bytes)
         verifyTrackingBinding(bytes, baseSpec)
       }
@@ -1049,6 +1056,7 @@ export class JobDaemon implements JobDaemonPort {
     }
     const startedAt = job.cleanupStartedAt
     if (startedAt === undefined) return
+    if (isFormalOciJob(job.spec) && !this.formalOci?.stopAndConfirm(job.spec)) return
     const remainingMs = startedAt + 250 - Date.now()
     const existing = this.escalationTimers.get(dispatchKey)
     if (remainingMs <= 0) {
@@ -1145,6 +1153,9 @@ export class JobDaemon implements JobDaemonPort {
         ...(this.trackingConfigJson ? { OPH_RESEARCH_TRACKING_STDIN: '1' } : {}),
         ...(this.cliPreparationConfigJson
           ? { OPH_CLI_PREPARATION_ADMIN_CONFIG: this.cliPreparationConfigJson }
+          : {}),
+        ...(this.formalOciConfigJson
+          ? { OPH_FORMAL_OCI_ADMIN_CONFIG: this.formalOciConfigJson }
           : {}),
       },
       detached: process.platform !== 'win32',

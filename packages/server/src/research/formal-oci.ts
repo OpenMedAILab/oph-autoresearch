@@ -29,6 +29,17 @@ export interface PodmanCommand {
 function bytesHash(bytes: Uint8Array) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 }
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value)
+}
 function bounded(bytes: Uint8Array) {
   return bytes.byteLength <= MAX_STDIO_BYTES ? bytes : bytes.slice(0, MAX_STDIO_BYTES)
 }
@@ -206,6 +217,23 @@ export class FormalOciAdapter {
       10_000,
     )
   }
+  stopAndConfirm(job: FormalOciJobSpec) {
+    const before = this.inspect(job.execution.containerName)
+    if (before.exitCode === 0) {
+      const state = new TextDecoder().decode(before.stdout).trim().split(/\s+/)
+      if (state[0] !== job.formalPlan.ociImageDigest) return false
+      if (!['running', 'created', 'paused'].includes(state[1] ?? '')) return true
+    }
+    const stopped = this.command.run(['stop', '--time', '1', job.execution.containerName], 10_000)
+    if (stopped.exitCode !== 0) return false
+    const inspected = this.inspect(job.execution.containerName)
+    if (inspected.exitCode !== 0) return true // Removed is also a confirmed stopped state.
+    const state = new TextDecoder().decode(inspected.stdout).trim().split(/\s+/)
+    return (
+      state[0] === job.formalPlan.ociImageDigest &&
+      !['running', 'created', 'paused'].includes(state[1] ?? '')
+    )
+  }
   run(job: FormalOciJobSpec, outputDirectory: string) {
     const result = this.command.run(
       this.argv(job, outputDirectory),
@@ -286,6 +314,14 @@ export class FormalOciAdapter {
         fp,
         fn,
       },
+    }
+  }
+  verifyReceipt(job: FormalOciJobSpec, outputDirectory: string, bytes: Uint8Array) {
+    try {
+      const claimed = JSON.parse(new TextDecoder().decode(bytes))
+      return canonical(claimed) === canonical(this.evaluate(job, outputDirectory))
+    } catch {
+      return false
     }
   }
 }
