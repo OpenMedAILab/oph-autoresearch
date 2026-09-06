@@ -235,7 +235,7 @@ export async function runResearchJobWorker(args: readonly string[]) {
       // whole job group before marking it completed. Do not race its SIGTERM
       // delivery: exiting first would strand a stream-closed descendant because
       // the authority can no longer prove ownership of this group leader.
-      await new Promise<never>(() => {})
+      return await new Promise<never>(() => {})
     }
     const plan = fixedResearchTemplate(job.spec.templateId)
     await plan.assertSkill()
