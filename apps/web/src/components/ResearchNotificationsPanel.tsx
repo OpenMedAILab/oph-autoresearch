@@ -25,11 +25,15 @@ export function ResearchNotificationsPanel(props: {
   const [opened, setOpened] = createSignal(false)
   const [receipts, { refetch }] = createResource(
     () => `${props.campaignId}:${props.version}`,
-    async () =>
-      client.api<{ notifications: Receipt[] }>(
+    async () => {
+      const result = await client.api<{ notifications: Receipt[] }>(
         `/api/research/campaigns/${props.campaignId}/notifications?ws=${encodeURIComponent(props.workspaceId)}`,
-      ),
+      )
+      if (!Array.isArray(result.notifications)) throw new Error('Invalid notification response')
+      return result
+    },
   )
+  const notifications = () => (receipts.error ? [] : (receipts()?.notifications ?? []))
   createEffect(() => {
     if (!opened()) return
     void refetch()
@@ -48,10 +52,10 @@ export function ResearchNotificationsPanel(props: {
       <Show when={receipts.error}>
         <p role="alert">投递记录暂时无法读取。</p>
       </Show>
-      <Show when={receipts()?.notifications.length === 0}>
+      <Show when={!receipts.error && !receipts.loading && notifications().length === 0}>
         <p>暂无投递记录。</p>
       </Show>
-      <For each={receipts()?.notifications}>
+      <For each={notifications()}>
         {(item) => (
           <p>
             {kinds[item.kind]} ·{' '}

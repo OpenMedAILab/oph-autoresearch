@@ -128,9 +128,10 @@ const backendLabels = {
 
 function campaignProgress(campaign: ResearchCampaign) {
   if (campaign.status === 'completed') return '研究输出已发布'
-  if (campaign.attempts.some((attempt) => attempt.status === 'running')) return '实验执行中'
-  if (campaign.attempts.some((attempt) => attempt.status === 'unknown')) return '实验状态待核对'
-  if (campaign.attempts.some((attempt) => attempt.status === 'completed'))
+  if ((campaign.attempts ?? []).some((attempt) => attempt.status === 'running')) return '实验执行中'
+  if ((campaign.attempts ?? []).some((attempt) => attempt.status === 'unknown'))
+    return '实验状态待核对'
+  if ((campaign.attempts ?? []).some((attempt) => attempt.status === 'completed'))
     return '实验结果已核验 · 待独立复核'
   return `${stageLabels[campaign.stage]} · ${statusLabels[campaign.status]}`
 }

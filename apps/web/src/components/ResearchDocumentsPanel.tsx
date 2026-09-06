@@ -33,8 +33,13 @@ export function ResearchDocumentsPanel(props: {
     `/api/research/campaigns/${props.campaign.id}/documents?ws=${encodeURIComponent(props.campaign.workspaceId)}`
   const [documents] = createResource(
     () => `${props.campaign.id}:${props.campaign.version}`,
-    async () => client.api<{ documents: DocumentVersion[] }>(endpoint()),
+    async () => {
+      const result = await client.api<{ documents: DocumentVersion[] }>(endpoint())
+      if (!Array.isArray(result.documents)) throw new Error('Invalid document response')
+      return result
+    },
   )
+  const versions = () => (documents.error ? [] : (documents()?.documents ?? []))
   const [values, setValues] = createSignal<Record<string, string>>({})
   const [citations, setCitations] = createSignal<string[]>([])
   const ready = () => fields.every(([key]) => values()[key]?.trim()) && citations().length > 0
@@ -46,8 +51,8 @@ export function ResearchDocumentsPanel(props: {
   async function save() {
     if (!ready() || props.busy) return
     const v = values()
-    const latest = documents()
-      ?.documents.filter((item) => item.kind === 'study')
+    const latest = versions()
+      .filter((item) => item.kind === 'study')
       .toSorted((a, b) => b.version - a.version)[0]
     await props.act(async () => {
       await client.api(endpoint(), {
@@ -82,7 +87,7 @@ export function ResearchDocumentsPanel(props: {
       <Show when={documents.error}>
         <p role="alert">文档暂时无法读取，请刷新后重试。</p>
       </Show>
-      <For each={documents()?.documents}>
+      <For each={versions()}>
         {(item) => (
           <details>
             <summary>
