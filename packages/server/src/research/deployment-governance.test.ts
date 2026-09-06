@@ -128,6 +128,12 @@ test('daemon-disabled deployment rejects both CLI preparation authority injectio
       authorityAccessed = true
       throw new Error('must not construct execution authority')
     },
+    identity() {
+      throw new Error('must not read authority identity')
+    },
+    closeUnstarted() {
+      throw new Error('must not close authority job')
+    },
     submit() {
       throw new Error('must not submit')
     },

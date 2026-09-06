@@ -1,5 +1,6 @@
 import {
   type ArtifactVersion,
+  type CliPreparationObserverIdentity,
   canonicalCliPreparationConfig,
   canonicalResearchBundle,
   foldResearchEvents,
@@ -23,6 +24,8 @@ import {
 import type { Store } from './db.ts'
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/
+const AUTHORITY_EPOCH = /^[A-Za-z0-9_-]{16,128}$/
+const OBSERVER_LEASE_MAX_MS = 60_000
 
 type EventRow = {
   id: string
@@ -839,10 +842,26 @@ function attemptById(campaign: ResearchCampaign, attemptId: unknown): ResearchAt
 function ownedRunningAttempt(
   campaign: ResearchCampaign,
   attemptId: unknown,
+  observer?: CliPreparationObserverIdentity,
+  now = Date.now(),
 ): { ok: true; attempt: ResearchAttempt } | { ok: false; code: string; message: string } {
   const attempt = attemptById(campaign, attemptId)
   if (!attempt) return { ok: false, code: 'unknown_attempt', message: '找不到 attemptId' }
-  if (attempt.ownerPid !== process.pid) {
+  const authority = attempt.cliPreparationAuthority
+  if (
+    authority &&
+    (!observer ||
+      authority.observer?.instanceId !== observer.instanceId ||
+      authority.observer.generation !== observer.generation ||
+      authority.observer.expiresAt <= now)
+  ) {
+    return {
+      ok: false,
+      code: 'stale_cli_preparation_observer',
+      message: 'CLI 准备观察者租约已过期或已由其他实例接管',
+    }
+  }
+  if (!authority && attempt.ownerPid !== process.pid) {
     return {
       ok: false,
       code: 'not_attempt_owner',
@@ -853,6 +872,55 @@ function ownedRunningAttempt(
     return { ok: false, code: 'inactive_attempt', message: '该尝试已结束' }
   }
   return { ok: true, attempt }
+}
+
+function validObserverLease(
+  command: {
+    instanceId: string
+    expectedEpoch: string
+    expectedJobSpecHash: string
+    leaseExpiresAt: number
+  },
+  now: number,
+) {
+  return (
+    !textError(command.instanceId, 'observer instance') &&
+    AUTHORITY_EPOCH.test(command.expectedEpoch) &&
+    SHA256.test(command.expectedJobSpecHash) &&
+    Number.isSafeInteger(command.leaseExpiresAt) &&
+    command.leaseExpiresAt > now &&
+    command.leaseExpiresAt <= now + OBSERVER_LEASE_MAX_MS
+  )
+}
+
+function cliAuthorityMatches(
+  attempt: ResearchAttempt,
+  expectedEpoch: string,
+  expectedJobSpecHash: string,
+) {
+  const binding = attempt.cliPreparationAuthority
+  return Boolean(
+    binding &&
+      binding.epoch === expectedEpoch &&
+      binding.jobSpecHash === expectedJobSpecHash &&
+      binding.backendPolicyHash === attempt.backendPolicyHash &&
+      binding.jobSpecHash === attempt.cliPreparationJobSpecHash,
+  )
+}
+
+function currentCliObserver(
+  attempt: ResearchAttempt,
+  observer: CliPreparationObserverIdentity | undefined,
+  now: number,
+) {
+  const binding = attempt.cliPreparationAuthority
+  if (!binding) return true
+  return Boolean(
+    observer &&
+      binding.observer?.instanceId === observer.instanceId &&
+      binding.observer.generation === observer.generation &&
+      binding.observer.expiresAt > now,
+  )
 }
 
 function nextCampaign(
@@ -879,6 +947,116 @@ function nextCampaign(
       return invalid('invalid_skill_binding', '执行技能绑定无效')
   }
   switch (command.kind) {
+    case 'claimCliPreparationDispatch': {
+      const attempt = attemptById(campaign, command.attemptId)
+      if (
+        !attempt ||
+        !validObserverLease(command, now) ||
+        !cliAuthorityMatches(attempt, command.expectedEpoch, command.expectedJobSpecHash) ||
+        attempt.cliPreparationAuthority?.dispatchState !== 'not_sent'
+      )
+        return invalid(
+          'invalid_cli_preparation_dispatch_claim',
+          '首次投递必须绑定当前 authority epoch、作业哈希和短期观察租约',
+        )
+      next = {
+        ...campaign,
+        attempts: campaign.attempts.map((candidate) =>
+          candidate.id === attempt.id
+            ? {
+                ...candidate,
+                cliPreparationAuthority: {
+                  ...candidate.cliPreparationAuthority!,
+                  dispatchState: 'sending',
+                  observer: {
+                    instanceId: command.instanceId,
+                    generation: 1,
+                    expiresAt: command.leaseExpiresAt,
+                  },
+                },
+              }
+            : candidate,
+        ),
+      }
+      break
+    }
+    case 'acquireCliPreparationObservation': {
+      const attempt = attemptById(campaign, command.attemptId)
+      const binding = attempt?.cliPreparationAuthority
+      const prior = binding?.observer
+      const renewal = prior?.instanceId === command.instanceId && prior.expiresAt > now
+      if (
+        !attempt ||
+        !binding ||
+        !validObserverLease(command, now) ||
+        !cliAuthorityMatches(attempt, command.expectedEpoch, command.expectedJobSpecHash) ||
+        binding.dispatchState === 'not_sent' ||
+        (prior !== undefined && prior.expiresAt > now && !renewal)
+      )
+        return invalid(
+          'invalid_cli_preparation_observer_claim',
+          '观察者只能续租自身有效租约，或在租约到期后接管原 authority 作业',
+        )
+      next = {
+        ...campaign,
+        attempts: campaign.attempts.map((candidate) =>
+          candidate.id === attempt.id
+            ? {
+                ...candidate,
+                cliPreparationAuthority: {
+                  ...binding,
+                  observer: {
+                    instanceId: command.instanceId,
+                    generation: renewal ? prior.generation : (prior?.generation ?? 0) + 1,
+                    expiresAt: command.leaseExpiresAt,
+                  },
+                },
+              }
+            : candidate,
+        ),
+      }
+      break
+    }
+    case 'acknowledgeCliPreparationDispatch':
+    case 'markCliPreparationObservationUnknown': {
+      const attempt = attemptById(campaign, command.attemptId)
+      const binding = attempt?.cliPreparationAuthority
+      const observer = binding?.observer
+      if (
+        !attempt ||
+        !binding ||
+        !AUTHORITY_EPOCH.test(command.expectedEpoch) ||
+        binding.epoch !== command.expectedEpoch ||
+        !observer ||
+        observer.instanceId !== command.instanceId ||
+        observer.generation !== command.generation ||
+        observer.expiresAt <= now ||
+        (command.kind === 'acknowledgeCliPreparationDispatch' &&
+          binding.dispatchState !== 'sending')
+      )
+        return invalid(
+          'stale_cli_preparation_observer',
+          '只有当前未过期的观察者可确认投递或记录观察状态',
+        )
+      next = {
+        ...campaign,
+        attempts: campaign.attempts.map((candidate) =>
+          candidate.id === attempt.id
+            ? {
+                ...candidate,
+                cliPreparationAuthority: {
+                  ...binding,
+                  dispatchState:
+                    command.kind === 'acknowledgeCliPreparationDispatch'
+                      ? 'acknowledged'
+                      : 'observation_unknown',
+                },
+              }
+            : candidate,
+        ),
+      }
+      break
+    }
     case 'setResearchProgress': {
       const control = progressControl(campaign)
       if (
@@ -1684,6 +1862,7 @@ function nextCampaign(
         spec.lease.expiresAt <= now ||
         spec.lease.expiresAt > now + 10 * 60 * 1000 ||
         textError(spec.lease.token, 'lease token') ||
+        (command.authorityEpoch !== undefined && !AUTHORITY_EPOCH.test(command.authorityEpoch)) ||
         spec.execution?.adapter !== 'cli-preparation-v1' ||
         spec.execution.preparationId !== preparation.id ||
         spec.execution.candidateId !== preparation.candidateId ||
@@ -1709,6 +1888,17 @@ function nextCampaign(
                 ...attempt,
                 cliPreparationJobSpec: cloneJson(spec),
                 cliPreparationJobSpecHash: digest(canonicalJson(spec)),
+                ...(command.authorityEpoch
+                  ? {
+                      cliPreparationAuthority: {
+                        schema: 'cli-preparation-authority-binding-v1' as const,
+                        epoch: command.authorityEpoch,
+                        backendPolicyHash: spec.backendPolicyHash,
+                        jobSpecHash: digest(canonicalJson(spec)),
+                        dispatchState: 'not_sent' as const,
+                      },
+                    }
+                  : {}),
               }
             : attempt,
         ),
@@ -1716,7 +1906,7 @@ function nextCampaign(
       break
     }
     case 'finishCliPreparation': {
-      const owned = ownedRunningAttempt(campaign, command.attemptId)
+      const owned = ownedRunningAttempt(campaign, command.attemptId, command.observer, now)
       if (!owned.ok) return owned
       const preparation = (campaign.cliPreparations ?? []).find(
         (candidate) => candidate.attemptId === owned.attempt.id,
@@ -1794,7 +1984,7 @@ function nextCampaign(
       break
     }
     case 'quarantineCliPreparationResult': {
-      const owned = ownedRunningAttempt(campaign, command.attemptId)
+      const owned = ownedRunningAttempt(campaign, command.attemptId, command.observer, now)
       if (!owned.ok) return owned
       const preparation = (campaign.cliPreparations ?? []).find(
         (candidate) => candidate.attemptId === owned.attempt.id,
@@ -2383,7 +2573,8 @@ function nextCampaign(
       if (
         !attempt ||
         !['localhost-daemon', 'ssh-daemon'].includes(attempt.backend ?? '') ||
-        !['running', 'unknown'].includes(attempt.status)
+        !['running', 'unknown'].includes(attempt.status) ||
+        !currentCliObserver(attempt, command.observer, now)
       )
         return invalid(
           'invalid_unknown_transition',
@@ -2407,7 +2598,10 @@ function nextCampaign(
         !['running', 'unknown'].includes(attempt.status) ||
         command.jobSpecHash !== (attempt.cliPreparationJobSpecHash ?? attempt.jobSpecHash) ||
         (!attempt.cliPreparationJobSpec && !attempt.jobSpec) ||
-        (attempt.ownerPid !== process.pid && ownerAlive(attempt.ownerPid))
+        !currentCliObserver(attempt, command.observer, now) ||
+        (!attempt.cliPreparationAuthority &&
+          attempt.ownerPid !== process.pid &&
+          ownerAlive(attempt.ownerPid))
       )
         return invalid(
           'invalid_job_observation',
@@ -2504,7 +2698,7 @@ function nextCampaign(
       break
     }
     case 'failSynthetic': {
-      const owned = ownedRunningAttempt(campaign, command.attemptId)
+      const owned = ownedRunningAttempt(campaign, command.attemptId, command.observer, now)
       if (!owned.ok) return owned
       const error = textError(command.error, 'error')
       if (error) return invalid('invalid_synthetic_failure', error)
@@ -2539,7 +2733,7 @@ function nextCampaign(
       break
     }
     case 'interruptSynthetic': {
-      const owned = ownedRunningAttempt(campaign, command.attemptId)
+      const owned = ownedRunningAttempt(campaign, command.attemptId, command.observer, now)
       if (!owned.ok) return owned
       const error = textError(command.reason, 'reason')
       if (error) return invalid('invalid_synthetic_interrupt', error)
@@ -2561,7 +2755,8 @@ function nextCampaign(
     case 'recoverSynthetic': {
       const attempt = attemptById(campaign, command.attemptId)
       if (!attempt) return invalid('unknown_attempt', '找不到 attemptId')
-      if (attempt.status !== 'running') return invalid('inactive_attempt', '该尝试已结束')
+      if (attempt.status !== 'running' || !currentCliObserver(attempt, command.observer, now))
+        return invalid('inactive_attempt', '该尝试已结束或观察租约已失效')
       const error = textError(command.reason, 'reason')
       if (error) return invalid('invalid_synthetic_recovery', error)
       next = {

@@ -44,6 +44,13 @@ class FakeAuthority {
   receiptBlock: Promise<void> | null = null
   onReceipt: (() => void) | null = null
   readonly backendPolicyHash = backendPolicyHash
+  epoch = 'fixture_authority_epoch_0001'
+  identity() {
+    return { schema: 'research-authority-identity-v1' as const, epoch: this.epoch }
+  }
+  closeUnstarted(_request: { expectedEpoch: string; dispatchKey: string; specHash: string }) {
+    return { outcome: 'not_started' }
+  }
   submit(spec: CliPreparationJobSpec) {
     this.submitted.push(spec)
     this.current = job(spec, 'queued')
@@ -190,6 +197,26 @@ test('controller submits one approved immutable attempt and records only a candi
     await waitFor(() => authority.submitted[0], 'transport submit')
     expect(authority.submitted).toHaveLength(1)
     const spec = authority.submitted[0]!
+    expect(
+      getResearchCampaign(store, campaign.id)?.attempts[0]?.cliPreparationAuthority,
+    ).toMatchObject({
+      schema: 'cli-preparation-authority-binding-v1',
+      epoch: authority.epoch,
+      backendPolicyHash,
+      jobSpecHash: sha256(canonicalJson(spec)),
+      dispatchState: 'acknowledged',
+    })
+    const staleObserver = mutateResearchCampaign(store, campaign.id, {
+      expectedVersion: getResearchCampaign(store, campaign.id)!.version,
+      idempotencyKey: 'stale-cli-observer',
+      command: {
+        kind: 'markSyntheticUnknown',
+        attemptId: accepted.attemptId,
+        reason: 'stale observer must not change a fenced attempt',
+        observer: { instanceId: 'other-observer', generation: 1 },
+      },
+    })
+    expect(staleObserver.ok).toBe(false)
     authority.receiptBytes = Buffer.from(JSON.stringify(candidateReceipt(spec, draft(spec))))
     authority.current = job(spec, 'completed')
     const completed = await waitFor(() => {
@@ -475,6 +502,12 @@ test('reconcile observes the original attempt after an unknown transport state w
           : undefined,
       'unknown state',
     )
+    expect(
+      getResearchCampaign(store, campaign.id)?.attempts[0]?.cliPreparationAuthority,
+    ).toMatchObject({
+      epoch: authority.epoch,
+      dispatchState: 'observation_unknown',
+    })
     const changedRoute = new CliPreparationController(
       store,
       [route(authority, `sha256:${'f'.repeat(64)}`)],

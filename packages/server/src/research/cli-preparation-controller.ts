@@ -4,6 +4,8 @@ import { pathToFileURL } from 'node:url'
 import {
   type CliPreparationFrozenConfig,
   type CliPreparationJobSpec,
+  type CliPreparationObserverIdentity,
+  type CliPreparationObserverLease,
   canonicalCliPreparationConfig,
   type ResearchCampaign,
   type ResearchCommand,
@@ -23,6 +25,14 @@ export interface CliPreparationRoute {
   adapterConfigHash: string
   authority: {
     readonly backendPolicyHash: string
+    identity():
+      | { schema: 'research-authority-identity-v1'; epoch: string }
+      | Promise<{ schema: 'research-authority-identity-v1'; epoch: string }>
+    closeUnstarted(request: {
+      expectedEpoch: string
+      dispatchKey: string
+      specHash: string
+    }): Promise<{ outcome: string }> | { outcome: string }
     submit(spec: CliPreparationJobSpec): DurableJob | Promise<DurableJob>
     query(key: string): DurableJob | null | Promise<DurableJob | null>
     cancel(key: string): DurableJob | null | Promise<DurableJob | null>
@@ -44,17 +54,21 @@ export interface CliPreparationScope {
 }
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const HASH = /^sha256:[a-f0-9]{64}$/
+const EPOCH = /^[A-Za-z0-9_-]{16,128}$/
+const OBSERVER_LEASE_MS = 30_000
 
 /** Durable claim precedes transport. Recovery only observes the original immutable remote key. */
 export class CliPreparationController {
   private readonly routes: readonly CliPreparationRoute[]
   private readonly observing = new Set<string>()
   private closed = false
+  private readonly instanceId: string
   constructor(
     private readonly store: Store,
     routes: readonly CliPreparationRoute[],
     private readonly changed: () => void,
     private readonly beforeBind?: () => void,
+    instanceId = `cli-observer-${crypto.randomUUID()}`,
   ) {
     if (
       new Set(routes.map((route) => route.id)).size !== routes.length ||
@@ -70,6 +84,8 @@ export class CliPreparationController {
       )
     )
       throw new Error('Invalid admitted CLI preparation catalog')
+    if (!ID.test(instanceId)) throw new Error('Invalid CLI preparation observer instance')
+    this.instanceId = instanceId
     this.routes = routes.map((route) => Object.freeze({ ...route }))
   }
   close() {
@@ -198,6 +214,9 @@ export class CliPreparationController {
     if (preparation.attemptId)
       return { campaign: before, attemptId: preparation.attemptId, replayed: true }
     const route = this.routeFor(preparation)
+    const identity = await route.authority.identity()
+    if (identity.schema !== 'research-authority-identity-v1' || !EPOCH.test(identity.epoch))
+      throw new CliPreparationControlError('远端执行 authority 身份无效；不会投递准备任务')
     const { bound, attemptId } = this.store.tx(() => {
       const claimed = this.mutate(
         scope,
@@ -250,14 +269,14 @@ export class CliPreparationController {
       const bound = this.mutate(
         scope,
         `bind-cli:${attemptId}`,
-        { kind: 'bindCliPreparationJob', attemptId, spec },
+        { kind: 'bindCliPreparationJob', attemptId, spec, authorityEpoch: identity.epoch },
         undefined,
         false,
       )
       return { bound, attemptId }
     })
     this.notifyAfterCommit()
-    void this.observe(scope, attemptId, route, true).catch(() =>
+    void this.observe(scope, attemptId, route).catch(() =>
       console.error('CLI preparation observation could not persist'),
     )
     return { campaign: bound.campaign, attemptId, replayed: false }
@@ -291,7 +310,7 @@ export class CliPreparationController {
         })
       return { campaign: this.campaign(scope), attemptId }
     }
-    void this.observe(scope, attemptId, this.routeFor(preparation), false).catch(() =>
+    void this.observe(scope, attemptId, this.routeFor(preparation)).catch(() =>
       console.error('CLI preparation recovery observation could not persist'),
     )
     return { campaign: this.campaign(scope), attemptId }
@@ -324,42 +343,220 @@ export class CliPreparationController {
     if (['completed', 'failed', 'interrupted', 'cancelled'].includes(attempt.status))
       return { campaign }
     this.mutate(scope, `cancel-cli:${attemptId}`, { kind: 'requestCancelSynthetic', attemptId })
-    await this.routeFor(preparation).authority.cancel(attemptId)
     return this.reconcile(scope, attemptId)
   }
-  private async observe(
+
+  private jobHash(spec: CliPreparationJobSpec) {
+    return sha256(canonicalJson(spec))
+  }
+  private async acquireObserver(
     scope: CliPreparationScope,
     attemptId: string,
-    route: CliPreparationRoute,
-    submit: boolean,
+    mode: 'first_send' | 'observe',
+  ): Promise<{
+    epoch: string
+    observer: CliPreparationObserverLease
+    spec: CliPreparationJobSpec
+  } | null> {
+    const campaign = this.campaign(scope)
+    const attempt = campaign.attempts.find((item) => item.id === attemptId)
+    const spec = attempt?.cliPreparationJobSpec
+    const binding = attempt?.cliPreparationAuthority
+    if (!attempt || !spec || !binding || !attempt.cliPreparationJobSpecHash) return null
+    const expectedJobSpecHash = attempt.cliPreparationJobSpecHash
+    const command = {
+      attemptId,
+      instanceId: this.instanceId,
+      expectedEpoch: binding.epoch,
+      expectedJobSpecHash,
+      leaseExpiresAt: Date.now() + OBSERVER_LEASE_MS,
+    }
+    const result = this.mutate(
+      scope,
+      `${mode === 'first_send' ? 'dispatch' : 'observe'}-cli:${attemptId}:${this.instanceId}:${campaign.version}`,
+      {
+        kind:
+          mode === 'first_send'
+            ? 'claimCliPreparationDispatch'
+            : 'acquireCliPreparationObservation',
+        ...command,
+      },
+      campaign.version,
+    )
+    let updated = result.campaign.attempts.find((item) => item.id === attemptId)
+    const observer = updated?.cliPreparationAuthority?.observer
+    if (
+      !updated?.cliPreparationAuthority ||
+      updated.cliPreparationAuthority.epoch !== binding.epoch ||
+      updated.cliPreparationAuthority.jobSpecHash !== expectedJobSpecHash ||
+      !observer ||
+      observer.instanceId !== this.instanceId
+    )
+      return null
+    if (updated.status === 'unknown') {
+      const resumed = this.mutate(
+        scope,
+        `resume-cli:${attemptId}:${observer.generation}:${result.campaign.version}`,
+        {
+          kind: 'resumeSyntheticObservation',
+          attemptId,
+          jobSpecHash: expectedJobSpecHash,
+          observer,
+        },
+        result.campaign.version,
+      )
+      updated = resumed.campaign.attempts.find((item) => item.id === attemptId)
+      if (!updated) return null
+    }
+    return { epoch: binding.epoch, observer, spec }
+  }
+  private markObservationUnknown(
+    scope: CliPreparationScope,
+    attemptId: string,
+    epoch: string,
+    observer: CliPreparationObserverIdentity,
+    reason: string,
   ) {
+    const campaign = this.campaign(scope)
+    this.mutate(
+      scope,
+      `authority-observation-unknown:${attemptId}:${observer.generation}`,
+      {
+        kind: 'markCliPreparationObservationUnknown',
+        attemptId,
+        instanceId: observer.instanceId,
+        generation: observer.generation,
+        expectedEpoch: epoch,
+      },
+      campaign.version,
+    )
+    const current = this.campaign(scope)
+    const attempt = current.attempts.find((item) => item.id === attemptId)
+    if (attempt?.status === 'running' || attempt?.status === 'unknown')
+      this.mutate(
+        scope,
+        `unknown-cli:${attemptId}:${observer.generation}`,
+        { kind: 'markSyntheticUnknown', attemptId, reason, observer },
+        current.version,
+      )
+  }
+  private async observe(scope: CliPreparationScope, attemptId: string, route: CliPreparationRoute) {
     if (this.observing.has(attemptId)) return
     this.observing.add(attemptId)
+    let held:
+      | { epoch: string; observer: CliPreparationObserverLease; spec: CliPreparationJobSpec }
+      | undefined
     try {
       let campaign = this.campaign(scope)
       let attempt = campaign.attempts.find((item) => item.id === attemptId)!
       const spec = attempt.cliPreparationJobSpec
+      const binding = attempt.cliPreparationAuthority
       if (
         !spec ||
         !attempt.cliPreparationJobSpecHash ||
+        !binding ||
         ['completed', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)
       )
         return
-      if (!submit) {
-        this.mutate(scope, `resume-cli:${attemptId}:${campaign.version}`, {
-          kind: 'resumeSyntheticObservation',
+      held = await this.acquireObserver(
+        scope,
+        attemptId,
+        binding.dispatchState === 'not_sent' ? 'first_send' : 'observe',
+      )
+      if (!held) return
+      const remoteIdentity = await route.authority.identity()
+      if (
+        remoteIdentity.schema !== 'research-authority-identity-v1' ||
+        remoteIdentity.epoch !== held.epoch
+      ) {
+        this.markObservationUnknown(
+          scope,
           attemptId,
-          jobSpecHash: attempt.cliPreparationJobSpecHash,
-        })
-      } else await route.authority.submit(spec)
+          held.epoch,
+          held.observer,
+          '远端 authority epoch 已变化；不能把新实例的空结果当作原作业未开始',
+        )
+        return
+      }
+      if (binding.dispatchState === 'not_sent') {
+        // `sending` is durable before this request. A lost response is observed below,
+        // never retried as a second submit.
+        try {
+          await route.authority.submit(held.spec)
+          const current = this.campaign(scope)
+          this.mutate(
+            scope,
+            `acknowledge-cli:${attemptId}:${held.observer.generation}`,
+            {
+              kind: 'acknowledgeCliPreparationDispatch',
+              attemptId,
+              instanceId: held.observer.instanceId,
+              generation: held.observer.generation,
+              expectedEpoch: held.epoch,
+            },
+            current.version,
+          )
+        } catch {
+          // Query the exact immutable key below. The sending CAS prohibits resubmission.
+        }
+      }
       const deadline = Date.now() + spec.execution.maxRuntimeMs + 30_000
       do {
         if (this.closed) return
+        if (held.observer.generation > 0 && held.observer.expiresAt <= Date.now() + 10_000) {
+          held = (await this.acquireObserver(scope, attemptId, 'observe')) ?? undefined
+          if (!held) return
+        }
         const job = await route.authority.query(attemptId)
-        if (!job || job.specHash !== sha256(canonicalJson(spec)))
-          throw new Error('Original remote job is unavailable or has changed')
+        if (!job) {
+          const current = this.campaign(scope)
+          const currentBinding = current.attempts.find(
+            (item) => item.id === attemptId,
+          )?.cliPreparationAuthority
+          if (currentBinding?.dispatchState === 'sending') {
+            const proof = await route.authority.closeUnstarted({
+              expectedEpoch: held.epoch,
+              dispatchKey: attemptId,
+              specHash: this.jobHash(held.spec),
+            })
+            if (proof.outcome === 'not_started') {
+              const latest = this.campaign(scope)
+              this.mutate(
+                scope,
+                `not-started-cli:${attemptId}:${held.observer.generation}`,
+                {
+                  kind: 'interruptSynthetic',
+                  attemptId,
+                  reason: '远端 authority 已在相同 epoch 下持久确认该作业未开始',
+                  observer: held.observer,
+                },
+                latest.version,
+              )
+              return
+            }
+          }
+          throw new Error('Original remote job has no durable authority observation')
+        }
+        if (job.specHash !== this.jobHash(held.spec))
+          throw new Error('Original remote job has changed')
         campaign = this.campaign(scope)
         attempt = campaign.attempts.find((item) => item.id === attemptId)!
+        if (attempt.cliPreparationAuthority?.dispatchState === 'sending') {
+          this.mutate(
+            scope,
+            `acknowledge-cli-observed:${attemptId}:${held.observer.generation}`,
+            {
+              kind: 'acknowledgeCliPreparationDispatch',
+              attemptId,
+              instanceId: held.observer.instanceId,
+              generation: held.observer.generation,
+              expectedEpoch: held.epoch,
+            },
+            campaign.version,
+          )
+          campaign = this.campaign(scope)
+          attempt = campaign.attempts.find((item) => item.id === attemptId)!
+        }
         if (attempt.cancelRequestedAt !== null && job.status !== 'cancelled')
           await route.authority.cancel(attemptId)
         if (job.status === 'completed') {
@@ -382,6 +579,9 @@ export class CliPreparationController {
             byteLength: bytes.byteLength,
             verifiedAt: Date.now(),
           }
+          held = (await this.acquireObserver(scope, attemptId, 'observe')) ?? undefined
+          if (!held) return
+          const terminalObserver = held.observer
           // Receipt retrieval and persistence may take long enough for a local
           // cancellation or approval revocation to commit. Re-read and classify
           // the result in the same SQLite transaction as the terminal command.
@@ -404,6 +604,7 @@ export class CliPreparationController {
                     uri,
                     contentHash: sha256(bytes),
                     validation,
+                    observer: terminalObserver,
                   }
                 : {
                     kind: 'finishCliPreparation',
@@ -412,6 +613,7 @@ export class CliPreparationController {
                     artifactKind: 'cli_preparation_candidate',
                     contentHash: sha256(bytes),
                     validation,
+                    observer: terminalObserver,
                   },
               current.version,
               false,
@@ -425,6 +627,7 @@ export class CliPreparationController {
             kind: 'interruptSynthetic',
             attemptId,
             reason: '远端执行者已确认准备进程停止',
+            observer: held.observer,
           })
           return
         }
@@ -433,6 +636,7 @@ export class CliPreparationController {
             kind: 'interruptSynthetic',
             attemptId,
             reason: '远端准备进程已中断，费用仍待核对',
+            observer: held.observer,
           })
           return
         }
@@ -441,6 +645,7 @@ export class CliPreparationController {
             kind: 'failSynthetic',
             attemptId,
             error: '远端代码准备未完成，费用仍待核对',
+            observer: held.observer,
           })
           return
         }
@@ -448,14 +653,18 @@ export class CliPreparationController {
       } while (Date.now() < deadline)
       throw new Error('Observation time limit reached')
     } catch {
-      const campaign = this.campaign(scope)
-      const attempt = campaign.attempts.find((item) => item.id === attemptId)
-      if (attempt?.status === 'running')
-        this.mutate(scope, `unknown-cli:${attemptId}:${campaign.version}`, {
-          kind: 'markSyntheticUnknown',
-          attemptId,
-          reason: '准备状态待核对；保留原运行与费用预留，不自动重投',
-        })
+      if (held)
+        try {
+          this.markObservationUnknown(
+            scope,
+            attemptId,
+            held.epoch,
+            held.observer,
+            '准备状态待核对；保留原运行与费用预留，不自动重投',
+          )
+        } catch {
+          // A newer observer owns the result. It will continue from durable state.
+        }
     } finally {
       this.observing.delete(attemptId)
     }
