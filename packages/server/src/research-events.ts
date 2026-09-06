@@ -6,7 +6,7 @@ import type { ResearchNotificationCoordinator } from './research-notifications.t
 export function publishResearchEvents(
   store: Store,
   bus: EventBus,
-  notifications?: ResearchNotificationCoordinator,
+  notifications?: Pick<ResearchNotificationCoordinator, 'publish'>,
 ): number {
   return deliverResearchOutbox(store, (event) => {
     bus.publish(

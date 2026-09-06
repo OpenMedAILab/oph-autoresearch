@@ -13,6 +13,7 @@ import {
   state,
   workspace,
 } from '../lib/store/index.ts'
+import { ResearchExperimentResult } from './ResearchExperimentResult.tsx'
 import { ResearchPatternPanel } from './ResearchPatternPanel.tsx'
 
 const stageLabels = {
@@ -52,6 +53,54 @@ const templates: Array<{ id: ResearchTemplateId; label: string }> = [
   { id: 'synthetic-retinal-image-v1', label: '合成眼底图像实验' },
   { id: 'supervised-phantom-v2', label: '真实训练：合成图像双模型比较' },
 ]
+const taskStatuses = {
+  pending: '待执行',
+  verified: '已核验',
+  failed: '失败',
+  interrupted: '中断',
+  stale: '来源已更新',
+}
+const reviewStatuses = {
+  reserved: '已预留',
+  running: '审阅中',
+  done: '已完成',
+  failed: '失败',
+  unknown: '状态待核对',
+}
+const approvalKinds = {
+  execution: '实验执行审批',
+  protocol: '研究方案审批',
+  model_review: '独立复核审批',
+  release: '结论发布审批',
+}
+const templateName = (id: string) =>
+  templates.find((template) => template.id === id)?.label ?? '研究任务'
+function runName(campaign: ResearchCampaign, id: string | undefined) {
+  const index = campaign.attempts.findIndex((attempt) => attempt.id === id)
+  return index < 0 ? '人工登记' : `第 ${index + 1} 次运行`
+}
+function approvalConsumer(campaign: ResearchCampaign, id: string) {
+  const run = campaign.attempts.findIndex((item) => item.id === id)
+  if (run >= 0) return `第 ${run + 1} 次运行`
+  const review = campaign.modelReviews?.findIndex((item) => item.id === id) ?? -1
+  return review >= 0 ? `第 ${review + 1} 次独立复核` : '对应任务'
+}
+function readableReview(text: string) {
+  try {
+    const result = JSON.parse(text) as {
+      decision?: string
+      claims?: Array<{ claim: string }>
+      limitations?: string[]
+    }
+    return [
+      result.decision === 'supported' ? '当前主张有证据支持' : '当前证据不足',
+      ...(result.claims ?? []).map((item) => item.claim),
+      ...(result.limitations ?? []).map((item) => `局限：${item}`),
+    ].join('\n\n')
+  } catch {
+    return '审阅结果尚未形成可核验的结构化结论。'
+  }
+}
 const statusLabels = {
   proposal: '未批准提案',
   active: '进行中',
@@ -73,6 +122,15 @@ const backendLabels = {
   'builtin-local': '内置本地',
   'localhost-daemon': '本机守护进程',
   'ssh-daemon': 'SSH 远端守护进程',
+}
+
+function campaignProgress(campaign: ResearchCampaign) {
+  if (campaign.status === 'completed') return '研究输出已发布'
+  if (campaign.attempts.some((attempt) => attempt.status === 'running')) return '实验执行中'
+  if (campaign.attempts.some((attempt) => attempt.status === 'unknown')) return '实验状态待核对'
+  if (campaign.attempts.some((attempt) => attempt.status === 'completed'))
+    return '实验结果已核验 · 待独立复核'
+  return `${stageLabels[campaign.stage]} · ${statusLabels[campaign.status]}`
 }
 
 export function ResearchCampaignPanel() {
@@ -284,7 +342,17 @@ export function ResearchCampaignPanel() {
         }
         const proof = await requestHumanApproval(
           approvalUrl,
-          { workspaceId: current.workspaceId, campaignId: current.id, action: 'approve', body },
+          {
+            workspaceId: current.workspaceId,
+            campaignId: current.id,
+            action: 'approve',
+            body,
+            display: {
+              title: current.goal,
+              task: templateName(templateId),
+              revision: task.revision,
+            },
+          },
           popup,
         )
         const approved = await client.api<{ campaign: ResearchCampaign }>(
@@ -486,8 +554,7 @@ export function ResearchCampaignPanel() {
             <article>
               <h4>{campaign.goal}</h4>
               <p>
-                {stageLabels[campaign.stage]} · {statusLabels[campaign.status]} · 版本{' '}
-                {campaign.version}
+                {campaignProgress(campaign)} · 账本版本 {campaign.version}
               </p>
               <fieldset>
                 <legend>可复现实验（仅合成数据）</legend>
@@ -553,12 +620,12 @@ export function ResearchCampaignPanel() {
                 <For each={campaign.taskRevisions ?? []}>
                   {(task) => (
                     <p>
-                      任务 {task.taskId ?? task.id} · 修订 {task.revision} ·{' '}
+                      {templateName(task.templateId)} · 修订 {task.revision} ·{' '}
                       {task.stageId
                         ? `${executionLabels[task.stageId]} → ${stageLabels[executionStageMap[task.stageId]]}`
                         : '未声明执行阶段'}{' '}
-                      · {task.templateId} · 输入 {task.inputHash} · {task.status} · 依赖产物{' '}
-                      {task.artifactVersionIds?.join('、') || '无'}
+                      · {taskStatuses[task.status]} · 依赖产物{' '}
+                      {task.artifactVersionIds?.length ?? 0} 项
                     </p>
                   )}
                 </For>
@@ -566,21 +633,29 @@ export function ResearchCampaignPanel() {
               <section aria-label="尝试谱系">
                 <h5>尝试</h5>
                 <For each={campaign.attempts ?? []}>
-                  {(attempt) => (
+                  {(attempt, index) => (
                     <div>
                       <p>
-                        尝试 {attempt.id} · 任务 {attempt.taskRevisionId} · 分派{' '}
-                        {attempt.dispatchKey} ·{' '}
+                        第 {index() + 1} 次运行 ·{' '}
+                        {templateName(
+                          campaign.taskRevisions.find((task) => task.id === attempt.taskRevisionId)
+                            ?.templateId ?? '',
+                        )}{' '}
+                        ·{' '}
                         {attempt.cancelRequestedAt && attempt.status === 'running'
                           ? '取消请求中，等待执行者确认'
                           : attemptLabels[attempt.status]}{' '}
                         · {attempt.backend ? backendLabels[attempt.backend] : '本地执行后端未声明'}
                       </p>
-                      <Show when={attempt.jobSpecHash}>
-                        <p>固定作业规范 {attempt.jobSpecHash}</p>
-                      </Show>
                       <Show when={attempt.error}>
                         <p role="alert">{attempt.error}</p>
+                      </Show>
+                      <Show when={attempt.status === 'completed' && attempt.jobSpec?.version === 2}>
+                        <ResearchExperimentResult
+                          campaignId={campaign.id}
+                          workspaceId={campaign.workspaceId}
+                          attemptId={attempt.id}
+                        />
                       </Show>
                       <Show when={attempt.status === 'running' && !attempt.cancelRequestedAt}>
                         <button type="button" onClick={() => void cancel(campaign, attempt.id)}>
@@ -601,12 +676,17 @@ export function ResearchCampaignPanel() {
                 <For each={campaign.artifactVersions}>
                   {(artifact) => (
                     <p>
-                      版本 {artifact.id} · schema {artifact.schemaId ?? artifact.kind} · 数据类别{' '}
-                      {artifact.dataClass ?? '未声明'} ·{' '}
+                      {templateName(artifact.schemaId ?? '')}结果 · 版本 {artifact.version} ·{' '}
+                      {artifact.dataClass === 'synthetic'
+                        ? '合成数据'
+                        : artifact.dataClass === 'public'
+                          ? '公开数据'
+                          : '研究数据'}{' '}
+                      ·{' '}
                       {artifact.validation
-                        ? `已核验 ${artifact.validation.contentHash}（${artifact.validation.byteLength} 字节）`
+                        ? `已核验（${(artifact.validation.byteLength / 1024).toFixed(1)} KB）`
                         : '未提供核验元数据'}{' '}
-                      · 来源尝试 {artifact.producerAttemptId ?? '手动登记'}
+                      · 来源：{runName(campaign, artifact.producerAttemptId)}
                     </p>
                   )}
                 </For>
@@ -616,14 +696,23 @@ export function ResearchCampaignPanel() {
                 <For each={campaign.approvals}>
                   {(approval) => (
                     <p>
-                      审批 {approval.id} · {approval.status} · 范围{' '}
-                      {approval.scope?.kind ?? '未声明'} · 到期{' '}
+                      {approvalKinds[approval.scope?.kind ?? 'protocol']} ·{' '}
+                      {approval.consumedBy
+                        ? '已用于批准的任务，不再授权新运行'
+                        : approval.status === 'active'
+                          ? '待使用'
+                          : approval.status === 'revoked'
+                            ? '已撤销'
+                            : '来源已更新'}{' '}
+                      · 到期{' '}
                       {approval.scope?.expiresAt
                         ? new Date(approval.scope.expiresAt).toLocaleString()
                         : '未声明'}{' '}
-                      · 已消费 {approval.consumedBy ?? '否'} · 已失效{' '}
-                      {approval.invalidatedAt ? '是' : '否'} · 产物{' '}
-                      {approval.scope?.artifactVersionIds.join('、') || '无'}
+                      ·{' '}
+                      {approval.consumedBy
+                        ? `已用于${approvalConsumer(campaign, approval.consumedBy)}`
+                        : `当前可用：${approval.status === 'active' && (approval.scope?.expiresAt ?? 0) > Date.now() ? '是' : '否'}`}{' '}
+                      · 关联产物 {approval.scope?.artifactVersionIds.length ?? 0} 项
                     </p>
                   )}
                 </For>
@@ -665,12 +754,12 @@ export function ResearchCampaignPanel() {
                   )}
                 </Show>
                 <For each={campaign.modelReviews ?? []}>
-                  {(review) => (
+                  {(review, index) => (
                     <details>
                       <summary>
-                        审阅 {review.id} ·{' '}
-                        {review.executionBackend === 'builtin-cli' ? '内置 CLI' : '内置 Session'} ·{' '}
-                        {review.status} ·{' '}
+                        第 {index() + 1} 次独立复核 ·{' '}
+                        {review.executionBackend === 'builtin-cli' ? 'CLI 模型' : 'API 模型'} ·{' '}
+                        {reviewStatuses[review.status]} ·{' '}
                         {review.sourceValidity === 'stale'
                           ? '证据已失效，仅供历史查看'
                           : '当前证据'}{' '}
@@ -679,23 +768,21 @@ export function ResearchCampaignPanel() {
                           ? '未知'
                           : `${review.actualCost} ${review.currency}`}
                       </summary>
-                      <p>证据产物 {review.artifactVersionIds.join('、')}</p>
+                      <p>关联 {review.artifactVersionIds.length} 项证据产物</p>
                       <Show when={review.text}>
-                        <pre>{review.text}</pre>
+                        <pre>{readableReview(review.text!)}</pre>
                       </Show>
                     </details>
                   )}
                 </For>
               </section>
-              <section aria-label="LabelSet 引用">
-                <h5>LabelSet 聚合引用</h5>
+              <section aria-label="标注数据引用">
+                <h5>标注数据汇总</h5>
                 <For each={campaign.labelSets ?? []}>
                   {(labelSet) => (
                     <p>
-                      引用 {labelSet.id} · 版本 {labelSet.version} · 数据快照{' '}
-                      {labelSet.datasetSnapshotHash} · 标注模式 {labelSet.annotationSchemaHash} ·
-                      受试对象 {labelSet.aggregate.subjects} · 观测{' '}
-                      {labelSet.aggregate.observations} · 类别{' '}
+                      标注数据 · 版本 {labelSet.version} · 受试对象 {labelSet.aggregate.subjects} ·
+                      观测 {labelSet.aggregate.observations} · 类别{' '}
                       {Object.entries(labelSet.aggregate.classes)
                         .map(([name, count]) => `${name}: ${count}`)
                         .join('、')}

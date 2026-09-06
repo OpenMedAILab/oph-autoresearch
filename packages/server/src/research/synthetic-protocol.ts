@@ -12,6 +12,16 @@ import {
 } from './synthetic-runner.ts'
 import { fixedResearchTemplate } from './template-registry.ts'
 
+export interface ExperimentSummary {
+  trainingSamples: number
+  testSamples: number
+  models: Array<{
+    id: string
+    metrics: { accuracy: number; logLoss: number }
+    trainingLoss: { first: number; last: number } | null
+  }>
+}
+
 /** Local controlled protocol. Ledger observations never trigger an implicit resubmission. */
 export interface SyntheticProtocol {
   submit(
@@ -37,6 +47,7 @@ export interface SyntheticProtocol {
     consumedArtifactVersionIds: string[]
     reviewKind: string
     humanApproval: boolean
+    experiment?: ExperimentSummary
     inputHash: string
     contentHash: string
     byteLength: number
@@ -132,6 +143,26 @@ export function syntheticProtocol(
         consumedArtifactVersionIds: task.artifactVersionIds ?? [],
         reviewKind: plan.reviewKind,
         humanApproval: false,
+        ...(task.templateId === 'supervised-phantom-v2'
+          ? {
+              experiment: (() => {
+                const result = JSON.parse(Buffer.from(bytes).toString('utf8')) as {
+                  trainIds: string[]
+                  testIds: string[]
+                  models: ExperimentSummary['models']
+                }
+                return {
+                  trainingSamples: result.trainIds.length,
+                  testSamples: result.testIds.length,
+                  models: result.models.map((model) => ({
+                    id: model.id,
+                    metrics: { accuracy: model.metrics.accuracy, logLoss: model.metrics.logLoss },
+                    trainingLoss: model.trainingLoss,
+                  })),
+                }
+              })(),
+            }
+          : {}),
         ...(tracking ? { tracking } : {}),
         ...validation,
       }

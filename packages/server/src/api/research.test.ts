@@ -133,6 +133,7 @@ describe('research HTTP boundary', () => {
     const response = await call(`/${result.campaign.id}/notifications`, undefined, {
       ...deps,
       researchNotifications: {
+        publish: () => {},
         list: (campaignId: string) =>
           campaignId === result.campaign.id
             ? [

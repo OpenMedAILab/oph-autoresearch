@@ -390,7 +390,7 @@ export function ResearchStageDetail() {
       <div class="execution-checkpoint research-stage-checkpoint">
         <IconShield size={15} />
         <span>
-          <strong>科研审批渠道未配置</strong>
+          <strong>聊天检查点与科研审批</strong>
           当前工作流检查点由主会话模型审查，不构成人类批准。研究实验请通过提案账本的独立审批渠道提交，结论发布仍需核验对应证据。
         </span>
       </div>

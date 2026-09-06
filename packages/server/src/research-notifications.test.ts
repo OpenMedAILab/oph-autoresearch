@@ -321,7 +321,24 @@ describe('durable research notifications', () => {
       },
       campaign: {
         ...event().campaign,
-        modelReviews: [{ id: 'review-1', artifactVersionIds: [] }],
+        modelReviews: [
+          {
+            id: 'review-1',
+            artifactVersionIds: [],
+            dispatchKey: 'review-dispatch',
+            approvalId: 'approval-1',
+            evidencePackHash: 'sha256:' + 'a'.repeat(64),
+            configHash: 'sha256:' + 'b'.repeat(64),
+            maxRequests: 1,
+            maxOutputTokens: 100,
+            requestCount: 1,
+            ownerPid: process.pid,
+            reservedCost: 0,
+            actualCost: null,
+            currency: 'USD',
+            status: 'done',
+          },
+        ],
       },
     } as ResearchEvent
     const failed = {

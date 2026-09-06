@@ -24,7 +24,7 @@ import type { RunManager } from '../runs.ts'
 
 export interface ApiDeps {
   researchApprovalUrl?: string
-  researchNotifications?: Pick<ResearchNotificationCoordinator, 'list'>
+  researchNotifications?: Pick<ResearchNotificationCoordinator, 'list' | 'publish'>
   researchExecutionDevices?: readonly ResearchDevice[]
   researchLiteratureCollector?: ReturnType<typeof createLiteratureCollector>
   researchDaemonBackend?: ResearchDaemonBackend

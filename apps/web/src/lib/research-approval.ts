@@ -1,7 +1,13 @@
 /** The application receives a bound signature, never the independent signer's session or key. */
 export async function requestHumanApproval(
   approvalUrl: string,
-  request: { workspaceId: string; campaignId: string; action: 'approve' | 'revoke'; body: unknown },
+  request: {
+    workspaceId: string
+    campaignId: string
+    action: 'approve' | 'revoke'
+    body: unknown
+    display?: { title: string; task: string; revision: number }
+  },
   popup: Window,
 ): Promise<string> {
   const target = new URL(approvalUrl)
