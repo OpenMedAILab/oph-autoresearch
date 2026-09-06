@@ -1,4 +1,9 @@
-import { type ChatRequest, type LlmAdapter, ProviderError } from '@oph-autoresearch/ai'
+import {
+  type ChatRequest,
+  type LlmAdapter,
+  ProviderError,
+  type ProviderUsage,
+} from '@oph-autoresearch/ai'
 
 const MAX_INPUT_CHARACTERS = 1_000_000
 const MAX_OUTPUT_TOKENS = 1_000_000
@@ -27,7 +32,11 @@ export function makeResearchRequestGuard(options: {
   maxRequests: number
   maxOutputTokens: number
   maxInputCharacters: number
-  beforeSend?: () => void
+  beforeSend?: (requestId: string) => void
+  onSettled?: (
+    requestId: string,
+    result: { usage: ProviderUsage | null; completed: boolean },
+  ) => void
 }): ResearchRequestGuard {
   if (!Number.isSafeInteger(options.maxRequests) || options.maxRequests < 1)
     throw new Error('maxRequests must be a positive integer')
@@ -69,10 +78,19 @@ export function makeResearchRequestGuard(options: {
           if (output < 1)
             throw invalid(adapter, 'Research request requires a positive output bound')
           reserved++
-          options.beforeSend?.()
-          return forward(
-            adapter.stream({ ...request, maxOutputTokens: output, hardOutputLimit: true }),
-          )
+          const requestId = crypto.randomUUID()
+          options.beforeSend?.(requestId)
+          const settle = (result: { usage: ProviderUsage | null; completed: boolean }) =>
+            options.onSettled?.(requestId, result)
+          try {
+            return forward(
+              adapter.stream({ ...request, maxOutputTokens: output, hardOutputLimit: true }),
+              settle,
+            )
+          } catch (error) {
+            settle({ usage: null, completed: false })
+            throw error
+          }
         },
       }
     },
@@ -80,6 +98,19 @@ export function makeResearchRequestGuard(options: {
 }
 async function* forward(
   stream: AsyncGenerator<unknown, void, unknown>,
+  settle?: (result: { usage: ProviderUsage | null; completed: boolean }) => void,
 ): AsyncGenerator<never, void, unknown> {
-  for await (const event of stream) yield event as never
+  let usage: ProviderUsage | null = null
+  let completed = false
+  try {
+    for await (const event of stream) {
+      if (event && typeof event === 'object' && 'type' in event) {
+        if (event.type === 'usage' && 'usage' in event) usage = event.usage as ProviderUsage
+        if (event.type === 'done') completed = true
+      }
+      yield event as never
+    }
+  } finally {
+    settle?.({ usage, completed })
+  }
 }

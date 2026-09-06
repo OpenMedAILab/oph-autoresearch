@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { SummaryTrace } from '@oph-autoresearch/agent'
 import type { ProviderProfile, ProviderUsage } from '@oph-autoresearch/ai'
 import { createConversation, Store, upsertWorkspace, usageEntries } from '@oph-autoresearch/store'
+import { makeResearchRequestGuard } from './research-request-guard.ts'
 import { makeSummarizer } from './session.ts'
 
 type Reply = () => Response
@@ -289,4 +290,34 @@ describe('summary trace settlement', () => {
       store.close()
     }
   })
+})
+
+test('real summarizer calls consume the same bounded research request guard', async () => {
+  const { store, workspace, conversation, profile } = fresh()
+  try {
+    const before = providerCalls
+    replies.push(finished)
+    let reservations = 0
+    const guard = makeResearchRequestGuard({
+      maxRequests: 1,
+      maxOutputTokens: 1024,
+      maxInputCharacters: 10000,
+      beforeSend: () => {
+        reservations++
+      },
+    })
+    const summary = makeSummarizer({
+      store,
+      workspaceId: workspace.id,
+      conversationId: conversation.id,
+      profile: () => profile,
+      researchRequestGuard: guard,
+    })
+    await expect(summary('bounded summary', 32)).resolves.toBe('摘要')
+    await summary('must not send twice', 32).catch(() => null)
+    expect(providerCalls - before).toBe(1)
+    expect(reservations).toBe(1)
+  } finally {
+    store.close()
+  }
 })

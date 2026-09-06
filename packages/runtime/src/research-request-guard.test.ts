@@ -129,3 +129,20 @@ describe('research request guard', () => {
     ).toThrow('output bound')
   })
 })
+
+test('request settlement preserves its persisted request key and missing usage remains unknown', async () => {
+  let reserved = ''
+  const settled: Array<{ id: string; usage: unknown; completed: boolean }> = []
+  const guard = makeResearchRequestGuard({
+    maxRequests: 1,
+    maxOutputTokens: 12,
+    maxInputCharacters: 500,
+    beforeSend: (id) => {
+      reserved = id
+    },
+    onSettled: (id, result) => settled.push({ id, ...result }),
+  })
+  await Array.fromAsync(guard.wrap(fake([])).stream(request()))
+  expect(reserved).not.toBe('')
+  expect(settled).toEqual([{ id: reserved, usage: null, completed: true }])
+})

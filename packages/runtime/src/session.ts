@@ -583,6 +583,9 @@ export class Session {
               typeof target === 'string' ? this.opts.config.active.provider : target.provider,
             effort: () => resolveModel(this.opts.config, target)?.effort,
             signal: this.opts.signal,
+            ...(this.opts.researchRequestGuard
+              ? { researchRequestGuard: this.opts.researchRequestGuard }
+              : {}),
           }),
           preserveAssistantReasoning,
         })
@@ -1139,6 +1142,7 @@ export class Session {
 }
 
 export interface SummarizerOptions {
+  researchRequestGuard?: ResearchRequestGuard
   providerName?: () => string
   store: Store
   workspaceId: string
@@ -1179,7 +1183,10 @@ export function makeSummarizer(opts: SummarizerOptions): Summarizer {
   return async (prompt, budgetTokens, trace) => {
     opts.signal?.throwIfAborted()
     const profile = opts.profile()
-    const adapter = buildAdapter(profile)
+    const rawAdapter = buildAdapter(profile)
+    const adapter = opts.researchRequestGuard
+      ? opts.researchRequestGuard.wrap(rawAdapter)
+      : rawAdapter
     const selectedEffort = opts.effort?.()
     const effort =
       selectedEffort && adapter.spec.effortLevels.includes(selectedEffort)
