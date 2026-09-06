@@ -794,7 +794,7 @@ export function scientificContextHash(campaign: ResearchCampaign, version: 1 | 2
   )
 }
 
-function withDerivedTaskStatuses(campaign: ResearchCampaign): ResearchCampaign {
+export function withDerivedTaskStatuses(campaign: ResearchCampaign): ResearchCampaign {
   const cliPreparationAttemptIds = new Set(
     (campaign.cliPreparations ?? [])
       .map((preparation) => preparation.attemptId)

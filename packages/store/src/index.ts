@@ -90,6 +90,7 @@ export {
   researchCostSummary,
   reviewSourceContextHash,
   scientificContextHash,
+  withDerivedTaskStatuses,
 } from './research.ts'
 export { deliverResearchOutbox } from './research-outbox.ts'
 // 中间资源：runtime 的 sink 落盘与回读
