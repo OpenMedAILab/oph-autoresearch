@@ -568,15 +568,13 @@ function subjectExecutionIsTerminal(
   }
   if (subject.kind === 'formal_review') {
     const dispatch = (campaign.formalReviewDispatches ?? []).find((item) => item.id === subject.id)
-    return Boolean(dispatch && ['done', 'failed', 'unknown'].includes(dispatch.status))
+    return Boolean(dispatch && ['done', 'failed'].includes(dispatch.status))
   }
   if (subject.kind === 'formal_execution') {
     const dispatch = (campaign.formalExecutionDispatches ?? []).find(
       (item) => item.id === subject.id,
     )
-    return Boolean(
-      dispatch && ['completed', 'failed', 'unknown', 'cancelled'].includes(dispatch.status),
-    )
+    return Boolean(dispatch && ['completed', 'failed', 'cancelled'].includes(dispatch.status))
   }
   const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
   return Boolean(
@@ -2428,6 +2426,49 @@ function nextCampaign(
         formalExecutionDispatches: campaign.formalExecutionDispatches!.map((item) =>
           item.id === dispatch.id
             ? { ...item, status: 'completed', receiptHash: command.receiptHash }
+            : item,
+        ),
+      }
+      break
+    }
+    case 'closeFormalExecution': {
+      const attempt = attemptById(campaign, command.attemptId)
+      const dispatch = (campaign.formalExecutionDispatches ?? []).find(
+        (item) => item.attemptId === attempt?.id,
+      )
+      if (
+        !attempt ||
+        !dispatch ||
+        !currentFormalObserver(attempt, command.observer, now) ||
+        !['failed', 'cancelled', 'interrupted'].includes(command.status) ||
+        textError(command.error, 'error')
+      )
+        return invalid(
+          'invalid_formal_execution_close',
+          'Formal execution terminal result is not admissible',
+        )
+      const status = attempt.cancelRequestedAt !== null ? 'cancelled' : command.status
+      next = {
+        ...campaign,
+        attempts: campaign.attempts.map((item) =>
+          item.id === attempt.id
+            ? {
+                ...item,
+                status,
+                endedAt: now,
+                error: command.error.trim(),
+                ...(command.lateCompleted
+                  ? {
+                      executionOutcome: 'completed' as const,
+                      resultDisposition: 'quarantined' as const,
+                    }
+                  : {}),
+              }
+            : item,
+        ),
+        formalExecutionDispatches: campaign.formalExecutionDispatches!.map((item) =>
+          item.id === dispatch.id
+            ? { ...item, status: status === 'cancelled' ? 'cancelled' : 'failed' }
             : item,
         ),
       }

@@ -1,3 +1,6 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type {
   FormalExecutionAuthorityBinding,
   FormalExecutionJobSpec,
@@ -15,6 +18,7 @@ const IDEMPOTENCY = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,255}$/
 const EPOCH = /^[A-Za-z0-9_-]{16,128}$/
 const ABSOLUTE_REMOTE_ROOT = /^\/(?:[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*)?$/
 const OBSERVER_LEASE_MS = 30_000
+const DEFAULT_POLL_INTERVAL_MS = 500
 
 export interface FormalExecutionScope {
   workspaceId: string
@@ -92,6 +96,7 @@ export class FormalExecutionController {
       scope: FormalExecutionScope,
     ) => Promise<FormalExecutionTrustedScope>,
     instanceId = `formal-observer-${crypto.randomUUID()}`,
+    private readonly pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   ) {
     if (
       !ID.test(instanceId) ||
@@ -113,6 +118,8 @@ export class FormalExecutionController {
       )
     )
       throw new Error('Invalid admitted formal execution route')
+    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 1 || pollIntervalMs > 1_000)
+      throw new Error('Invalid formal execution poll interval')
     this.instanceId = instanceId
   }
   close() {
@@ -187,7 +194,7 @@ export class FormalExecutionController {
         !existing.attemptId
       )
         throw new FormalExecutionControlError('原正式执行绑定不可重放；不会改投或重建规格')
-      void this.observe(scope, existing.attemptId, route)
+      this.startObservation(scope, existing.attemptId, route)
       return { campaign: before, attemptId: existing.attemptId, replayed: true }
     }
     const identity = await route.authority.identity()
@@ -280,7 +287,7 @@ export class FormalExecutionController {
       }
     })
     this.changed()
-    void this.observe(scope, attemptId, route)
+    this.startObservation(scope, attemptId, route)
     return { campaign, attemptId, replayed: false }
   }
   async reconcile(scope: FormalExecutionScope, attemptId: string) {
@@ -292,7 +299,7 @@ export class FormalExecutionController {
     const route = this.routes.find((item) => item.id === binding.routeId)
     if (!route || !this.routeMatches(route, binding, await this.resolveScope(scope)))
       throw new FormalExecutionControlError('原正式执行路线不再准入；不会改投')
-    void this.observe(scope, attemptId, route)
+    this.startObservation(scope, attemptId, route)
     return { campaign, attemptId }
   }
   recover(scope: FormalExecutionScope) {
@@ -311,8 +318,22 @@ export class FormalExecutionController {
     if (!attempt?.formalExecutionAuthority)
       throw new FormalExecutionControlError('正式执行不存在', 404)
     if (!['running', 'unknown'].includes(attempt.status)) return { campaign }
-    this.mutate(scope, `cancel-formal:${attemptId}`, { kind: 'requestCancelSynthetic', attemptId })
-    return this.reconcile(scope, attemptId)
+    const changed = this.mutate(scope, `cancel-formal:${attemptId}`, {
+      kind: 'requestCancelSynthetic',
+      attemptId,
+    }).campaign
+    const binding = changed.attempts.find((item) => item.id === attemptId)?.formalExecutionAuthority
+    const route = binding && this.routes.find((item) => item.id === binding.routeId)
+    if (!binding || !route || !this.routeMatches(route, binding, await this.resolveScope(scope)))
+      throw new FormalExecutionControlError('原正式执行路线不再准入；不会改投')
+    const identity = await route.authority.identity()
+    if (identity.schema !== 'research-authority-identity-v1' || identity.epoch !== binding.epoch)
+      throw new FormalExecutionControlError('authority epoch 已变化；取消结果待保守观察')
+    // This is a real authority cancellation.  A transport failure deliberately leaves the
+    // durable attempt running/unknown for query-only recovery; it never causes a resubmit.
+    await route.authority.cancel(attemptId, binding.epoch)
+    this.startObservation(scope, attemptId, route)
+    return { campaign: this.campaign(scope), attemptId }
   }
   private async acquire(scope: FormalExecutionScope, attemptId: string, first: boolean) {
     const campaign = this.campaign(scope)
@@ -358,6 +379,86 @@ export class FormalExecutionController {
       expectedEpoch,
     })
   }
+  private startObservation(
+    scope: FormalExecutionScope,
+    attemptId: string,
+    route: FormalExecutionRoute,
+  ) {
+    void this.observe(scope, attemptId, route).catch((error) => {
+      // A failed observation must remain recoverable through the frozen attempt; never leave
+      // an unhandled promise or turn an uncertain transport result into a new submission.
+      console.error(`formal execution observation ${attemptId} failed`, error)
+    })
+  }
+  private async fresh(
+    scope: FormalExecutionScope,
+    attemptId: string,
+    route: FormalExecutionRoute,
+    held: {
+      epoch: string
+      observer: { instanceId: string; generation: number; expiresAt: number }
+    },
+    allowCancelling = false,
+  ) {
+    const campaign = this.campaign(scope)
+    const attempt = campaign.attempts.find((item) => item.id === attemptId)
+    const binding = attempt?.formalExecutionAuthority
+    if (
+      !attempt ||
+      !binding ||
+      !attempt.formalExecutionJobSpec ||
+      binding.epoch !== held.epoch ||
+      binding.observer?.instanceId !== held.observer.instanceId ||
+      binding.observer.generation !== held.observer.generation ||
+      binding.observer.expiresAt <= Date.now() ||
+      (!allowCancelling && attempt.cancelRequestedAt !== null) ||
+      !['running', 'unknown'].includes(attempt.status) ||
+      !this.routeMatches(route, binding, await this.resolveScope(scope))
+    )
+      return null
+    return { campaign, attempt, binding, spec: attempt.formalExecutionJobSpec }
+  }
+  private async receiptFile(
+    scope: FormalExecutionScope,
+    attemptId: string,
+    receipt: Uint8Array,
+  ): Promise<{ uri: string; hash: string }> {
+    const root = resolve(scope.workspaceRoot)
+    const directory = resolve(root, '.oph', 'research', scope.campaignId, attemptId)
+    if (!directory.startsWith(root.endsWith('/') ? root : `${root}/`))
+      throw new FormalExecutionControlError('回执目录无效')
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const file = join(directory, 'formal-receipt.json')
+    const hash = sha256(receipt)
+    try {
+      await writeFile(file, receipt, { flag: 'wx', mode: 0o600 })
+    } catch (error: unknown) {
+      if (!(error && typeof error === 'object' && (error as { code?: string }).code === 'EEXIST'))
+        throw error
+      // A retry may reuse only the exact immutable receipt; a different byte sequence is
+      // quarantined by refusing to overwrite it.
+      if (sha256(await readFile(file)) !== hash)
+        throw new FormalExecutionControlError('已有回执与 authority 回执哈希不一致')
+    }
+    return { uri: pathToFileURL(file).toString(), hash }
+  }
+  private async markUnknown(
+    scope: FormalExecutionScope,
+    attemptId: string,
+    held: { epoch: string; observer: { instanceId: string; generation: number } },
+  ) {
+    try {
+      this.mutate(scope, `unknown-formal:${attemptId}:${held.observer.generation}`, {
+        kind: 'markFormalExecutionObservationUnknown',
+        attemptId,
+        instanceId: held.observer.instanceId,
+        generation: held.observer.generation,
+        expectedEpoch: held.epoch,
+      })
+    } catch {
+      // A newer observer or terminal event owns the state.  It is safer to do nothing.
+    }
+  }
   private async observe(
     scope: FormalExecutionScope,
     attemptId: string,
@@ -366,69 +467,116 @@ export class FormalExecutionController {
     if (this.closed || this.observing.has(attemptId)) return
     this.observing.add(attemptId)
     try {
-      const attempt = this.campaign(scope).attempts.find((item) => item.id === attemptId)
-      const binding = attempt?.formalExecutionAuthority
-      if (
-        !attempt ||
-        !binding ||
-        !attempt.formalExecutionJobSpec ||
-        !['running', 'unknown'].includes(attempt.status)
-      )
-        return
-      if (!this.routeMatches(route, binding, await this.resolveScope(scope))) return
-      const first = binding.dispatchState === 'not_sent'
-      const held = await this.acquire(scope, attemptId, first)
-      if (!held) return
-      const identity = await route.authority.identity()
-      if (identity.epoch !== held.epoch) {
-        this.mutate(scope, `unknown-formal:${attemptId}:${held.observer.generation}`, {
-          kind: 'markFormalExecutionObservationUnknown',
-          attemptId,
-          instanceId: held.observer.instanceId,
-          generation: held.observer.generation,
-          expectedEpoch: held.epoch,
-        })
-        return
-      }
-      if (first) {
-        await this.stageCandidate(route, held.spec.formalPlan, this.campaign(scope), held.epoch)
+      let deadline = Date.now() + 30_000
+      while (!this.closed && Date.now() < deadline) {
+        const initial = this.campaign(scope).attempts.find((item) => item.id === attemptId)
+        const binding = initial?.formalExecutionAuthority
+        if (
+          !initial ||
+          !binding ||
+          !initial.formalExecutionJobSpec ||
+          !['running', 'unknown'].includes(initial.status)
+        )
+          return
+        deadline = Math.max(
+          deadline,
+          initial.executionStartedAt +
+            initial.formalExecutionJobSpec.formalPlan.resources.maxRuntimeMs +
+            30_000,
+        )
+        if (!this.routeMatches(route, binding, await this.resolveScope(scope))) return
+        const first = binding.dispatchState === 'not_sent'
+        const held = await this.acquire(scope, attemptId, first)
+        if (!held) return
         try {
-          await route.authority.submit(held.spec, held.epoch)
+          const identity = await route.authority.identity()
+          if (
+            identity.schema !== 'research-authority-identity-v1' ||
+            identity.epoch !== held.epoch
+          ) {
+            await this.markUnknown(scope, attemptId, held)
+            return
+          }
+          if (first) {
+            const beforeStage = await this.fresh(scope, attemptId, route, held)
+            if (!beforeStage) return
+            await this.stageCandidate(route, held.spec.formalPlan, beforeStage.campaign, held.epoch)
+            if (!(await this.fresh(scope, attemptId, route, held))) return
+            try {
+              await route.authority.submit(held.spec, held.epoch)
+            } catch {
+              // Lost response is deliberately resolved by query below with this same dispatch key.
+            }
+            if (!(await this.fresh(scope, attemptId, route, held))) return
+            this.mutate(scope, `ack-formal:${attemptId}:${held.observer.generation}`, {
+              kind: 'acknowledgeFormalExecutionDispatch',
+              attemptId,
+              instanceId: held.observer.instanceId,
+              generation: held.observer.generation,
+              expectedEpoch: held.epoch,
+            })
+          }
+          const job = await route.authority.query(attemptId, held.epoch)
+          const current = await this.fresh(scope, attemptId, route, held, true)
+          if (!current) return
+          if (
+            !job ||
+            ['queued', 'running', 'cancel_requested', 'completion_requested'].includes(job.status)
+          ) {
+            await Bun.sleep(this.pollIntervalMs)
+            continue
+          }
+          if (['cancelled', 'failed', 'interrupted'].includes(job.status)) {
+            this.mutate(scope, `close-formal:${attemptId}:${held.observer.generation}`, {
+              kind: 'closeFormalExecution',
+              attemptId,
+              observer: held.observer,
+              status: job.status as 'cancelled' | 'failed' | 'interrupted',
+              error: job.error ?? `authority reported ${job.status}`,
+            })
+            return
+          }
+          if (job.status === 'completed' && current.attempt.cancelRequestedAt !== null) {
+            this.mutate(scope, `late-cancelled-formal:${attemptId}:${held.observer.generation}`, {
+              kind: 'closeFormalExecution',
+              attemptId,
+              observer: held.observer,
+              status: 'cancelled',
+              error: 'Authority completed after cancellation; result quarantined',
+              lateCompleted: true,
+            })
+            return
+          }
+          if (job.status !== 'completed' || !job.contentHash) {
+            await this.markUnknown(scope, attemptId, held)
+            return
+          }
+          const receipt = await route.authority.receipt(attemptId, held.epoch)
+          if (!(await this.fresh(scope, attemptId, route, held))) return
+          const verified = await route.authority.verifyReceipt(held.spec, receipt)
+          // Receipt I/O and verification can be slow. Reacquire current state before it is
+          // admitted so cancellation, revocation, route drift, or a newer observer wins.
+          if (!(await this.fresh(scope, attemptId, route, held))) return
+          if (sha256(receipt) !== job.contentHash || !verified) {
+            await this.markUnknown(scope, attemptId, held)
+            return
+          }
+          const saved = await this.receiptFile(scope, attemptId, receipt)
+          if (!(await this.fresh(scope, attemptId, route, held))) return
+          this.mutate(scope, `finish-formal:${attemptId}:${held.observer.generation}`, {
+            kind: 'finishFormalExecution',
+            attemptId,
+            observer: held.observer,
+            uri: saved.uri,
+            contentHash: saved.hash,
+            receiptHash: saved.hash,
+          })
+          return
         } catch {
-          /* query only; never replay */
+          await this.markUnknown(scope, attemptId, held)
+          return
         }
-        this.mutate(scope, `ack-formal:${attemptId}:${held.observer.generation}`, {
-          kind: 'acknowledgeFormalExecutionDispatch',
-          attemptId,
-          instanceId: held.observer.instanceId,
-          generation: held.observer.generation,
-          expectedEpoch: held.epoch,
-        })
       }
-      const job = await route.authority.query(attemptId, held.epoch)
-      if (!job || job.status !== 'completed' || !job.contentHash) return
-      const receipt = await route.authority.receipt(attemptId, held.epoch)
-      if (
-        sha256(receipt) !== job.contentHash ||
-        !(await route.authority.verifyReceipt(held.spec, receipt))
-      ) {
-        this.mutate(scope, `unknown-receipt:${attemptId}:${held.observer.generation}`, {
-          kind: 'markFormalExecutionObservationUnknown',
-          attemptId,
-          instanceId: held.observer.instanceId,
-          generation: held.observer.generation,
-          expectedEpoch: held.epoch,
-        })
-        return
-      }
-      this.mutate(scope, `finish-formal:${attemptId}:${held.observer.generation}`, {
-        kind: 'finishFormalExecution',
-        attemptId,
-        observer: held.observer,
-        uri: `formal://receipt/${attemptId}`,
-        contentHash: sha256(receipt),
-        receiptHash: sha256(receipt),
-      })
     } finally {
       this.observing.delete(attemptId)
     }

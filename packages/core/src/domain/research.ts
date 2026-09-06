@@ -626,6 +626,16 @@ export type ResearchCommand =
       contentHash: string
       receiptHash: string
     }
+  | {
+      /** Records an authority-confirmed terminal state without admitting an artifact. */
+      kind: 'closeFormalExecution'
+      attemptId: string
+      observer: { instanceId: string; generation: number }
+      status: 'failed' | 'cancelled' | 'interrupted'
+      error: string
+      /** A completion observed after cancellation is retained only as quarantined history. */
+      lateCompleted?: boolean
+    }
   | { kind: 'release'; approvalId: string; artifactVersionIds: string[] }
   | { kind: 'revokeApproval'; approvalId: string; reviewer: TrustedHumanReviewerProof }
   | {
