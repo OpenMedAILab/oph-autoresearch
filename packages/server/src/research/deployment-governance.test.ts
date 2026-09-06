@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { OphConfig } from '@oph-autoresearch/runtime'
 import { Store } from '@oph-autoresearch/store'
-import { serve } from '../server.ts'
+import { type ServeOptions, serve } from '../server.ts'
 import {
   captureResearchDeployment,
   type ResearchDeploymentManifest,
@@ -98,5 +98,76 @@ test('actual server captures deployment contract, requires authentication and bl
     app.stop()
     store.close()
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('daemon-disabled deployment rejects both CLI preparation authority injection and SSH configuration before constructing either', () => {
+  const { manifest, humanAuth } = fixture()
+  const store = new Store({ path: ':memory:' })
+  let authorityAccessed = false
+  const base = {
+    store,
+    config: { active: { provider: 'test', model: 'test' }, mode: 'auto', providers: {} },
+    workspaceRoot: '.',
+    host: '127.0.0.1',
+    port: 0,
+    researchBoundary: 'standard',
+    researchHumanAuth: humanAuth,
+    researchDeployment: { ...manifest, boundary: 'standard' },
+  } satisfies ServeOptions
+  const common = {
+    id: 'fixture',
+    label: 'Fixture',
+    deviceId: 'fixture-device',
+    adapterId: 'fixture-adapter',
+    model: 'fixture',
+    adapterConfigHash: `sha256:${'a'.repeat(64)}`,
+  }
+  const authority = {
+    get backendPolicyHash() {
+      authorityAccessed = true
+      throw new Error('must not construct execution authority')
+    },
+    submit() {
+      throw new Error('must not submit')
+    },
+    query() {
+      throw new Error('must not query')
+    },
+    cancel() {
+      throw new Error('must not cancel')
+    },
+    receipt() {
+      throw new Error('must not read receipt')
+    },
+  }
+  try {
+    for (const route of [
+      { ...common, authority },
+      {
+        ...common,
+        config: {
+          host: 'fixture.example.org',
+          user: 'fixture',
+          port: 22,
+          identityFile: '/not-used/key',
+          knownHostsFile: '/not-used/known-hosts',
+          knownHostsHash: `sha256:${'b'.repeat(64)}`,
+          remotePort: 12345,
+          token: 'fixture-not-a-credential',
+          authorityId: 'fixture-authority',
+        },
+      },
+    ]) {
+      expect(() =>
+        serve({
+          ...base,
+          researchCliPreparation: [route],
+        }),
+      ).toThrow('Deployment launch does not match')
+    }
+    expect(authorityAccessed).toBe(false)
+  } finally {
+    store.close()
   }
 })

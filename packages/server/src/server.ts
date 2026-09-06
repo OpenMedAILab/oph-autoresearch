@@ -160,7 +160,10 @@ export function serve(opts: ServeOptions) {
           humanAuth: opts.researchHumanAuth,
           requireApproval: researchRequireApproval,
           daemonConfigured: Boolean(
-            opts.researchDaemon || opts.researchSshDaemon || opts.researchSshDevices,
+            opts.researchDaemon ||
+              opts.researchSshDaemon ||
+              opts.researchSshDevices ||
+              opts.researchCliPreparation?.length,
           ),
         })
   const researchLiteratureCollector =
