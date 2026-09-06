@@ -164,6 +164,7 @@ export {
   type ResearchCapabilityDecision,
   type ResearchExecutionBoundary,
 } from './domain/research-policy.ts'
+export { type ClaimEvidenceMap, parseModelReview } from './domain/review-contract.ts'
 // workflow 的跨层序列化契约与纯投影：team/server/web 共用，不能各算一份。
 export {
   checkpointOutput,
