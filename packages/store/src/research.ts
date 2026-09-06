@@ -167,14 +167,37 @@ function bundleHash(campaign: ResearchCampaign): string {
   return digest(canonicalResearchBundle(campaign))
 }
 
-function cliPreparationConfigHash(command: Extract<ResearchCommand, { kind: 'proposeCliPreparation' }>) {
-  return digest(canonicalJson({
-    preparationId: command.preparationId, taskRevisionId: command.taskRevisionId,
-    dispatchKey: command.dispatchKey, candidateId: command.candidateId,
-    adapterId: command.adapterId, model: command.model, instructions: command.instructions,
-    inputHash: command.inputHash, deviceId: command.deviceId,
-    maxRuntimeMs: command.maxRuntimeMs, maxCost: command.maxCost,
-  }))
+type CliPreparationConfig = Pick<
+  ResearchCliPreparation,
+  | 'id'
+  | 'taskRevisionId'
+  | 'dispatchKey'
+  | 'candidateId'
+  | 'adapterId'
+  | 'model'
+  | 'instructions'
+  | 'inputHash'
+  | 'deviceId'
+  | 'maxRuntimeMs'
+  | 'maxCost'
+>
+
+function cliPreparationConfigHash(command: CliPreparationConfig) {
+  return digest(
+    canonicalJson({
+      preparationId: command.id,
+      taskRevisionId: command.taskRevisionId,
+      dispatchKey: command.dispatchKey,
+      candidateId: command.candidateId,
+      adapterId: command.adapterId,
+      model: command.model,
+      instructions: command.instructions,
+      inputHash: command.inputHash,
+      deviceId: command.deviceId,
+      maxRuntimeMs: command.maxRuntimeMs,
+      maxCost: command.maxCost,
+    }),
+  )
 }
 
 function invalidateChangedApprovals(campaign: ResearchCampaign, now: number): ResearchCampaign {
@@ -625,7 +648,9 @@ function nextCampaign(
           : null) ??
         (!SHA256.test(command.inputHash) ? 'inputHash 无效' : null) ??
         (!SHA256.test(command.configHash) ? 'configHash 无效' : null) ??
-        (command.configHash !== cliPreparationConfigHash(command) ? 'configHash 未绑定完整准备规格' : null) ??
+        (command.configHash !== cliPreparationConfigHash({ ...command, id: command.preparationId })
+          ? 'configHash 未绑定完整准备规格'
+          : null) ??
         (!Number.isSafeInteger(command.maxRuntimeMs) ||
         command.maxRuntimeMs < 1 ||
         command.maxRuntimeMs > 600_000
@@ -639,12 +664,15 @@ function nextCampaign(
       if (
         error ||
         !task ||
-        withDerivedTaskStatuses(campaign).taskRevisions.find((candidate) => candidate.id === task.id)?.status === 'stale' ||
+        withDerivedTaskStatuses(campaign).taskRevisions.find(
+          (candidate) => candidate.id === task.id,
+        )?.status === 'stale' ||
         task.inputHash !== command.inputHash ||
         (campaign.cliPreparations ?? []).some(
           (candidate) =>
             candidate.id === command.preparationId || candidate.dispatchKey === command.dispatchKey,
-        ) || campaign.attempts.some((attempt) => attempt.dispatchKey === command.dispatchKey)
+        ) ||
+        campaign.attempts.some((attempt) => attempt.dispatchKey === command.dispatchKey)
       )
         return invalid('invalid_cli_preparation_proposal', error ?? '任务版本或 dispatchKey 不可用')
       const preparation: ResearchCliPreparation = {
@@ -679,8 +707,12 @@ function nextCampaign(
       if (
         !preparation ||
         !task ||
-        withDerivedTaskStatuses(campaign).taskRevisions.find((candidate) => candidate.id === task.id)?.status === 'stale' ||
+        withDerivedTaskStatuses(campaign).taskRevisions.find(
+          (candidate) => candidate.id === task.id,
+        )?.status === 'stale' ||
         preparation.status !== 'proposed' ||
+        preparation.inputHash !== task.inputHash ||
+        preparation.configHash !== cliPreparationConfigHash(preparation) ||
         approval?.status !== 'active' ||
         approval.consumedBy ||
         approval.bundleHash !== campaign.bundleHash ||
@@ -691,8 +723,11 @@ function nextCampaign(
         approval.scope.configHash !== preparation.configHash ||
         approval.scope.maxCost !== preparation.maxCost ||
         approval.scope.executionLimits?.maxRuntimeMs !== preparation.maxRuntimeMs ||
-        approval.scope.executionLimits?.inputHash !== preparation.inputHash
-        || campaign.attempts.some((attempt) => attempt.dispatchKey === preparation.dispatchKey)
+        approval.scope.executionLimits?.inputHash !== preparation.inputHash ||
+        approval.scope.executionLimits?.cpu !== 1 ||
+        approval.scope.executionLimits?.memoryMb !== 256 ||
+        approval.scope.executionLimits?.codeHash !== preparation.configHash ||
+        campaign.attempts.some((attempt) => attempt.dispatchKey === preparation.dispatchKey)
       )
         return invalid('cli_preparation_approval_required', '准备任务需要精确且未消费的人类审批')
       const attempt: ResearchAttempt = {
@@ -762,7 +797,21 @@ function nextCampaign(
       }
       if (command.scope !== undefined) {
         const scope = command.scope
-        const scopedTask = campaign.taskRevisions.find((task) => task.id === scope?.taskRevisionId)
+        const derivedCampaign = withDerivedTaskStatuses(campaign)
+        const scopedTask = derivedCampaign.taskRevisions.find(
+          (task) => task.id === scope?.taskRevisionId,
+        )
+        const cliPreparation =
+          scope?.kind === 'cli_preparation'
+            ? (campaign.cliPreparations ?? []).find(
+                (candidate) =>
+                  candidate.status === 'proposed' &&
+                  candidate.taskRevisionId === scope.taskRevisionId &&
+                  candidate.dispatchKey === scope.dispatchKey &&
+                  candidate.configHash === scope.configHash &&
+                  candidate.maxCost === scope.maxCost,
+              )
+            : undefined
         if (
           !scope ||
           (scope.display !== undefined &&
@@ -800,7 +849,7 @@ function nextCampaign(
           (scope.kind === 'execution' &&
             (!scope.dispatchKey ||
               !scope.taskRevisionId ||
-              !campaign.taskRevisions.some(
+              !derivedCampaign.taskRevisions.some(
                 (t) => t.id === scope.taskRevisionId && t.status !== 'stale',
               ))) ||
           (scope.kind === 'cli_preparation' &&
@@ -808,9 +857,15 @@ function nextCampaign(
               !scope.taskRevisionId ||
               !scope.configHash ||
               !SHA256.test(scope.configHash) ||
-              !campaign.taskRevisions.some(
-                (t) => t.id === scope.taskRevisionId && t.status !== 'stale',
-              )))
+              !cliPreparation ||
+              cliPreparation.configHash !== cliPreparationConfigHash(cliPreparation) ||
+              scopedTask?.status === 'stale' ||
+              scopedTask?.inputHash !== cliPreparation.inputHash ||
+              scope.executionLimits?.maxRuntimeMs !== cliPreparation.maxRuntimeMs ||
+              scope.executionLimits?.cpu !== 1 ||
+              scope.executionLimits?.memoryMb !== 256 ||
+              scope.executionLimits?.inputHash !== cliPreparation.inputHash ||
+              scope.executionLimits?.codeHash !== cliPreparation.configHash))
         )
           return invalid(
             'invalid_approval_scope',

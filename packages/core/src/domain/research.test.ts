@@ -70,4 +70,40 @@ describe('research domain', () => {
       canonicalResearchBundle(current),
     )
   })
+
+  test('canonical bundle binds frozen CLI preparation fields but excludes delivery state', () => {
+    const proposed: ResearchCampaign = {
+      ...campaign(),
+      cliPreparations: [
+        {
+          id: 'rcp_1',
+          taskRevisionId: 'rtr_1',
+          dispatchKey: 'prepare-1',
+          candidateId: 'candidate_1',
+          adapterId: 'local-fixture',
+          model: 'fixture-model',
+          instructions: 'prepare a candidate only',
+          inputHash: `sha256:${'a'.repeat(64)}`,
+          configHash: `sha256:${'b'.repeat(64)}`,
+          deviceId: 'gpu-fixture-1',
+          maxRuntimeMs: 60_000,
+          maxCost: 12,
+          status: 'proposed' as const,
+          attemptId: null,
+          artifactVersionId: null,
+          createdAt: 1,
+        },
+      ],
+    }
+    const changedFrozen = structuredClone(proposed)
+    changedFrozen.cliPreparations![0]!.instructions = 'a different approved instruction'
+    const changedDeliveryState = structuredClone(proposed)
+    changedDeliveryState.cliPreparations![0]!.status = 'candidate'
+    changedDeliveryState.cliPreparations![0]!.attemptId = 'rat_1'
+    changedDeliveryState.cliPreparations![0]!.artifactVersionId = 'rav_1'
+
+    expect(canonicalResearchBundle(proposed)).not.toBe(canonicalResearchBundle(campaign()))
+    expect(canonicalResearchBundle(changedFrozen)).not.toBe(canonicalResearchBundle(proposed))
+    expect(canonicalResearchBundle(changedDeliveryState)).toBe(canonicalResearchBundle(proposed))
+  })
 })

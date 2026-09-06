@@ -173,25 +173,12 @@ export type ResearchAttemptStatus =
 export interface ResearchJobSpec {
   backendPolicyHash?: string
   trackingPolicyHash?: string
-  version: 1 | 2 | 3
-  execution?:
-    | {
-        adapter: 'supervised-phantom-v2'
-        codeHash: string
-        maxRuntimeMs: number
-      }
-    | {
-        adapter: 'cli-preparation-v1'
-        preparationId: string
-        candidateId: string
-        adapterId: string
-        model: string
-        instructions: string
-        configHash: string
-        deviceId: string
-        maxRuntimeMs: number
-        maxCost: number
-      }
+  version: 1 | 2
+  execution?: {
+    adapter: 'supervised-phantom-v2'
+    codeHash: string
+    maxRuntimeMs: number
+  }
   dispatchKey: string
   campaignId: string
   taskRevisionId: string
@@ -478,6 +465,41 @@ export function canonicalResearchBundle(campaign: ResearchCampaign): string {
           }
         : {}),
       ...(campaign.labelSets === undefined ? {} : { labelSets: campaign.labelSets }),
+      ...((campaign.cliPreparations ?? []).length
+        ? {
+            cliPreparations: campaign
+              .cliPreparations!.map(
+                ({
+                  id,
+                  taskRevisionId,
+                  dispatchKey,
+                  candidateId,
+                  adapterId,
+                  model,
+                  instructions,
+                  inputHash,
+                  configHash,
+                  deviceId,
+                  maxRuntimeMs,
+                  maxCost,
+                }) => ({
+                  id,
+                  taskRevisionId,
+                  dispatchKey,
+                  candidateId,
+                  adapterId,
+                  model,
+                  instructions,
+                  inputHash,
+                  configHash,
+                  deviceId,
+                  maxRuntimeMs,
+                  maxCost,
+                }),
+              )
+              .sort((left, right) => compareCodeUnits(left.id, right.id)),
+          }
+        : {}),
       stage: campaign.stage,
       policy: campaign.policy,
       inputs: campaign.inputs,
