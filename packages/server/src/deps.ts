@@ -9,6 +9,7 @@ import type { OphConfig } from '@oph-autoresearch/runtime'
 import type { ContentStore, Store } from '@oph-autoresearch/store'
 import type { ServerWebSocket } from 'bun'
 import type { EventBus } from './bus.ts'
+import type { NativeResearchControlBridge } from './cli-conversation.ts'
 import type { RunManager } from './runs.ts'
 
 /**
@@ -26,6 +27,13 @@ export interface CommandDeps {
   config: OphConfig
   bus: EventBus
   runs: RunManager
+  researchControlFactory?: (input: {
+    workspaceId: string
+    workspaceRoot: string
+    conversationId: string
+    campaignIds: readonly string[]
+    signal: AbortSignal
+  }) => NativeResearchControlBridge & { close(): void }
 }
 
 /** 每条 WebSocket 连接自带的状态。握手前 `authed` 为 false。 */

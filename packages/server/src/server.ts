@@ -51,6 +51,7 @@ import { handleHello } from './handshake.ts'
 import { CORS_HEADERS, hostLabel, serveStatic, withCors } from './http-util.ts'
 import { extractToken, Pairing, preferredLanAddress } from './pairing.ts'
 import { sanitizeProcessExitObservation } from './process-exit.ts'
+import { createNativeResearchControlBridge } from './research/native-research-control.ts'
 import { publishResearchEvents } from './research-events.ts'
 import { ensureResearchWorkspace } from './research-template.ts'
 import { startRun } from './run-control.ts'
@@ -468,10 +469,43 @@ export function serve(opts: ServeOptions) {
                 config: opts.config,
                 bus,
                 runs,
+                researchControlFactory: ({ workspaceId, workspaceRoot, campaignIds, signal }) =>
+                  createNativeResearchControlBridge(
+                    {
+                      store: opts.store,
+                      config: opts.config,
+                      bus,
+                      runs,
+                      pairing,
+                      token,
+                      port: srv.port ?? opts.port,
+                      enableLan,
+                      disableLan,
+                      lanEnabled,
+                      lanPort: () => lanPort,
+                      startRun: () => {},
+                      watchGit: () => gitWatch.retarget(),
+                      workspaceId,
+                      workspaceRoot,
+                      ...(researchHumanAuth ? { researchHumanAuth } : {}),
+                      researchRequireApproval,
+                      ...(researchLiteratureCollector ? { researchLiteratureCollector } : {}),
+                      ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
+                      ...(!restricted && opts.researchReviewCli
+                        ? { researchReviewCli: opts.researchReviewCli }
+                        : {}),
+                      ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
+                    },
+                    campaignIds,
+                    signal,
+                  ),
               })
             },
             watchGit: () => gitWatch.retarget(),
             ...(researchHumanAuth ? { researchHumanAuth } : {}),
+            ...(opts.researchHumanAuth?.approvalUrl
+              ? { researchApprovalUrl: opts.researchHumanAuth.approvalUrl }
+              : {}),
             researchRequireApproval,
             ...(researchLiteratureCollector ? { researchLiteratureCollector } : {}),
             ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
@@ -529,6 +563,36 @@ export function serve(opts: ServeOptions) {
           config: opts.config,
           bus,
           runs,
+          researchControlFactory: ({ workspaceId, workspaceRoot, campaignIds, signal }) =>
+            createNativeResearchControlBridge(
+              {
+                store: opts.store,
+                config: opts.config,
+                bus,
+                runs,
+                pairing,
+                token,
+                port: srv.port ?? opts.port,
+                enableLan,
+                disableLan,
+                lanEnabled,
+                lanPort: () => lanPort,
+                startRun: () => {},
+                watchGit: () => gitWatch.retarget(),
+                workspaceId,
+                workspaceRoot,
+                ...(researchHumanAuth ? { researchHumanAuth } : {}),
+                researchRequireApproval,
+                ...(researchLiteratureCollector ? { researchLiteratureCollector } : {}),
+                ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
+                ...(!restricted && opts.researchReviewCli
+                  ? { researchReviewCli: opts.researchReviewCli }
+                  : {}),
+                ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
+              },
+              campaignIds,
+              signal,
+            ),
         })
       },
       close(ws: ServerWebSocket<SocketData>) {

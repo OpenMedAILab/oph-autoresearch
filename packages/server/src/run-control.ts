@@ -35,6 +35,7 @@ import {
   createGoal,
   currentGoal,
   getConversation,
+  listResearchCampaigns,
   updateGoal,
   workspaceOf,
 } from '@oph-autoresearch/store'
@@ -123,14 +124,34 @@ export async function startRun(
   const controller = new AbortController()
   let currentRunId: RunId | null = null
 
-  const session = getConversation(deps.store, conversationId)?.provider.startsWith(
+  const isNativeCli = getConversation(deps.store, conversationId)?.provider.startsWith(
     CLI_PROVIDER_PREFIX,
   )
+  // Remote CLI hosts remain execution workers.  They never receive a bridge
+  // that could act as the local research controller.
+  const isRemoteCli = getConversation(deps.store, conversationId)?.provider.startsWith(
+    `${CLI_PROVIDER_PREFIX}ssh:`,
+  )
+  const researchControl =
+    isNativeCli && !isRemoteCli && deps.researchControlFactory
+      ? deps.researchControlFactory({
+          workspaceId: ws.id,
+          workspaceRoot: ws.rootPath,
+          conversationId,
+          campaignIds: listResearchCampaigns(deps.store, ws.id, conversationId).map(
+            (campaign) => campaign.id,
+          ),
+          signal: controller.signal,
+        })
+      : undefined
+
+  const session = isNativeCli
     ? new CliConversationSession({
         store: deps.store,
         config: deps.config,
         workspaceRoot: ws.rootPath,
         signal: controller.signal,
+        ...(researchControl ? { researchControl } : {}),
       })
     : new Session({
         store: deps.store,
@@ -228,6 +249,7 @@ export async function startRun(
       // 每条消息一个 Session，每个 Session 都持有扩展的一份引用。
       // 不释放的话引用只增不减，插件与 MCP 子进程到进程退出都关不掉。
       session.dispose()
+      researchControl?.close()
       const interrupted = controller.signal.aborted || stopReason === 'user_interrupt'
       /*
        * 「调整方向」只对发出它的那一轮成立。这一轮收尾了，没赶上 step 边界的那些

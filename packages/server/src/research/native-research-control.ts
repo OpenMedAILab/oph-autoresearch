@@ -12,6 +12,7 @@ export function createNativeResearchControlBridge(
   deps: ApiRequestDeps,
   campaignIds: readonly string[],
   signal: AbortSignal,
+  expiresAt = Date.now() + 10 * 60_000,
 ): NativeResearchControlBridge & { close(): void } {
   const token = randomBytes(32).toString('hex')
   const allowed = new Set(campaignIds)
@@ -20,6 +21,8 @@ export function createNativeResearchControlBridge(
     hostname: '127.0.0.1',
     port: 0,
     async fetch(request) {
+      if (Date.now() >= expiresAt)
+        return new Response(JSON.stringify({ error: 'bridge_expired' }), { status: 410 })
       const supplied = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
       if (
         !/^[a-f0-9]{64}$/.test(supplied) ||
@@ -32,6 +35,10 @@ export function createNativeResearchControlBridge(
       if (!raw || typeof raw !== 'object' || Array.isArray(raw))
         return new Response(JSON.stringify({ error: 'invalid_request' }), { status: 400 })
       const control = raw as ResearchControlRequest
+      // Native turns receive only existing campaign handles.  Campaign creation
+      // is a caller-owned API action and must never enlarge this turn's scope.
+      if (!control.campaignId)
+        return new Response(JSON.stringify({ error: 'campaign_id_required' }), { status: 400 })
       if (control.campaignId && !allowed.has(control.campaignId))
         return new Response(JSON.stringify({ error: 'campaign_not_allowed' }), { status: 403 })
       return adapter.execute(control)

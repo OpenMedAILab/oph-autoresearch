@@ -115,8 +115,12 @@ export class CliConversationSession {
           checkedAt: a.probe?.checkedAt,
         }))
       const control = this.opts.researchControl
+      const controlClientArgv = Bun.main.endsWith('.ts')
+        ? [process.execPath, Bun.main]
+        : [process.execPath]
+      const controlCommand = controlClientArgv.map((arg) => JSON.stringify(arg)).join(' ')
       const controlInstruction = control
-        ? `\n受控研究操作只能通过 \`oph research\` 调用本轮注入的本地桥。它只允许 campaign ${control.campaignIds.join(', ') || '（无可用 campaign）'} 的 prepare/propose/submit/status/events/cancel/reconcile/receipt/request_review；它不能审批、签名或发布。每次变更都必须带 ledger 要求的 expectedVersion 和 idempotencyKey。\n`
+        ? `\n受控研究操作只能通过 \`${controlCommand} research\` 调用本轮注入的本地桥。它只允许 campaign ${control.campaignIds.join(', ') || '（无可用 campaign）'} 的 prepare/propose/submit/status/events/cancel/reconcile/receipt/request_review；它不能审批、签名或发布。每次变更都必须带 ledger 要求的 expectedVersion 和 idempotencyKey。\n`
         : ''
       const input = `远程执行端能力清单（仅状态，不是实验执行授权）：${JSON.stringify(remoteCapabilities)}。本机负责规划与审核；远程 CLI 用于受控实验，不是主控模型。${controlInstruction}
 你正在项目 ${this.opts.workspaceRoot} 中处理研究对话。以下历史仅作为上下文，回答最后一条用户消息。\n${history.join('\n\n')}\n\nuser: ${prompt}`
@@ -150,6 +154,7 @@ export class CliConversationSession {
                 OPH_RESEARCH_CONTROL_ENDPOINT: control.endpoint,
                 OPH_RESEARCH_CONTROL_TOKEN: control.token,
                 OPH_RESEARCH_CONTROL_CAMPAIGNS: control.campaignIds.join(','),
+                OPH_RESEARCH_CONTROL_CLIENT_ARGV: JSON.stringify(controlClientArgv),
               },
             }
           : {}),
