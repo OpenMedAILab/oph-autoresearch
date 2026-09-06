@@ -151,7 +151,7 @@ test('JobDaemon runs an admitted fake CLI and verifies the complete v3 candidate
       id: 'fixture',
       model: 'fixture-model',
     })
-    daemon.submit(job)
+    daemon.submit(job, daemon.identity().epoch)
     const worker = await daemon.launchWorker(job.dispatchKey)
     await worker.exited
     await waitFor(daemon, job.dispatchKey, 'completed')
@@ -191,7 +191,7 @@ printf '%s\\n' '${event}'
   try {
     const job = spec('prep-completion')
     bindAdmittedAdapter(job, cli)
-    daemon.submit(job)
+    daemon.submit(job, daemon.identity().epoch)
     const worker = await daemon.launchWorker(job.dispatchKey)
     const grandchildPid = await waitForPid(join(root, 'completion-grandchild.pid'))
     expect(processExists(grandchildPid)).toBe(true)
@@ -217,7 +217,7 @@ test('rejects unknown administrator adapters before launch', async () => {
   try {
     const job = spec('prep-unknown', 2_000, 'not-admitted')
     job.execution.adapterConfigHash = hash('not-admitted')
-    expect(() => daemon.submit(job)).toThrow('adapter is not admitted')
+    expect(() => daemon.submit(job, daemon.identity().epoch)).toThrow('adapter is not admitted')
   } finally {
     daemon.close()
     await rm(root, { recursive: true, force: true })
@@ -252,7 +252,7 @@ while :; do sleep 1; done
   try {
     const cancelled = spec('prep-cancel')
     bindAdmittedAdapter(cancelled, cli)
-    daemon.submit(cancelled)
+    daemon.submit(cancelled, daemon.identity().epoch)
     const cancelWorker = await daemon.launchWorker(cancelled.dispatchKey)
     await waitFor(daemon, cancelled.dispatchKey, 'running')
     const cliPid = await waitForPid(cliPidMarker)
@@ -261,7 +261,9 @@ while :; do sleep 1; done
     expect(processExists(grandchildPid)).toBe(true)
     // Persist and start cleanup, then model an authority crash which drops only
     // its in-memory escalation timer. The new authority must resume on its own.
-    expect(daemon.cancel(cancelled.dispatchKey)?.status).toBe('cancel_requested')
+    expect(daemon.cancel(cancelled.dispatchKey, daemon.identity().epoch)?.status).toBe(
+      'cancel_requested',
+    )
     expect(daemon.query(cancelled.dispatchKey)?.cleanupStartedAt).toBeNumber()
     daemon.close({ terminateWorkers: false })
     daemon = undefined
@@ -318,7 +320,7 @@ test('a restarted authority completes a durable receipt after lost completion cl
   try {
     const job = spec('prep-completion-recovery')
     bindAdmittedAdapter(job, cli)
-    daemon.submit(job)
+    daemon.submit(job, daemon.identity().epoch)
     const worker = await daemon.launchWorker(job.dispatchKey)
     const cliPid = await waitForPid(join(root, 'recovery-completion-cli.pid'))
     const grandchildPid = await waitForPid(join(root, 'recovery-completion-grandchild.pid'))
@@ -376,7 +378,7 @@ while :; do sleep 1; done
   try {
     const job = spec('prep-close')
     bindAdmittedAdapter(job, cli)
-    daemon.submit(job)
+    daemon.submit(job, daemon.identity().epoch)
     const worker = await daemon.launchWorker(job.dispatchKey)
     await waitFor(daemon, job.dispatchKey, 'running')
     const cliPid = await waitForPid(join(root, 'close-cli.pid'))
@@ -402,7 +404,7 @@ test('v3 execution deadline terminates preparation without a candidate', async (
   try {
     const timedOut = spec('prep-timeout', 50)
     bindAdmittedAdapter(timedOut, cli)
-    daemon.submit(timedOut)
+    daemon.submit(timedOut, daemon.identity().epoch)
     const timeoutWorker = await daemon.launchWorker(timedOut.dispatchKey)
     await timeoutWorker.exited
     await waitFor(daemon, timedOut.dispatchKey, 'cancelled')

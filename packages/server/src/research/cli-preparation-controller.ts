@@ -33,10 +33,11 @@ export interface CliPreparationRoute {
       dispatchKey: string
       specHash: string
     }): Promise<{ outcome: string }> | { outcome: string }
-    submit(spec: CliPreparationJobSpec): DurableJob | Promise<DurableJob>
-    query(key: string): DurableJob | null | Promise<DurableJob | null>
-    cancel(key: string): DurableJob | null | Promise<DurableJob | null>
-    receipt(key: string): Uint8Array | Promise<Uint8Array>
+    /** Every v3 authority operation is fenced by the bound daemon epoch. */
+    submit(spec: CliPreparationJobSpec, expectedEpoch: string): DurableJob | Promise<DurableJob>
+    query(key: string, expectedEpoch: string): DurableJob | null | Promise<DurableJob | null>
+    cancel(key: string, expectedEpoch: string): DurableJob | null | Promise<DurableJob | null>
+    receipt(key: string, expectedEpoch: string): Uint8Array | Promise<Uint8Array>
   }
 }
 export class CliPreparationControlError extends Error {
@@ -462,11 +463,12 @@ export class CliPreparationController {
         ['completed', 'failed', 'interrupted', 'cancelled'].includes(attempt.status)
       )
         return
-      held = await this.acquireObserver(
-        scope,
-        attemptId,
-        binding.dispatchState === 'not_sent' ? 'first_send' : 'observe',
-      )
+      held =
+        (await this.acquireObserver(
+          scope,
+          attemptId,
+          binding.dispatchState === 'not_sent' ? 'first_send' : 'observe',
+        )) ?? undefined
       if (!held) return
       if (!(await this.hasExpectedEpoch(route, held.epoch))) {
         this.markObservationUnknown(
@@ -482,7 +484,7 @@ export class CliPreparationController {
         // `sending` is durable before this request. A lost response is observed below,
         // never retried as a second submit.
         try {
-          await route.authority.submit(held.spec)
+          await route.authority.submit(held.spec, held.epoch)
           const current = this.campaign(scope)
           this.mutate(
             scope,
@@ -517,7 +519,7 @@ export class CliPreparationController {
           )
           return
         }
-        const job = await route.authority.query(attemptId)
+        const job = await route.authority.query(attemptId, held.epoch)
         if (!(await this.hasExpectedEpoch(route, held.epoch))) {
           this.markObservationUnknown(
             scope,
@@ -578,9 +580,9 @@ export class CliPreparationController {
           attempt = campaign.attempts.find((item) => item.id === attemptId)!
         }
         if (attempt.cancelRequestedAt !== null && job.status !== 'cancelled')
-          await route.authority.cancel(attemptId)
+          await route.authority.cancel(attemptId, held.epoch)
         if (job.status === 'completed') {
-          const bytes = await route.authority.receipt(attemptId)
+          const bytes = await route.authority.receipt(attemptId, held.epoch)
           if (!(await this.hasExpectedEpoch(route, held.epoch))) {
             this.markObservationUnknown(
               scope,

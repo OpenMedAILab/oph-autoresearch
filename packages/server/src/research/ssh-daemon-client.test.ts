@@ -184,6 +184,52 @@ describe('SSH daemon client', () => {
     expect(closed).toBe(true)
   })
 
+  test('binds v3 submit, query, and cancel to the expected daemon epoch', async () => {
+    const config = await freshConfig()
+    const epoch = 'e'.repeat(32)
+    const submitted = { ...spec('epoch-bound'), version: 3 } as unknown as JobSpec
+    const requests: unknown[] = []
+    const headers = { 'x-oph-authority-epoch': epoch }
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname
+        if (path === '/health')
+          return Response.json({ authorityId: config.authorityId, trackingPolicyHash: null })
+        if (path === '/submit' || path === `/cancel/${submitted.dispatchKey}`) {
+          requests.push(await request.json())
+          return Response.json(
+            { authorityId: config.authorityId, job: job(submitted) },
+            { headers },
+          )
+        }
+        if (path === `/status/${submitted.dispatchKey}`)
+          return Response.json(
+            { authorityId: config.authorityId, job: job(submitted) },
+            { headers },
+          )
+        return new Response('not found', { status: 404 })
+      },
+    })
+    const client = createSshDaemonClientForTest(config, async () => ({
+      endpoint: `http://127.0.0.1:${server.port}`,
+      close: () => server.stop(true),
+    }))
+    try {
+      await expect(client.submit(submitted)).rejects.toThrow('requires an authority epoch')
+      await client.submit(submitted, epoch)
+      await client.query(submitted.dispatchKey, epoch)
+      await client.cancel(submitted.dispatchKey, epoch)
+      expect(requests).toEqual([
+        { expectedEpoch: epoch, spec: submitted },
+        { expectedEpoch: epoch },
+      ])
+    } finally {
+      client.close()
+    }
+  })
+
   test('validates authority headers and exact identity and closure proof bindings', async () => {
     const config = await freshConfig()
     const epoch = 'e'.repeat(32)

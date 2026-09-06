@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -51,6 +51,10 @@ test('remote authority enforces lease expiry without a connected submitting clie
   }
 })
 
+import {
+  cliPreparationAdapterConfigHash,
+  cliPreparationExecutableHash,
+} from './cli-preparation-job.ts'
 import { createRemoteDaemonService } from './remote-daemon-service.ts'
 
 test('remote authority authenticates and strictly validates epoch-bound close-unstarted requests', async () => {
@@ -117,6 +121,119 @@ test('remote authority authenticates and strictly validates epoch-bound close-un
     ).toBe(409)
   } finally {
     service.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('actual HTTP daemon rejects an A-epoch v3 submit and cancel after rebuild to B', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'oph-remote-epoch-'))
+  const token = 'e'.repeat(48)
+  const cli = join(root, 'fixture-cli')
+  await writeFile(cli, '#!/bin/sh\nexit 0\n')
+  await chmod(cli, 0o755)
+  const adapter = {
+    deviceId: 'fixture-device',
+    kind: 'codex-exec' as const,
+    executable: cli,
+    binaryHash: cliPreparationExecutableHash(cli),
+    id: 'fixture-adapter',
+    model: 'fixture-model',
+  }
+  const cliPreparation = {
+    backendPolicyHash: `sha256:${'a'.repeat(64)}`,
+    workspaceRoot: root,
+    workspaceScope: '.',
+    credentialHome: join(root, 'credentials'),
+    adapters: [adapter],
+  }
+  const config = {
+    authorityId: 'epoch-fixture',
+    token,
+    port: 0,
+    dbPath: join(root, 'jobs.sqlite'),
+    outputRoot: join(root, 'outputs'),
+    cliPreparation,
+  }
+  const first = createRemoteDaemonService(config)
+  let second: ReturnType<typeof createRemoteDaemonService> | undefined
+  try {
+    const firstEndpoint = `http://127.0.0.1:${first.port}`
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+    const identity = (await (await fetch(`${firstEndpoint}/identity`, { headers })).json()) as {
+      identity: { epoch: string }
+    }
+    first.close()
+    await rm(config.dbPath)
+    second = createRemoteDaemonService(config)
+    const spec = {
+      version: 3 as const,
+      dispatchKey: 'epoch-race',
+      campaignId: 'campaign',
+      taskRevisionId: 'task',
+      templateId: 'synthetic-summary-v1' as const,
+      inputHash: `sha256:${'b'.repeat(64)}`,
+      backendPolicyHash: cliPreparation.backendPolicyHash,
+      resource: { cpu: 1 as const, memoryMb: 256 },
+      lease: { ownerId: 'fixture', token: 'lease', fence: 1, expiresAt: Date.now() + 60_000 },
+      execution: {
+        adapter: 'cli-preparation-v1' as const,
+        preparationId: 'preparation',
+        candidateId: 'candidate',
+        clientDispatchKey: 'client-key',
+        adapterId: adapter.id,
+        adapterConfigHash: cliPreparationAdapterConfigHash(adapter),
+        model: adapter.model,
+        instructions: 'candidate only',
+        configHash: `sha256:${'c'.repeat(64)}`,
+        deviceId: adapter.deviceId,
+        maxRuntimeMs: 1_000,
+        maxCost: 1,
+      },
+    }
+    const secondEndpoint = `http://127.0.0.1:${second.port}`
+    expect(
+      (
+        await fetch(`${secondEndpoint}/submit`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(spec),
+        })
+      ).status,
+    ).toBe(409)
+    expect(
+      (
+        await fetch(`${secondEndpoint}/submit`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expectedEpoch: identity.identity.epoch, spec }),
+        })
+      ).status,
+    ).toBe(409)
+    expect(second.daemon.query(spec.dispatchKey)).toBeNull()
+
+    const epochB = second.daemon.identity().epoch
+    expect(
+      (
+        await fetch(`${secondEndpoint}/submit`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expectedEpoch: epochB, spec }),
+        })
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await fetch(`${secondEndpoint}/cancel/${spec.dispatchKey}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expectedEpoch: identity.identity.epoch }),
+        })
+      ).status,
+    ).toBe(409)
+    expect(second.daemon.query(spec.dispatchKey)?.status).toBe('queued')
+  } finally {
+    first.close()
+    second?.close()
     await rm(root, { recursive: true, force: true })
   }
 })

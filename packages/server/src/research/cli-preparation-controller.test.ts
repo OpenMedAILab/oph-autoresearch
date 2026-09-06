@@ -41,6 +41,7 @@ class FakeAuthority {
   unavailable = false
   loseSubmitResponse = false
   switchEpochAfterQuery = false
+  rebuildBeforeSubmit = false
   closeRequests: { expectedEpoch: string; dispatchKey: string; specHash: string }[] = []
   cancelKeepsRemoteState = false
   receiptBytes = new Uint8Array()
@@ -56,24 +57,32 @@ class FakeAuthority {
     if (request.expectedEpoch !== this.epoch) throw new Error('wrong authority epoch')
     return { outcome: 'not_started' }
   }
-  submit(spec: CliPreparationJobSpec) {
+  submit(spec: CliPreparationJobSpec, expectedEpoch: string) {
+    if (this.rebuildBeforeSubmit) {
+      this.rebuildBeforeSubmit = false
+      this.epoch = 'fixture_authority_epoch_0002'
+    }
+    if (expectedEpoch !== this.epoch) throw new Error('wrong authority epoch')
     this.submitted.push(spec)
     this.current = job(spec, 'queued')
     if (this.loseSubmitResponse) throw new Error('response lost after durable submit')
     return this.current
   }
-  query(key: string) {
+  query(key: string, expectedEpoch: string) {
     this.queried.push(key)
     if (this.unavailable) throw new Error('transport unavailable')
     if (this.switchEpochAfterQuery) this.epoch = 'fixture_authority_epoch_0002'
+    if (expectedEpoch !== this.epoch) throw new Error('wrong authority epoch')
     return this.current?.spec.dispatchKey === key ? this.current : null
   }
-  cancel(key: string) {
+  cancel(key: string, expectedEpoch: string) {
+    if (expectedEpoch !== this.epoch) throw new Error('wrong authority epoch')
     if (this.current?.spec.dispatchKey === key && !this.cancelKeepsRemoteState)
       this.current = { ...this.current, status: 'cancelled' }
     return this.current
   }
-  async receipt(_key: string) {
+  async receipt(_key: string, expectedEpoch: string) {
+    if (expectedEpoch !== this.epoch) throw new Error('wrong authority epoch')
     this.onReceipt?.()
     if (this.receiptBlock) await this.receiptBlock
     return this.receiptBytes
@@ -561,6 +570,63 @@ test('reconcile observes the original attempt after an unknown transport state w
     await expect(changedRoute.reconcile(scope, accepted.attemptId)).rejects.toThrow('已变化')
     controller.close()
     changedRoute.close()
+  } finally {
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('marks an epoch-rebuilt authority unknown before it can accept a replacement v3 job', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'oph-cli-controller-'))
+  const store = new SqlStore({ path: ':memory:' })
+  try {
+    const { workspace, campaign, task } = setup(store, root)
+    const authority = new FakeAuthority()
+    authority.rebuildBeforeSubmit = true
+    const controller = new CliPreparationController(store, [route(authority)], () => {})
+    const scope = { workspaceId: workspace.id, workspaceRoot: root, campaignId: campaign.id }
+    const proposed = controller.propose(scope, {
+      expectedVersion: campaign.version,
+      idempotencyKey: 'proposal-epoch-rebuild',
+      routeId: 'fixture-route',
+      taskRevisionId: task.id,
+      instructions: 'candidate only',
+      maxRuntimeMs: 1_000,
+      maxCost: 1,
+      acknowledgeUnknownCost: true,
+    })
+    const approval = controller.approval(scope, proposed.preparationId)
+    const approved = mutateResearchCampaign(store, campaign.id, {
+      expectedVersion: approval.expectedVersion,
+      idempotencyKey: approval.idempotencyKey,
+      command: {
+        kind: 'approve',
+        bundleHash: approval.bundleHash,
+        scope: approval.scope,
+        reviewer: { reviewerId: 'human', proofId: 'proof', verifiedAt: Date.now() },
+      },
+    })
+    if (!approved.ok) throw new Error(approved.message)
+    const accepted = await controller.submit(scope, {
+      preparationId: proposed.preparationId,
+      approvalId: approved.campaign.approvals[0]!.id,
+      expectedVersion: approved.campaign.version,
+    })
+    await waitFor(
+      () =>
+        getResearchCampaign(store, campaign.id)?.attempts.find(
+          (item) => item.id === accepted.attemptId,
+        )?.status === 'unknown'
+          ? true
+          : undefined,
+      'epoch rebuild unknown state',
+    )
+    expect(authority.submitted).toEqual([])
+    expect(authority.current).toBeNull()
+    await controller.reconcile(scope, accepted.attemptId)
+    await Bun.sleep(20)
+    expect(authority.submitted).toEqual([])
+    controller.close()
   } finally {
     store.close()
     await rm(root, { recursive: true, force: true })

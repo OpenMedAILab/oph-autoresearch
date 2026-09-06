@@ -20,6 +20,7 @@ function projection(job: DurableJob | null) {
   return job ? { ...job, outputPath: null, error: job.error ? 'worker-failure' : null } : null
 }
 const CLOSURE_KEYS = ['dispatchKey', 'expectedEpoch', 'specHash'] as const
+const SUBMISSION_KEYS = ['expectedEpoch', 'spec'] as const
 function isClosureRequest(value: unknown): value is {
   dispatchKey: string
   expectedEpoch: string
@@ -37,6 +38,30 @@ function isClosureRequest(value: unknown): value is {
     ) &&
     /^[A-Za-z0-9_-]{16,128}$/.test(String((value as Record<string, unknown>).expectedEpoch)) &&
     /^sha256:[a-f0-9]{64}$/.test(String((value as Record<string, unknown>).specHash))
+  )
+}
+function isEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value)
+}
+function isRecordWithExpectedEpoch(value: unknown): value is { expectedEpoch: string } {
+  return (
+    Boolean(value) &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>).length === 1 &&
+    isEpoch((value as Record<string, unknown>).expectedEpoch)
+  )
+}
+function isSubmissionRequest(value: unknown): value is { expectedEpoch: string; spec: unknown } {
+  return (
+    Boolean(value) &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>)
+      .sort()
+      .join(',') === SUBMISSION_KEYS.join(',') &&
+    isEpoch((value as Record<string, unknown>).expectedEpoch) &&
+    'spec' in (value as Record<string, unknown>)
   )
 }
 async function boundedJson(request: Request, maxBytes: number): Promise<unknown> {
@@ -114,13 +139,19 @@ export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
       )
         return new Response('unauthorized', { status: 401 })
       const url = new URL(request.url)
+      const authorityHeaders = () => ({
+        'x-oph-authority-id': authorityId,
+        'x-oph-authority-epoch': daemon.identity().epoch,
+      })
       const respond = (job: DurableJob | null, status = 200) =>
-        Response.json({ authorityId, job: projection(job) }, { status })
-      const authorityHeaders = { 'x-oph-authority-id': authorityId }
+        Response.json(
+          { authorityId, job: projection(job) },
+          { status, headers: authorityHeaders() },
+        )
       if (request.method === 'GET' && url.pathname === '/identity')
         return Response.json(
           { authorityId, identity: daemon.identity() },
-          { headers: authorityHeaders },
+          { headers: authorityHeaders() },
         )
       if (request.method === 'GET' && url.pathname === '/health')
         return Response.json({
@@ -139,45 +170,45 @@ export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
               : 'invalid request',
             {
               status: error instanceof Error && error.message === 'too_large' ? 413 : 400,
-              headers: authorityHeaders,
+              headers: authorityHeaders(),
             },
           )
         }
         if (!isClosureRequest(body))
-          return new Response('invalid request', { status: 400, headers: authorityHeaders })
+          return new Response('invalid request', { status: 400, headers: authorityHeaders() })
         try {
           return Response.json(
             { authorityId, proof: daemon.closeUnstarted(body) },
-            { headers: authorityHeaders },
+            { headers: authorityHeaders() },
           )
         } catch {
           return Response.json(
             { authorityId, error: 'operation_rejected' },
-            { status: 409, headers: authorityHeaders },
+            { status: 409, headers: authorityHeaders() },
           )
         }
       }
       if (request.method === 'POST' && url.pathname === '/submit') {
-        const length = Number(request.headers.get('content-length') ?? 0)
-        if (length > 65536) return new Response('too large', { status: 413 })
-        let text = ''
-        const reader = request.body?.getReader()
-        if (!reader) return new Response('invalid request', { status: 400 })
-        let bytes = 0
-        const chunks: Uint8Array[] = []
-        while (true) {
-          const result = await reader.read()
-          if (result.done) break
-          bytes += result.value.length
-          if (bytes > 65536) {
-            await reader.cancel()
-            return new Response('too large', { status: 413 })
-          }
-          chunks.push(result.value)
-        }
-        text = Buffer.concat(chunks).toString('utf8')
+        let body: unknown
         try {
-          const job = daemon.submit(JSON.parse(text))
+          body = await boundedJson(request, 65536)
+        } catch (error) {
+          return new Response(
+            error instanceof Error && error.message === 'too_large'
+              ? 'too large'
+              : 'invalid request',
+            {
+              status: error instanceof Error && error.message === 'too_large' ? 413 : 400,
+              headers: authorityHeaders(),
+            },
+          )
+        }
+        try {
+          // The object envelope is mandatory for v3.  Legacy v1/v2 raw specs
+          // remain readable by older clients and are accepted without a guard.
+          const job = isSubmissionRequest(body)
+            ? daemon.submit(body.spec, body.expectedEpoch)
+            : daemon.submit(body)
           void pump().catch(() => {})
           return respond(job)
         } catch {
@@ -191,11 +222,24 @@ export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
       const [, operation, key] = match
       daemon.reconcileInterrupted()
       if (request.method === 'GET' && operation === 'status') return respond(daemon.query(key!))
-      if (request.method === 'POST' && operation === 'cancel') return respond(daemon.cancel(key!))
+      if (request.method === 'POST' && operation === 'cancel') {
+        let body: unknown
+        try {
+          body = request.body ? await boundedJson(request, 4096) : {}
+        } catch {
+          return new Response('invalid request', { status: 400, headers: authorityHeaders() })
+        }
+        const expectedEpoch = isRecordWithExpectedEpoch(body) ? body.expectedEpoch : undefined
+        try {
+          return respond(daemon.cancel(key!, expectedEpoch))
+        } catch {
+          return respond(null, 409)
+        }
+      }
       if (request.method === 'GET' && operation === 'receipt') {
         try {
           return new Response(daemon.receipt(key!), {
-            headers: { 'content-type': 'application/json', 'x-oph-authority-id': authorityId },
+            headers: { 'content-type': 'application/json', ...authorityHeaders() },
           })
         } catch {
           return respond(null, 409)

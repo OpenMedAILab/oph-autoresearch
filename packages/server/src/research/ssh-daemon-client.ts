@@ -33,10 +33,10 @@ export interface SshDaemonAuthority {
   readonly trackingPolicyHash: string | undefined
   identity(): Promise<ResearchAuthorityIdentity>
   closeUnstarted(request: ResearchAuthorityClosureRequest): Promise<ResearchAuthorityClosureProof>
-  submit(spec: JobSpec): Promise<DurableJob>
-  query(dispatchKey: string): Promise<DurableJob | null>
-  cancel(dispatchKey: string): Promise<DurableJob | null>
-  receipt(dispatchKey: string): Promise<Uint8Array>
+  submit(spec: JobSpec, expectedEpoch?: string): Promise<DurableJob>
+  query(dispatchKey: string, expectedEpoch?: string): Promise<DurableJob | null>
+  cancel(dispatchKey: string, expectedEpoch?: string): Promise<DurableJob | null>
+  receipt(dispatchKey: string, expectedEpoch?: string): Promise<Uint8Array>
   reconcileInterrupted(): Promise<readonly DurableJob[]>
   hasAvailableSlot(): false
   launchWorker(): never
@@ -289,7 +289,7 @@ function responseJob(value: unknown, expected: JobSpec | undefined): DurableJob 
 class Client implements SshDaemonAuthority {
   readonly backendPolicyHash: string
   readonly trackingPolicyHash: string | undefined
-  private readonly bindings = new Map<string, JobSpec>()
+  private readonly bindings = new Map<string, { spec: JobSpec; epoch?: string }>()
   private tunnel: Tunnel | undefined
   private connecting: Promise<Tunnel> | undefined
   private closed = false
@@ -340,6 +340,7 @@ class Client implements SshDaemonAuthority {
     path: string,
     init: RequestInit = {},
     requireAuthorityHeader = false,
+    expectedEpoch?: string,
   ): Promise<Uint8Array> {
     let response: Response
     try {
@@ -361,6 +362,11 @@ class Client implements SshDaemonAuthority {
       response.headers.get('x-oph-authority-id') !== this.config.authorityId
     )
       throw new Error('SSH daemon authority header does not match')
+    if (
+      expectedEpoch !== undefined &&
+      response.headers.get('x-oph-authority-epoch') !== expectedEpoch
+    )
+      throw new Error('SSH daemon authority epoch does not match')
     const declared = Number(response.headers.get('content-length'))
     if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES)
       throw new Error('SSH daemon response exceeds the maximum size')
@@ -409,8 +415,9 @@ class Client implements SshDaemonAuthority {
     path: string,
     init: RequestInit,
     expected?: JobSpec,
+    expectedEpoch?: string,
   ): Promise<DurableJob | null> {
-    const body = await this.bytes(await this.endpoint(), path, init)
+    const body = await this.bytes(await this.endpoint(), path, init, false, expectedEpoch)
     let value: unknown
     try {
       value = JSON.parse(new TextDecoder().decode(body))
@@ -456,36 +463,52 @@ class Client implements SshDaemonAuthority {
     return responseClosureProof(value, this.config.authorityId, request)
   }
 
-  async submit(spec: JobSpec): Promise<DurableJob> {
-    const job = await this.envelope('/submit', { method: 'POST', body: JSON.stringify(spec) }, spec)
+  async submit(spec: JobSpec, expectedEpoch?: string): Promise<DurableJob> {
+    if (spec.version === 3 && !validEpoch(expectedEpoch))
+      throw new Error('CLI preparation submission requires an authority epoch')
+    const body =
+      expectedEpoch === undefined ? JSON.stringify(spec) : JSON.stringify({ expectedEpoch, spec })
+    const job = await this.envelope('/submit', { method: 'POST', body }, spec, expectedEpoch)
     if (!job || job.spec.dispatchKey !== spec.dispatchKey)
       throw new Error('SSH daemon did not confirm submission')
-    this.bindings.set(spec.dispatchKey, structuredClone(spec))
+    this.bindings.set(
+      spec.dispatchKey,
+      expectedEpoch === undefined
+        ? { spec: structuredClone(spec) }
+        : { spec: structuredClone(spec), epoch: expectedEpoch },
+    )
     return job
   }
 
-  query(dispatchKey: string): Promise<DurableJob | null> {
+  query(dispatchKey: string, expectedEpoch?: string): Promise<DurableJob | null> {
     if (!TEXT_ID.test(dispatchKey))
       return Promise.reject(new Error('invalid SSH daemon dispatch key'))
+    const binding = this.bindings.get(dispatchKey)
     return this.envelope(
       `/status/${encodeURIComponent(dispatchKey)}`,
       {},
-      this.bindings.get(dispatchKey),
+      binding?.spec,
+      expectedEpoch ?? binding?.epoch,
     )
   }
 
-  cancel(dispatchKey: string): Promise<DurableJob | null> {
+  cancel(dispatchKey: string, expectedEpoch?: string): Promise<DurableJob | null> {
     if (!TEXT_ID.test(dispatchKey))
       return Promise.reject(new Error('invalid SSH daemon dispatch key'))
+    const binding = this.bindings.get(dispatchKey)
+    const epoch = expectedEpoch ?? binding?.epoch
     return this.envelope(
       `/cancel/${encodeURIComponent(dispatchKey)}`,
-      { method: 'POST' },
-      this.bindings.get(dispatchKey),
+      { method: 'POST', body: JSON.stringify(epoch === undefined ? {} : { expectedEpoch: epoch }) },
+      binding?.spec,
+      epoch,
     )
   }
 
-  async receipt(dispatchKey: string): Promise<Uint8Array> {
-    const job = await this.query(dispatchKey)
+  async receipt(dispatchKey: string, expectedEpoch?: string): Promise<Uint8Array> {
+    const binding = this.bindings.get(dispatchKey)
+    const epoch = expectedEpoch ?? binding?.epoch
+    const job = await this.query(dispatchKey, epoch)
     if (!job || job.status !== 'completed' || !job.contentHash)
       throw new Error('SSH daemon receipt is not available')
     const bytes = await this.bytes(
@@ -493,6 +516,7 @@ class Client implements SshDaemonAuthority {
       `/receipt/${encodeURIComponent(dispatchKey)}`,
       {},
       true,
+      epoch,
     )
     if (hashBytes(bytes) !== job.contentHash)
       throw new Error('SSH daemon receipt does not match its job')

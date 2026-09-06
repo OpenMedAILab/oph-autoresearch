@@ -57,9 +57,9 @@ export interface DurableJob {
   error: string | null
 }
 export interface JobDaemonPort {
-  submit(spec: unknown): DurableJob
+  submit(spec: unknown, expectedEpoch?: string): DurableJob
   query(dispatchKey: string): DurableJob | null
-  cancel(dispatchKey: string): DurableJob | null
+  cancel(dispatchKey: string, expectedEpoch?: string): DurableJob | null
 }
 export interface JobDaemonEndpoint {
   endpoint: string
@@ -493,8 +493,12 @@ export class JobDaemon implements JobDaemonPort {
       }
     }, 250)
   }
-  submit(input: unknown): DurableJob {
+  submit(input: unknown, expectedEpoch?: string): DurableJob {
     const spec = parse(input)
+    if (isCliPreparationJob(spec) && expectedEpoch === undefined)
+      throw new Error('CLI preparation submission requires an authority epoch')
+    if (expectedEpoch !== undefined && expectedEpoch !== this.authorityEpoch)
+      throw new Error('authority epoch does not match')
     if (!isCliPreparationJob(spec)) {
       if (spec.trackingPolicyHash !== this.trackingPolicyHash)
         throw new Error('Tracking startup policy does not match JobSpec')
@@ -516,6 +520,11 @@ export class JobDaemon implements JobDaemonPort {
     }
     const specHash = hash(spec)
     const inserted = this.immediateTransaction(() => {
+      // This is deliberately inside the write transaction with the insert.  An
+      // identity read by a controller is only an observation; the authority that
+      // durably accepts work must also prove it is still that same epoch.
+      if (expectedEpoch !== undefined && expectedEpoch !== this.authorityEpoch)
+        throw new Error('authority epoch does not match')
       if (
         this.db
           .query('SELECT 1 FROM authority_closure_tombstones WHERE dispatch_key=?')
@@ -635,7 +644,8 @@ export class JobDaemon implements JobDaemonPort {
     let job = this.query(request.dispatchKey)
     if (!job || job.specHash !== request.specHash)
       throw new Error('authority closure changed during handling')
-    if (job.status === 'queued' || job.status === 'running') job = this.cancel(request.dispatchKey)
+    if (job.status === 'queued' || job.status === 'running')
+      job = this.cancel(request.dispatchKey, request.expectedEpoch)
     if (job?.status === 'completion_requested') this.reconcileInterrupted()
     job = this.query(request.dispatchKey)
     if (!job || job.specHash !== request.specHash)
@@ -649,19 +659,34 @@ export class JobDaemon implements JobDaemonPort {
       recordedAt: Date.now(),
     }
   }
-  cancel(dispatchKey: string): DurableJob | null {
-    const job = this.query(dispatchKey)
+  cancel(dispatchKey: string, expectedEpoch?: string): DurableJob | null {
+    const job = this.immediateTransaction(() => {
+      const current = row(
+        this.db.query('SELECT * FROM local_jobs WHERE dispatch_key = ?').get(dispatchKey) as Record<
+          string,
+          unknown
+        > | null,
+      )
+      if (!current) return null
+      if (isCliPreparationJob(current.spec) && expectedEpoch === undefined)
+        throw new Error('CLI preparation cancellation requires an authority epoch')
+      if (expectedEpoch !== undefined && expectedEpoch !== this.authorityEpoch)
+        throw new Error('authority epoch does not match')
+      if (current.status === 'queued')
+        this.db
+          .query(
+            "UPDATE local_jobs SET status='cancelled' WHERE dispatch_key=? AND status='queued'",
+          )
+          .run(dispatchKey)
+      if (current.status === 'running' || current.status === 'completion_requested')
+        this.db
+          .query(
+            "UPDATE local_jobs SET status='cancel_requested' WHERE dispatch_key=? AND status IN ('running','completion_requested')",
+          )
+          .run(dispatchKey)
+      return current
+    })
     if (!job) return null
-    if (job.status === 'queued')
-      this.db
-        .query("UPDATE local_jobs SET status='cancelled' WHERE dispatch_key=? AND status='queued'")
-        .run(dispatchKey)
-    if (job.status === 'running' || job.status === 'completion_requested')
-      this.db
-        .query(
-          "UPDATE local_jobs SET status='cancel_requested' WHERE dispatch_key=? AND status IN ('running','completion_requested')",
-        )
-        .run(dispatchKey)
     // The request is durable before any signal. Repeating cancel after a crash is
     // deliberately recovery, not a new grace period.
     if (this.query(dispatchKey)?.status === 'cancel_requested') this.recoverCleanup(dispatchKey)
@@ -689,7 +714,7 @@ export class JobDaemon implements JobDaemonPort {
         candidate.execution_deadline_at !== null &&
         Date.now() >= candidate.execution_deadline_at
       )
-        this.cancel(candidate.dispatch_key)
+        this.cancel(candidate.dispatch_key, this.authorityEpoch)
       if (candidate.status === 'cancel_requested' || candidate.status === 'completion_requested')
         this.recoverCleanup(candidate.dispatch_key)
       if (!candidate.worker_pid || !candidate.worker_start_identity) continue
@@ -916,9 +941,9 @@ export class JobDaemon implements JobDaemonPort {
       const deadline = job.executionDeadlineAt ?? job.spec.lease.expiresAt
       const lease = job.runtimeLease ?? job.spec.lease
       if (job.status === 'queued' && (Date.now() >= deadline || Date.now() >= lease.expiresAt))
-        this.cancel(job.spec.dispatchKey)
+        this.cancel(job.spec.dispatchKey, this.authorityEpoch)
       if (job.status === 'running' && (Date.now() >= deadline || Date.now() >= lease.expiresAt))
-        this.cancel(job.spec.dispatchKey)
+        this.cancel(job.spec.dispatchKey, this.authorityEpoch)
     }
   }
   receipt(dispatchKey: string): Uint8Array {
