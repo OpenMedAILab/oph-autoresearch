@@ -184,6 +184,10 @@ describe('durable localhost job daemon', () => {
     let observer: JobDaemon | undefined
     try {
       await waitFor(daemon, key, 'running')
+      // Model a restarted authority. The original process must not be left
+      // watching the shared database, or its genuine identity observation could
+      // legitimately reap this worker before the mismatched observer is tested.
+      daemon.close({ terminateWorkers: false })
       observer = new JobDaemon({
         dbPath: join(root, 'jobs.sqlite'),
         outputRoot: join(root, 'out'),
@@ -200,7 +204,6 @@ describe('durable localhost job daemon', () => {
       worker.kill()
       await worker.exited
       observer?.close()
-      daemon.close()
     }
   })
 

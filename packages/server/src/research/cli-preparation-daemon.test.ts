@@ -223,7 +223,7 @@ test('rejects unknown administrator adapters before launch', async () => {
   }
 })
 
-test('a restarted authority kills a started TERM-ignoring CLI group without a candidate', async () => {
+test('a restarted authority resumes a persisted cancellation cleanup without another cancel', async () => {
   let daemon: JobDaemon | undefined
   let restarted: JobDaemon | undefined
   const { root, daemon: first, cli } = await fixture('')
@@ -258,6 +258,10 @@ while :; do sleep 1; done
     const grandchildPid = await waitForPid(grandchildPidMarker)
     expect(processExists(cliPid)).toBe(true)
     expect(processExists(grandchildPid)).toBe(true)
+    // Persist and start cleanup, then model an authority crash which drops only
+    // its in-memory escalation timer. The new authority must resume on its own.
+    expect(daemon.cancel(cancelled.dispatchKey)?.status).toBe('cancel_requested')
+    expect(daemon.query(cancelled.dispatchKey)?.cleanupStartedAt).toBeNumber()
     daemon.close({ terminateWorkers: false })
     daemon = undefined
     restarted = new JobDaemon({
@@ -265,7 +269,15 @@ while :; do sleep 1; done
       outputRoot: join(root, 'output'),
       cliPreparation: adminConfig(root, cli),
     })
-    expect(restarted.cancel(cancelled.dispatchKey)?.status).toBe('cancel_requested')
+    const cleanupStartedAt = restarted.query(cancelled.dispatchKey)?.cleanupStartedAt
+    expect(cleanupStartedAt).toBeNumber()
+    // Frequent recovery pumps are not a renewed grace period. They must share
+    // the first persisted deadline and still escalate this TERM-ignoring tree.
+    for (let i = 0; i < 7; i++) {
+      restarted.reconcileInterrupted()
+      await Bun.sleep(25)
+    }
+    expect(restarted.query(cancelled.dispatchKey)?.cleanupStartedAt).toBe(cleanupStartedAt)
     await cancelWorker.exited
     await waitFor(restarted, cancelled.dispatchKey, 'cancelled')
     expect(processExists(cliPid)).toBe(false)
@@ -273,6 +285,61 @@ while :; do sleep 1; done
     expect(
       await Bun.file(join(root, 'output', cancelled.dispatchKey, 'candidate.json')).exists(),
     ).toBe(false)
+  } finally {
+    daemon?.close()
+    restarted?.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a restarted authority completes a durable receipt after lost completion cleanup', async () => {
+  let daemon: JobDaemon | undefined
+  let restarted: JobDaemon | undefined
+  const event = JSON.stringify({
+    type: 'item.completed',
+    item: { type: 'agent_message', text: JSON.stringify({ code: 'export const candidate = 3' }) },
+  })
+  const {
+    root,
+    daemon: first,
+    cli,
+  } = await fixture((fixtureRoot) => {
+    const cliMarker = join(fixtureRoot, 'recovery-completion-cli.pid')
+    const childMarker = join(fixtureRoot, 'recovery-completion-grandchild.pid')
+    return `#!/bin/sh
+ echo $$ > '${cliMarker}'
+ /bin/sh -c 'trap "" TERM; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+ echo $! > '${childMarker}'
+ printf '%s\n' '${event}'
+ `
+  })
+  daemon = first
+  try {
+    const job = spec('prep-completion-recovery')
+    bindAdmittedAdapter(job, cli)
+    daemon.submit(job)
+    const worker = await daemon.launchWorker(job.dispatchKey)
+    const cliPid = await waitForPid(join(root, 'recovery-completion-cli.pid'))
+    const grandchildPid = await waitForPid(join(root, 'recovery-completion-grandchild.pid'))
+    await waitFor(daemon, job.dispatchKey, 'completion_requested')
+    expect(daemon.query(job.dispatchKey)?.cleanupStartedAt).toBeNumber()
+    // The receipt is already verified and durable. Simulate a crash before its
+    // transient TERM→KILL callback can complete the group cleanup.
+    daemon.close({ terminateWorkers: false })
+    daemon = undefined
+    restarted = new JobDaemon({
+      dbPath: join(root, 'jobs.sqlite'),
+      outputRoot: join(root, 'output'),
+      cliPreparation: adminConfig(root, cli),
+    })
+    await worker.exited
+    await waitFor(restarted, job.dispatchKey, 'completed')
+    await waitForExit(cliPid)
+    await waitForExit(grandchildPid)
+    const receipt = JSON.parse(
+      (await readFile(join(root, 'output', job.dispatchKey, 'candidate.json'))).toString(),
+    )
+    expect(verifyCandidateReceipt(receipt, job)).toBe(true)
   } finally {
     daemon?.close()
     restarted?.close()

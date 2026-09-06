@@ -43,6 +43,8 @@ export interface DurableJob {
   runtimeLease?: JobSpec['lease']
   executionDeadlineAt?: number
   workerHeartbeatAt?: number
+  /** First durable request to reap this job's confirmed process group. */
+  cleanupStartedAt?: number
   status: JobStatus
   outputPath: string | null
   contentHash: string | null
@@ -283,6 +285,9 @@ function row(value: Record<string, unknown> | null): DurableJob | null {
         ...(typeof value.worker_heartbeat_at === 'number'
           ? { workerHeartbeatAt: value.worker_heartbeat_at }
           : {}),
+        ...(typeof value.cleanup_started_at === 'number'
+          ? { cleanupStartedAt: value.cleanup_started_at }
+          : {}),
         status: value.status as JobStatus,
         outputPath: value.output_path as string | null,
         contentHash: value.content_hash as string | null,
@@ -441,6 +446,8 @@ export class JobDaemon implements JobDaemonPort {
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_pgid INTEGER')
     if (!columns.some((c) => c.name === 'worker_start_identity'))
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_start_identity TEXT')
+    if (!columns.some((c) => c.name === 'cleanup_started_at'))
+      this.db.exec('ALTER TABLE local_jobs ADD COLUMN cleanup_started_at INTEGER')
     // Authority-owned watchdog: localhost jobs must not depend on a reconnecting observer.
     this.watchdog = setInterval(() => {
       if (!this.closed) {
@@ -516,14 +523,15 @@ export class JobDaemon implements JobDaemonPort {
       this.db
         .query("UPDATE local_jobs SET status='cancelled' WHERE dispatch_key=? AND status='queued'")
         .run(dispatchKey)
-    if (job.status === 'running' || job.status === 'completion_requested') {
+    if (job.status === 'running' || job.status === 'completion_requested')
       this.db
         .query(
           "UPDATE local_jobs SET status='cancel_requested' WHERE dispatch_key=? AND status IN ('running','completion_requested')",
         )
         .run(dispatchKey)
-      this.stopWorkerTree(dispatchKey)
-    }
+    // The request is durable before any signal. Repeating cancel after a crash is
+    // deliberately recovery, not a new grace period.
+    if (this.query(dispatchKey)?.status === 'cancel_requested') this.recoverCleanup(dispatchKey)
     return this.query(dispatchKey)
   }
   reconcileInterrupted(): DurableJob[] {
@@ -547,6 +555,8 @@ export class JobDaemon implements JobDaemonPort {
       ) {
         this.cancel(candidate.dispatch_key)
       }
+      if (candidate.status === 'cancel_requested' || candidate.status === 'completion_requested')
+        this.recoverCleanup(candidate.dispatch_key)
       if (!candidate.worker_pid || !candidate.worker_start_identity) continue
       const identity = this.processIdentityState(
         candidate.worker_pid,
@@ -735,7 +745,7 @@ export class JobDaemon implements JobDaemonPort {
     // A CLI may exit while a deliberately detached descendant survives with all
     // standard streams closed. Keep the receipt durable, then terminate the
     // verified job group before treating that receipt as a completed authority run.
-    if (completion && isCliPreparationJob(completion.spec)) this.stopWorkerTree(key)
+    if (completion && isCliPreparationJob(completion.spec)) this.recoverCleanup(key)
     return completion
   }
   private authorized(request: Request) {
@@ -832,18 +842,46 @@ export class JobDaemon implements JobDaemonPort {
       worker_start_identity: string | null
     } | null
   }
-  private stopWorkerTree(dispatchKey: string) {
+  /**
+   * Rebuild the authority-owned TERM→KILL cleanup after a restart.  Its deadline
+   * is persisted before signalling, so watchdog polls and repeated recovery never
+   * buy a TERM-ignoring child another grace period.  A missing or changed leader
+   * is intentionally left pending: a PGID is only safe while its recorded leader
+   * still proves ownership.
+   */
+  private recoverCleanup(dispatchKey: string) {
+    let job = this.query(dispatchKey)
+    if (job?.status !== 'cancel_requested' && job?.status !== 'completion_requested') return
+    if (job.cleanupStartedAt === undefined) {
+      this.db
+        .query(
+          "UPDATE local_jobs SET cleanup_started_at=? WHERE dispatch_key=? AND status IN ('cancel_requested','completion_requested') AND cleanup_started_at IS NULL",
+        )
+        .run(Date.now(), dispatchKey)
+      job = this.query(dispatchKey)
+      if (job?.status !== 'cancel_requested' && job?.status !== 'completion_requested') return
+    }
+    const startedAt = job.cleanupStartedAt
+    if (startedAt === undefined) return
+    const remainingMs = startedAt + 250 - Date.now()
+    const existing = this.escalationTimers.get(dispatchKey)
+    if (remainingMs <= 0) {
+      if (existing) {
+        clearTimeout(existing)
+        this.escalationTimers.delete(dispatchKey)
+      }
+      const identity = this.persistedWorkerIdentity(dispatchKey)
+      if (identity) this.signalOwnedWorker(identity, 'SIGKILL')
+      return
+    }
+    // A timer already uses the immutable persisted deadline. Do not reset it.
+    if (existing) return
     const identity = this.persistedWorkerIdentity(dispatchKey)
     if (!identity || !this.signalOwnedWorker(identity, 'SIGTERM')) return
-    const prior = this.escalationTimers.get(dispatchKey)
-    if (prior) clearTimeout(prior)
     const timer = setTimeout(() => {
       this.escalationTimers.delete(dispatchKey)
-      const job = this.query(dispatchKey)
-      if (job?.status !== 'cancel_requested' && job?.status !== 'completion_requested') return
-      const latest = this.persistedWorkerIdentity(dispatchKey)
-      if (latest) this.signalOwnedWorker(latest, 'SIGKILL')
-    }, 250)
+      this.recoverCleanup(dispatchKey)
+    }, remainingMs)
     this.escalationTimers.set(dispatchKey, timer)
   }
   private processGroupAlive(pgid: number): boolean {
