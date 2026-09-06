@@ -485,12 +485,37 @@ export type ResearchCommand =
       validation: SyntheticCompletionValidation
     }
   | { kind: 'bindSyntheticJob'; attemptId: string; spec: ResearchJobSpec }
-  | { kind: 'markSyntheticUnknown'; attemptId: string; reason: string }
-  | { kind: 'resumeSyntheticObservation'; attemptId: string; jobSpecHash: string }
-  | { kind: 'failSynthetic'; attemptId: string; error: string }
+  | {
+      kind: 'markSyntheticUnknown'
+      attemptId: string
+      reason: string
+      observer?: CliPreparationObserverIdentity
+    }
+  | {
+      kind: 'resumeSyntheticObservation'
+      attemptId: string
+      jobSpecHash: string
+      observer?: CliPreparationObserverIdentity
+    }
+  | {
+      kind: 'failSynthetic'
+      attemptId: string
+      error: string
+      observer?: CliPreparationObserverIdentity
+    }
   | { kind: 'requestCancelSynthetic'; attemptId: string }
-  | { kind: 'interruptSynthetic'; attemptId: string; reason: string }
-  | { kind: 'recoverSynthetic'; attemptId: string; reason: string }
+  | {
+      kind: 'interruptSynthetic'
+      attemptId: string
+      reason: string
+      observer?: CliPreparationObserverIdentity
+    }
+  | {
+      kind: 'recoverSynthetic'
+      attemptId: string
+      reason: string
+      observer?: CliPreparationObserverIdentity
+    }
 
 export interface ResearchEvent {
   id: string
