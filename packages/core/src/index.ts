@@ -145,6 +145,7 @@ export {
   type ResearchJsonValue,
   type ResearchLiteratureCitation,
   type ResearchModelReview,
+  type ResearchProgressControl,
   type ResearchStage,
   type ResearchStatus,
   type ResearchTaskRevision,

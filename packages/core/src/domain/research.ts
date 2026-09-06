@@ -290,7 +290,15 @@ export interface ResearchLiteratureCitation {
   fullText: false
 }
 
+export interface ResearchProgressControl {
+  mode: 'manual'
+  state: 'active' | 'held'
+  generation: number
+}
+
 export interface ResearchCampaign {
+  /** Missing on historical campaigns means manual, active, generation zero. */
+  progressControl?: ResearchProgressControl
   cliPreparations?: ResearchCliPreparation[]
   pattern?: { contractHash: string; plan: ResearchJsonObject; taskRevisionIds: string[] }
   patternHistory?: Array<{
@@ -321,6 +329,7 @@ export interface ResearchCampaign {
 }
 
 export type ResearchCommand =
+  | { kind: 'setResearchProgress'; state: 'active' | 'held'; expectedGeneration: number }
   | {
       kind: 'applyResearchPattern'
       contractHash: string
