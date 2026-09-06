@@ -156,6 +156,22 @@ export class FormalExecutionController {
     const plan = before.formalExecutionPlans?.find((item) => item.planId === input.planId)
     if (!plan) throw new FormalExecutionControlError('正式计划不存在', 404)
     const route = this.routeFor(plan, input.routeId)
+    const existing = before.formalExecutionDispatches?.find((item) => item.planId === plan.planId)
+    if (existing) {
+      if (
+        existing.routeId !== route.id ||
+        existing.profileId !== route.profileId ||
+        existing.workspaceBindingHash !== plan.workspaceBindingHash ||
+        existing.connectionHash !== route.connectionHash ||
+        existing.remoteRoot !== route.remoteRoot ||
+        existing.authorityId !== route.authorityId ||
+        existing.admissionEvidenceHash !== route.admissionEvidenceHash ||
+        !existing.attemptId
+      )
+        throw new FormalExecutionControlError('原正式执行绑定不可重放；不会改投或重建规格')
+      void this.observe(scope, existing.attemptId, route)
+      return { campaign: before, attemptId: existing.attemptId, replayed: true }
+    }
     const identity = await route.authority.identity()
     if (identity.schema !== 'research-authority-identity-v1' || !EPOCH.test(identity.epoch))
       throw new FormalExecutionControlError('正式执行 authority 身份无效；不会投递')
