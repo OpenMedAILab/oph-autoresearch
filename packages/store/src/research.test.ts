@@ -722,6 +722,82 @@ describe('research campaign ledger', () => {
     expect(getResearchCampaign(store, campaign.id)).toEqual(campaign)
     store.close()
   })
+
+  test('fences an expired CLI preparation observer without waiting for a process', () => {
+    const store = fresh()
+    const base = created(store).campaign
+    const now = 1_700_000_000_000
+    const attempt = {
+      id: 'rat_fenced',
+      taskRevisionId: 'task',
+      dispatchKey: 'dispatch',
+      ownerPid: 1,
+      backend: 'ssh-daemon' as const,
+      backendPolicyHash: CONTENT_HASH,
+      cliPreparationJobSpecHash: CONTENT_HASH,
+      status: 'running' as const,
+      executionStartedAt: now,
+      endedAt: null,
+      artifactVersionId: null,
+      error: null,
+      cancelRequestedAt: null,
+      cliPreparationAuthority: {
+        schema: 'cli-preparation-authority-binding-v1' as const,
+        epoch: 'authority_epoch_0001',
+        backendPolicyHash: CONTENT_HASH,
+        jobSpecHash: CONTENT_HASH,
+        dispatchState: 'acknowledged' as const,
+        observer: { instanceId: 'ownerA', generation: 1, expiresAt: now + 10 },
+      },
+    }
+    store.db
+      .query('UPDATE research_campaigns SET snapshot = ? WHERE id = ?')
+      .run(JSON.stringify({ ...base, attempts: [attempt] }), base.id)
+    const originalNow = Date.now
+    Date.now = () => now + 11
+    try {
+      const acquired = mutateResearchCampaign(store, base.id, {
+        expectedVersion: base.version,
+        idempotencyKey: 'owner-b',
+        command: {
+          kind: 'acquireCliPreparationObservation',
+          attemptId: attempt.id,
+          instanceId: 'ownerB',
+          expectedEpoch: attempt.cliPreparationAuthority.epoch,
+          expectedJobSpecHash: CONTENT_HASH,
+          leaseExpiresAt: now + 100,
+        },
+      })
+      expect(acquired.ok).toBe(true)
+      if (!acquired.ok) return
+      const stale = mutateResearchCampaign(store, base.id, {
+        expectedVersion: acquired.campaign.version,
+        idempotencyKey: 'owner-a-terminal',
+        command: {
+          kind: 'markSyntheticUnknown',
+          attemptId: attempt.id,
+          reason: 'stale',
+          observer: { instanceId: 'ownerA', generation: 1 },
+        },
+      })
+      expect(stale.ok).toBe(false)
+      const current = getResearchCampaign(store, base.id)!
+      const allowed = mutateResearchCampaign(store, base.id, {
+        expectedVersion: current.version,
+        idempotencyKey: 'owner-b-terminal',
+        command: {
+          kind: 'markSyntheticUnknown',
+          attemptId: attempt.id,
+          reason: 'current',
+          observer: { instanceId: 'ownerB', generation: 2 },
+        },
+      })
+      expect(allowed.ok).toBe(true)
+    } finally {
+      Date.now = originalNow
+      store.close()
+    }
+  })
 })
 
 test('approval display is bound to the ledger research title and exact task revision', () => {
