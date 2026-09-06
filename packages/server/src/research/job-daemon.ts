@@ -15,6 +15,7 @@ export type JobStatus =
   | 'queued'
   | 'running'
   | 'cancel_requested'
+  | 'completion_requested'
   | 'completed'
   | 'cancelled'
   | 'failed'
@@ -197,6 +198,7 @@ export class JobDaemon implements JobDaemonPort {
   private readonly outputRootRealpath: string
   private readonly executionRuntimeMs: number | undefined
   private readonly renewalMs: number
+  private readonly watchdog: ReturnType<typeof setInterval>
 
   constructor(opts: {
     dbPath: string
@@ -238,6 +240,13 @@ export class JobDaemon implements JobDaemonPort {
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_heartbeat_at INTEGER')
     if (!columns.some((c) => c.name === 'worker_pgid'))
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_pgid INTEGER')
+    // Authority-owned watchdog: localhost jobs must not depend on a reconnecting observer.
+    this.watchdog = setInterval(() => {
+      if (!this.closed) {
+        this.enforceRuntimeLimits()
+        this.reconcileInterrupted()
+      }
+    }, 250)
   }
   submit(input: unknown): DurableJob {
     const spec = parse(input)
@@ -294,7 +303,7 @@ export class JobDaemon implements JobDaemonPort {
   reconcileInterrupted(): DurableJob[] {
     const candidates = this.db
       .query(
-        "SELECT dispatch_key,status,worker_pid,worker_pgid,execution_deadline_at,runtime_lease FROM local_jobs WHERE status IN ('running','cancel_requested')",
+        "SELECT dispatch_key,status,worker_pid,worker_pgid,execution_deadline_at,runtime_lease FROM local_jobs WHERE status IN ('running','cancel_requested','completion_requested')",
       )
       .all() as { dispatch_key: string; status: string; worker_pid: number | null; worker_pgid: number | null; execution_deadline_at: number | null; runtime_lease: string | null }[]
     for (const candidate of candidates) {
@@ -312,8 +321,14 @@ export class JobDaemon implements JobDaemonPort {
       this.db
         .query('UPDATE local_jobs SET status=?, error=? WHERE dispatch_key=? AND status=?')
         .run(
-          candidate.status === 'cancel_requested' ? 'cancelled' : 'interrupted',
-          'worker process exit confirmed; no automatic redispatch',
+          candidate.status === 'cancel_requested'
+            ? 'cancelled'
+            : candidate.status === 'completion_requested'
+              ? 'completed'
+              : 'interrupted',
+          candidate.status === 'completion_requested'
+            ? null
+            : 'worker process exit confirmed; no automatic redispatch',
           candidate.dispatch_key,
           candidate.status,
         )
@@ -332,6 +347,7 @@ export class JobDaemon implements JobDaemonPort {
       !Number.isSafeInteger(workerPid) ||
       workerPid < 1 ||
       Date.now() >= (job.executionDeadlineAt ?? job.spec.lease.expiresAt) ||
+      Date.now() >= (job.runtimeLease ?? job.spec.lease).expiresAt ||
       !leaseMatches(job.runtimeLease ?? job.spec.lease, lease)
     )
       return null
@@ -430,10 +446,10 @@ export class JobDaemon implements JobDaemonPort {
     if (!verified) return null
     this.db
       .query(
-        "UPDATE local_jobs SET status='completed', content_hash=?, output_path=? WHERE dispatch_key=? AND status='running'",
+        "UPDATE local_jobs SET status='completion_requested', content_hash=?, output_path=? WHERE dispatch_key=? AND status='running'",
       )
       .run(verified.contentHash, verified.outputPath, key)
-    return this.query(key)?.status === 'completed' ? this.query(key) : null
+    return this.query(key)
   }
   private authorized(request: Request) {
     const token = request.headers.get('authorization')?.replace(/^Bearer /, '')
@@ -446,14 +462,14 @@ export class JobDaemon implements JobDaemonPort {
   }
   hasAvailableSlot(): boolean {
     return !this.db
-      .query("SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested') LIMIT 1")
+      .query("SELECT 1 FROM local_jobs WHERE status IN ('running','cancel_requested','completion_requested') LIMIT 1")
       .get()
   }
   pendingJobs(): DurableJob[] {
     return (
       this.db
         .query(
-          "SELECT dispatch_key FROM local_jobs WHERE status IN ('queued','running','cancel_requested') ORDER BY rowid",
+          "SELECT dispatch_key FROM local_jobs WHERE status IN ('queued','running','cancel_requested','completion_requested') ORDER BY rowid",
         )
         .all() as Array<{ dispatch_key: string }>
     )
@@ -578,11 +594,13 @@ export class JobDaemon implements JobDaemonPort {
       if (this.closed) return
       const job = this.query(dispatchKey)
       if (job?.status === 'cancel_requested') this.cancelAcknowledged(dispatchKey, job.runtimeLease ?? job.spec.lease)
+      if (job?.status === 'completion_requested') this.reconcileInterrupted()
     })
     return child
   }
   close() {
     this.closed = true
+    clearInterval(this.watchdog)
     for (const [key] of this.workers) this.stopWorkerTree(key)
     this.workers.clear()
     this.stopHttp()

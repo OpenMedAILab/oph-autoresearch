@@ -67,23 +67,28 @@ export async function runResearchJobWorker(args: readonly string[]) {
   const claimedJob = (await claimed.json()) as WorkerJob
   let runtimeLease = claimedJob.runtimeLease ?? job.spec.lease
   let stopped = false
+  let heartbeatInFlight = Promise.resolve()
   // Heartbeats only change authority runtime state. The JobSpec and its hash stay immutable.
-  const heartbeat = setInterval(() => {
+  const renew = () => {
     if (stopped) return
-    void request(`/renew/${encodeURIComponent(dispatchKey)}`, {
-      method: 'POST',
-      body: JSON.stringify({ lease: runtimeLease }),
-    })
-      .then(async (response) => {
+    heartbeatInFlight = heartbeatInFlight
+      .then(async () => {
+        const response = await request(`/renew/${encodeURIComponent(dispatchKey)}`, {
+          method: 'POST', body: JSON.stringify({ lease: runtimeLease }),
+        })
         if (!response.ok) return
         const renewed = (await response.json()) as WorkerJob
         if (renewed.runtimeLease) runtimeLease = renewed.runtimeLease
       })
       .catch(() => {})
+  }
+  const heartbeat = setInterval(() => {
+    renew()
   }, 1_000)
-  const done = () => {
+  const done = async () => {
     stopped = true
     clearInterval(heartbeat)
+    await heartbeatInFlight
   }
   try {
   if (process.env.JOB_DAEMON_WORKER_WAIT_AFTER_CLAIM === '1') await Bun.sleep(60_000)
@@ -121,6 +126,8 @@ export async function runResearchJobWorker(args: readonly string[]) {
   verifyTrackingBinding(bytes, job.spec)
   plan.verify(bytes)
   await writeFile(path, bytes, { flag: 'wx' })
+  // Serialize the last renewal before finalizing so a late heartbeat cannot race finish.
+  await heartbeatInFlight
   const finish = await request(`/finish/${encodeURIComponent(dispatchKey)}`, {
     method: 'POST',
     body: JSON.stringify({
@@ -130,7 +137,7 @@ export async function runResearchJobWorker(args: readonly string[]) {
   })
   return finish.ok ? 0 : 6
   } finally {
-    done()
+    await done()
   }
 }
 

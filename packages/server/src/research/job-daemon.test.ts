@@ -107,6 +107,13 @@ describe('durable localhost job daemon', () => {
     daemon.close()
   })
 
+  test('localhost authority expires queued work without an observer or remote service pump', async () => {
+    const { daemon } = await fresh()
+    daemon.submit(spec('local-watchdog', 1, 'synthetic-summary-v1', Date.now() + 20))
+    await waitFor(daemon, 'local-watchdog', 'cancelled')
+    daemon.close()
+  })
+
   test('runs the fixed registry plans in real workers and verifies their contract bytes', async () => {
     const { daemon } = await fresh()
     daemon.submit(spec('summary-completes'))

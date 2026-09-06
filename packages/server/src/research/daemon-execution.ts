@@ -100,6 +100,15 @@ export async function executeDaemonAttempt(input: {
     if (cancellationIsPersisted())
       void Promise.resolve(daemon.cancel(spec.dispatchKey)).catch(() => {})
   }
+  const observerAbort = new Promise<'observer_abort'>((resolve) => {
+    input.signal.addEventListener(
+      'abort',
+      () => {
+        if (!cancellationIsPersisted()) resolve('observer_abort')
+      },
+      { once: true },
+    )
+  })
   input.signal.addEventListener('abort', cancelIfPersisted)
   try {
     await daemon.submit(spec)
@@ -141,8 +150,11 @@ export async function executeDaemonAttempt(input: {
           new Promise<'deadline'>(resolve => {
             timer = setTimeout(() => resolve('deadline'), Math.max(1, deadline - Date.now()))
           }),
+          observerAbort,
         ])
         if (timer) clearTimeout(timer)
+        if (outcome === 'observer_abort')
+          return { status: 'unknown', reason: 'Local observer stopped before a terminal authority observation' }
         if (outcome === 'deadline')
           return { status: 'unknown', reason: 'Execution deadline elapsed; terminal authority observation pending' }
         await daemon.reconcileInterrupted()
@@ -150,7 +162,9 @@ export async function executeDaemonAttempt(input: {
         // This attempt owns the newly submitted job; only observation follows a lost worker acknowledgement.
         await daemon.reconcileInterrupted()
       }
-      await Bun.sleep(25)
+      if (Date.now() >= (job.executionDeadlineAt ?? spec.lease.expiresAt))
+        return { status: 'unknown', reason: 'Execution deadline elapsed; terminal authority observation pending' }
+      await Bun.sleep(250)
     }
   } finally {
     input.signal.removeEventListener('abort', cancelIfPersisted)
