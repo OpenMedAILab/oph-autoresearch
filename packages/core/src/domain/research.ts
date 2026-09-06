@@ -273,6 +273,7 @@ export interface SyntheticCompletionValidation {
 }
 
 export interface ResearchModelReview {
+  executionOutcome?: 'completed' | 'failed'
   sourceContextVersion?: 1 | 2
   executionBackend?: 'builtin-session' | 'builtin-cli'
   /** Derived against current evidence; execution status remains historical. */
