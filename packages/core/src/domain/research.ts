@@ -128,6 +128,9 @@ export interface ResearchApprovalScope {
     | 'release'
     | 'cost_settlement'
   costEvidenceId?: string
+  costEvidenceHash?: string
+  costSubjectLabel?: string
+  costDescription?: string
   costSubject?: ResearchCostSubject
   costAmount?: number
   evidencePackHash?: string

@@ -7,6 +7,7 @@ export interface ResearchCostEvidence {
   subject: ResearchCostSubject
   currency: string
   amount: number
+  description: string
   sourceHash: string
   source: 'human-attestation' | 'provider-receipt'
   recordedAt: number
