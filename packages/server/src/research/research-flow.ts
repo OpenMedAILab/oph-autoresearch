@@ -6,7 +6,7 @@ import type {
 import { parseModelReview } from './review-contract.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
 
-const FLOW_SCHEMA = 'research-flow-v2' as const
+const FLOW_SCHEMA = 'research-pattern-v2' as const
 const PATTERN_ID = 'synthetic-study-v1' as const
 type GateKind = 'none' | 'human_approval'
 type NodeRole =
@@ -29,7 +29,9 @@ export interface ResearchFlowNode {
   dependsOn: readonly string[]
   inputSlots: readonly string[]
   outputSchema: string
-  validatorHash: string
+  /** No validator implementation exists yet, so no source hash is claimed. */
+  validatorHash: null
+  validationCapability: 'planned'
   gateKind: GateKind
   /** This compiler describes a future bounded route; it does not register one. */
   executionCapability: 'planned'
@@ -62,9 +64,25 @@ export interface ResearchFlowProjectionNode {
   id: ResearchFlowNode['id']
   state: 'blocked' | 'ready' | 'waiting_human' | 'in_flight' | 'satisfied'
   freshness: 'current' | 'stale'
+  /** Existing fixed-template facts are mapped separately from this planned v2 node. */
+  legacyEvidence: 'none' | 'current_receipt_mapping' | 'stale_receipt_mapping'
   readableTitle: string
   explanation: string
   nextActions: readonly ResearchFlowAction[]
+}
+
+/**
+ * API code may pass verified document reads from readResearchDocuments. Omission
+ * intentionally means no document is trusted by this pure projection.
+ */
+export interface ProjectionEvidenceInput {
+  documents?: readonly {
+    id: string
+    kind: 'study' | 'manuscript' | 'skillcandidate'
+    contentHash: string
+    verified: boolean
+    stale: boolean
+  }[]
 }
 
 export interface ResearchFlowProjection {
@@ -97,9 +115,8 @@ function staticNode(
     dependsOn: Object.freeze([...dependsOn]),
     inputSlots: Object.freeze([...inputSlots]),
     outputSchema,
-    validatorHash: sha256(
-      canonicalJson({ handler, inputSlots, outputSchema, schema: 'validator-v1' }),
-    ),
+    validatorHash: null,
+    validationCapability: 'planned' as const,
     gateKind,
     executionCapability: 'planned' as const,
   })
@@ -195,9 +212,18 @@ function currentScientificArtifact(
   return artifact
 }
 function nodeTask(campaign: ResearchCampaign, node: 'experiment' | 'evaluation') {
-  return campaign.taskRevisions
-    .filter((task) => task.stageId === node)
-    .toSorted((left, right) => right.revision - left.revision)[0]
+  const latest = (stageId: 'experiment' | 'evaluation') =>
+    campaign.taskRevisions
+      .filter((task) => task.stageId === stageId)
+      .toSorted((left, right) => right.revision - left.revision)[0]
+  const direct = latest(node)
+  if (direct) return { task: direct, legacyEvidence: 'current_receipt_mapping' as const }
+  // The current ledger has fixed synthetic evaluation receipts, not a distinct
+  // experiment stage. Map that existing fact visibly; never claim it ran v2.
+  const legacy = node === 'experiment' ? latest('evaluation') : undefined
+  return legacy
+    ? { task: legacy, legacyEvidence: 'current_receipt_mapping' as const }
+    : { task: undefined, legacyEvidence: 'none' as const }
 }
 function dependencyHash(campaign: ResearchCampaign, node: string, reasons: readonly string[]) {
   return sha256(
@@ -228,6 +254,7 @@ function projected(
   id: ResearchFlowNode['id'],
   state: ResearchFlowProjectionNode['state'],
   freshness: ResearchFlowProjectionNode['freshness'],
+  legacyEvidence: ResearchFlowProjectionNode['legacyEvidence'],
   readableTitle: string,
   explanation: string,
   nextActions: readonly ResearchFlowAction[] = [],
@@ -236,18 +263,23 @@ function projected(
     id,
     state,
     freshness,
+    legacyEvidence,
     readableTitle,
     explanation,
     nextActions: Object.freeze([...nextActions]),
   })
 }
-function studyCurrent(campaign: ResearchCampaign) {
-  return campaign.artifactVersions.some(
-    (artifact) =>
-      artifact.artifactId === 'document-study' &&
+function studyCurrent(campaign: ResearchCampaign, evidence: ProjectionEvidenceInput) {
+  return (evidence.documents ?? []).some((document) => {
+    if (document.kind !== 'study' || !document.verified || document.stale) return false
+    const artifact = campaign.artifactVersions.find((candidate) => candidate.id === document.id)
+    return (
+      artifact?.artifactId === 'document-study' &&
       artifact.kind === 'research-document-study' &&
-      latestArtifact(campaign, artifact),
-  )
+      artifact.contentHash === document.contentHash &&
+      latestArtifact(campaign, artifact)
+    )
+  })
 }
 function activeApproval(campaign: ResearchCampaign, kind: 'model_review' | 'release', now: number) {
   return campaign.approvals.some(
@@ -259,6 +291,15 @@ function activeApproval(campaign: ResearchCampaign, kind: 'model_review' | 'rele
       approval.scope.expiresAt > now,
   )
 }
+function currentArtifactById(campaign: ResearchCampaign, id: string) {
+  const artifact = campaign.artifactVersions.find((candidate) => candidate.id === id)
+  const task = artifact?.producerTaskRevisionId
+    ? campaign.taskRevisions.find((candidate) => candidate.id === artifact.producerTaskRevisionId)
+    : undefined
+  return artifact && task && currentScientificArtifact(campaign, task)?.id === artifact.id
+    ? artifact
+    : null
+}
 function reviewState(campaign: ResearchCampaign, evaluation: ArtifactVersion | null) {
   const reviews = campaign.modelReviews ?? []
   const active = reviews.find((review) =>
@@ -266,34 +307,45 @@ function reviewState(campaign: ResearchCampaign, evaluation: ArtifactVersion | n
   )
   if (active)
     return { kind: 'in_flight' as const, supported: false, reasons: ['独立复核仍在进行或状态未知'] }
-  const done = reviews.find((review) => review.status === 'done')
-  if (!done)
+  const completed = reviews.filter((review) => review.status === 'done')
+  if (completed.length === 0)
     return { kind: 'missing' as const, supported: false, reasons: ['尚无完成的独立证据复核'] }
-  if (
-    done.sourceValidity !== 'current' ||
-    !evaluation ||
-    !done.artifactVersionIds.includes(evaluation.id)
-  )
+  let insufficient = false
+  let stale = false
+  for (const review of completed) {
+    if (
+      review.sourceValidity !== 'current' ||
+      !evaluation ||
+      !review.text ||
+      review.contentHash !== sha256(review.text) ||
+      !review.artifactVersionIds.includes(evaluation.id) ||
+      review.artifactVersionIds.some((id) => !currentArtifactById(campaign, id))
+    ) {
+      stale = true
+      continue
+    }
+    try {
+      const map = parseModelReview(review.text, review.artifactVersionIds)
+      if (!map.claims.some((claim) => claim.artifactVersionIds.includes(evaluation.id))) {
+        continue
+      }
+      if (map.decision === 'supported')
+        return { kind: 'supported' as const, supported: true, reasons: [] }
+      insufficient = true
+    } catch {}
+  }
+  if (insufficient)
+    return { kind: 'insufficient' as const, supported: false, reasons: ['独立复核结论为证据不足'] }
+  if (stale)
     return {
       kind: 'stale' as const,
       supported: false,
-      reasons: ['复核引用的证据已失效或不匹配当前评估'],
+      reasons: ['复核文本或引用证据已失效、不完整或已被篡改'],
     }
-  try {
-    const map = parseModelReview(done.text ?? '', done.artifactVersionIds)
-    if (map.decision !== 'supported')
-      return {
-        kind: 'insufficient' as const,
-        supported: false,
-        reasons: ['独立复核结论为证据不足'],
-      }
-    return { kind: 'supported' as const, supported: true, reasons: [] }
-  } catch {
-    return {
-      kind: 'invalid' as const,
-      supported: false,
-      reasons: ['独立复核未通过声明—证据映射校验'],
-    }
+  return {
+    kind: 'invalid' as const,
+    supported: false,
+    reasons: ['独立复核未覆盖当前评估声明—证据映射'],
   }
 }
 
@@ -303,54 +355,85 @@ function reviewState(campaign: ResearchCampaign, evaluation: ArtifactVersion | n
  */
 export function projectResearchFlow(
   campaign: ResearchCampaign,
-  input: unknown = { patternId: PATTERN_ID },
+  evidence: ProjectionEvidenceInput = {},
   now = campaign.updatedAt,
 ): ResearchFlowProjection {
-  const flow = compileResearchFlow(input)
-  const study = studyCurrent(campaign)
+  const flow = compileResearchFlow({ patternId: PATTERN_ID })
+  const study = studyCurrent(campaign, evidence)
   const studyNode = study
-    ? projected(campaign, 'study', 'satisfied', 'current', '研究问题与方案', '已记录当前研究方案。')
+    ? projected(
+        campaign,
+        'study',
+        'satisfied',
+        'current',
+        'none',
+        '研究问题与方案',
+        '已核验当前研究方案。',
+      )
     : projected(
         campaign,
         'study',
         'ready',
         'current',
+        'none',
         '研究问题与方案',
-        '需要先记录可核验的研究问题、PICO 和方案。',
+        '需要先读取并核验当前的研究问题、PICO 和方案文档。',
         [
           action(
             campaign,
             'study',
             'record_study',
-            'synthetic-study-v1/研究方案',
-            ['缺少当前研究方案文档'],
+            '合成研究/研究方案',
+            ['缺少经读取核验的当前研究方案文档'],
             '记录研究方案',
           ),
         ],
       )
 
   const executionNode = (id: 'experiment' | 'evaluation', title: string, priorReady: boolean) => {
-    const task = nodeTask(campaign, id)
+    const match = nodeTask(campaign, id)
+    const task = match.task
     const candidatePresent = (campaign.cliPreparations ?? []).some(
       (preparation) => preparation.status === 'candidate' && preparation.artifactVersionId !== null,
     )
+    const legacyEvidence =
+      match.legacyEvidence === 'current_receipt_mapping' && task?.status === 'stale'
+        ? ('stale_receipt_mapping' as const)
+        : match.legacyEvidence
     if (!priorReady)
-      return projected(campaign, id, 'blocked', 'current', title, '需要先满足前置流程节点。')
+      return projected(
+        campaign,
+        id,
+        'blocked',
+        'current',
+        legacyEvidence,
+        title,
+        '需要先满足前置流程节点。',
+      )
     if (!task) {
       const reasons = [
-        'research-pattern-v2 仅提供结构投影，尚未接入此执行入口',
+        '该计划节点尚未接入受控执行入口',
         ...(candidatePresent ? ['候选代码不是实验或评估证据'] : []),
       ]
-      return projected(campaign, id, 'blocked', 'current', title, reasons.join('；'), [
-        action(
-          campaign,
-          id,
-          'prepare_execution_contract',
-          `synthetic-study-v1/${id}`,
-          reasons,
-          '完善受控执行规格',
-        ),
-      ])
+      return projected(
+        campaign,
+        id,
+        'blocked',
+        'current',
+        legacyEvidence,
+        title,
+        reasons.join('；'),
+        [
+          action(
+            campaign,
+            id,
+            'prepare_execution_contract',
+            `合成研究/${title}`,
+            reasons,
+            '完善受控执行规格',
+          ),
+        ],
+      )
     }
     const active = campaign.attempts.find(
       (attempt) =>
@@ -364,24 +447,18 @@ export function projectResearchFlow(
         id,
         'in_flight',
         task.status === 'stale' ? 'stale' : 'current',
+        legacyEvidence,
         title,
         unknown ? '状态未知时只允许观察或请求取消，不能重派。' : '等待当前尝试形成可验证结果。',
         [
-          action(
-            campaign,
-            id,
-            'observe_attempt',
-            `synthetic-study-v1/${id}`,
-            reasons,
-            '观察当前尝试',
-          ),
+          action(campaign, id, 'observe_attempt', `合成研究/${title}`, reasons, '观察当前尝试'),
           ...(unknown
             ? [
                 action(
                   campaign,
                   id,
                   'cancel_attempt',
-                  `synthetic-study-v1/${id}`,
+                  `合成研究/${title}`,
                   reasons,
                   '请求取消未知尝试',
                 ),
@@ -397,6 +474,7 @@ export function projectResearchFlow(
         id,
         'blocked',
         task.status === 'stale' ? 'stale' : 'current',
+        legacyEvidence,
         title,
         task.status === 'stale'
           ? '任务或其依赖已失效，需要重新冻结。'
@@ -406,22 +484,33 @@ export function projectResearchFlow(
             campaign,
             id,
             'inspect_evidence',
-            `synthetic-study-v1/${id}`,
+            `合成研究/${title}`,
             [task.status === 'stale' ? '任务已失效' : '缺少当前已验证的科学产物'],
             '检查证据绑定',
           ),
         ],
       )
-    return projected(campaign, id, 'satisfied', 'current', title, '存在当前且已验证的科学产物。')
+    return projected(
+      campaign,
+      id,
+      'satisfied',
+      'current',
+      legacyEvidence,
+      title,
+      legacyEvidence === 'current_receipt_mapping'
+        ? '已映射既有固定合成评估回执；这不是该计划节点已执行的声明。'
+        : '存在当前且已验证的科学产物。',
+    )
   }
 
   const experiment = executionNode('experiment', '合成实验', study)
   const evaluation = executionNode('evaluation', '合成评估', experiment.state === 'satisfied')
-  const evaluationTask = nodeTask(campaign, 'evaluation')
-  const evaluationArtifact = evaluationTask
-    ? currentScientificArtifact(campaign, evaluationTask)
+  const evaluationMatch = nodeTask(campaign, 'evaluation')
+  const evaluationArtifact = evaluationMatch.task
+    ? currentScientificArtifact(campaign, evaluationMatch.task)
     : null
   const review = reviewState(campaign, evaluationArtifact)
+  const reviewLegacy = evaluation.legacyEvidence
   const reviewNode =
     evaluation.state !== 'satisfied'
       ? projected(
@@ -429,6 +518,7 @@ export function projectResearchFlow(
           'review',
           'blocked',
           evaluation.freshness,
+          reviewLegacy,
           '独立复核',
           '需要当前评估证据。',
         )
@@ -438,6 +528,7 @@ export function projectResearchFlow(
             'review',
             'satisfied',
             'current',
+            reviewLegacy,
             '独立复核',
             '当前复核支持其声明—证据映射。',
           )
@@ -447,6 +538,7 @@ export function projectResearchFlow(
               'review',
               'in_flight',
               'current',
+              reviewLegacy,
               '独立复核',
               '复核尚未形成可采纳结论。',
               [
@@ -454,7 +546,7 @@ export function projectResearchFlow(
                   campaign,
                   'review',
                   'observe_attempt',
-                  'synthetic-study-v1/独立复核',
+                  '合成研究/独立复核',
                   review.reasons,
                   '观察独立复核',
                 ),
@@ -466,6 +558,7 @@ export function projectResearchFlow(
                 'review',
                 'waiting_human',
                 'current',
+                reviewLegacy,
                 '独立复核',
                 '需要人类针对当前证据范围作出独立复核审批。',
                 [
@@ -473,7 +566,7 @@ export function projectResearchFlow(
                     campaign,
                     'review',
                     'request_human_approval',
-                    'synthetic-study-v1/独立复核',
+                    '合成研究/独立复核',
                     review.reasons,
                     '请求独立复核审批',
                   ),
@@ -484,6 +577,7 @@ export function projectResearchFlow(
                 'review',
                 'blocked',
                 review.kind === 'stale' ? 'stale' : 'current',
+                reviewLegacy,
                 '独立复核',
                 review.reasons.join('；'),
               )
@@ -494,6 +588,7 @@ export function projectResearchFlow(
           'release',
           'satisfied',
           'current',
+          reviewLegacy,
           '结果发布',
           '账本已记录完成的发布事实。',
         )
@@ -503,6 +598,7 @@ export function projectResearchFlow(
             'release',
             'blocked',
             reviewNode.freshness,
+            reviewLegacy,
             '结果发布',
             '证据不足或复核不当前，不能发布。',
           )
@@ -512,6 +608,7 @@ export function projectResearchFlow(
               'release',
               'waiting_human',
               'current',
+              reviewLegacy,
               '结果发布',
               '需要人类对当前已验证产物作出精确发布审批。',
               [
@@ -519,7 +616,7 @@ export function projectResearchFlow(
                   campaign,
                   'release',
                   'request_human_approval',
-                  'synthetic-study-v1/结果发布',
+                  '合成研究/结果发布',
                   ['缺少当前发布审批'],
                   '请求发布审批',
                 ),
@@ -530,6 +627,7 @@ export function projectResearchFlow(
               'release',
               'ready',
               'current',
+              reviewLegacy,
               '结果发布',
               '审批条件已具备；该投影不会执行发布。',
             )

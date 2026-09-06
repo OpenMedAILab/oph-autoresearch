@@ -14,6 +14,7 @@ function task(
   id: string,
   stageId: 'experiment' | 'evaluation',
   status: ResearchTaskRevision['status'],
+  templateId: ResearchTaskRevision['templateId'] = 'synthetic-evaluation-v1',
 ): ResearchTaskRevision {
   return {
     id,
@@ -21,9 +22,9 @@ function task(
     taskId: id,
     stage: 'execution',
     stageId,
-    templateId: 'synthetic-evaluation-v1',
+    templateId,
     inputHash: hash(`input-${id}`),
-    outputContract: 'synthetic-evaluation-v1',
+    outputContract: templateId,
     dataClass: 'synthetic',
     status,
     createdAt: 1,
@@ -99,8 +100,23 @@ function scientificEvidence(
   })
   return artifact
 }
-function node(campaign: ResearchCampaign, id: string) {
-  return projectResearchFlow(campaign).nodes.find((candidate) => candidate.id === id)!
+function verifiedDocuments(campaign: ResearchCampaign) {
+  return campaign.artifactVersions
+    .filter((artifact) => artifact.kind === 'research-document-study')
+    .map((artifact) => ({
+      id: artifact.id,
+      kind: 'study' as const,
+      contentHash: artifact.contentHash,
+      verified: true,
+      stale: false,
+    }))
+}
+function node(
+  campaign: ResearchCampaign,
+  id: string,
+  evidence = { documents: verifiedDocuments(campaign) },
+) {
+  return projectResearchFlow(campaign, evidence).nodes.find((candidate) => candidate.id === id)!
 }
 
 test('research-flow v2 compiles only the server whitelist and leaves v1 compilation unchanged', () => {
@@ -117,7 +133,7 @@ test('research-flow v2 compiles only the server whitelist and leaves v1 compilat
   }
   const v1Hash = compileResearchPattern(v1Input).contractHash
   const flow = compileResearchFlow({ patternId: 'synthetic-study-v1' })
-  expect(flow).toMatchObject({ schema: 'research-flow-v2', patternId: 'synthetic-study-v1' })
+  expect(flow).toMatchObject({ schema: 'research-pattern-v2', patternId: 'synthetic-study-v1' })
   expect(flow.nodes).toHaveLength(5)
   expect(flow.nodes.every((candidate) => candidate.executionCapability === 'planned')).toBe(true)
   expect(flow.nodes.map((candidate) => candidate.handler)).toEqual([
@@ -127,7 +143,12 @@ test('research-flow v2 compiles only the server whitelist and leaves v1 compilat
     'independent_evidence_review',
     'release_verified_findings',
   ])
-  expect(flow.nodes.every((candidate) => candidate.validatorHash.startsWith('sha256:'))).toBe(true)
+  expect(
+    flow.nodes.every(
+      (candidate) =>
+        candidate.validatorHash === null && candidate.validationCapability === 'planned',
+    ),
+  ).toBe(true)
   expect(() => compileResearchFlow({ patternId: 'synthetic-study-v1', handler: 'shell' })).toThrow(
     'invalid',
   )
@@ -138,7 +159,7 @@ test('research-flow v2 compiles only the server whitelist and leaves v1 compilat
 test('projection is pure, uses no internal identifiers in actions, and makes only guidance available', () => {
   const campaign = baseCampaign()
   const before = structuredClone(campaign)
-  const projection = projectResearchFlow(campaign)
+  const projection = projectResearchFlow(campaign, {})
   expect(projection.schema).toBe('research-flow-projection-v1')
   expect(campaign).toEqual(before)
   expect(node(campaign, 'study')).toMatchObject({ state: 'ready', freshness: 'current' })
@@ -148,7 +169,7 @@ test('projection is pure, uses no internal identifiers in actions, and makes onl
     expectedVersion: campaign.version,
     readableTitle: '记录研究方案',
   })
-  expect(action.subjectRef).toBe('synthetic-study-v1/研究方案')
+  expect(action.subjectRef).toBe('合成研究/研究方案')
   expect(JSON.stringify(action)).not.toContain(campaign.id)
 })
 
@@ -249,6 +270,11 @@ test('candidate code never satisfies scientific evidence and insufficient review
   reviewed.taskRevisions.push(experiment, evaluation)
   scientificEvidence(reviewed, experiment)
   const evaluationArtifact = scientificEvidence(reviewed, evaluation)
+  const insufficientText = JSON.stringify({
+    decision: 'insufficient',
+    claims: [],
+    limitations: ['证据不足'],
+  })
   reviewed.modelReviews = [
     {
       id: 'review-insufficient',
@@ -265,8 +291,8 @@ test('candidate code never satisfies scientific evidence and insufficient review
       status: 'done',
       ownerPid: 1,
       sourceValidity: 'current',
-      text: JSON.stringify({ decision: 'insufficient', claims: [], limitations: ['证据不足'] }),
-      contentHash: hash('review'),
+      text: insufficientText,
+      contentHash: hash(insufficientText),
       actualCost: null,
     },
   ]
@@ -282,4 +308,92 @@ test('stale task evidence remains blocked and is surfaced as stale', () => {
   const projected = node(campaign, 'experiment')
   expect(projected).toMatchObject({ state: 'blocked', freshness: 'stale' })
   expect(projected.nextActions[0]).toMatchObject({ op: 'inspect_evidence' })
+})
+
+test('study satisfaction requires injected verified current document evidence', () => {
+  const campaign = baseCampaign()
+  const study = studyArtifact()
+  campaign.artifactVersions.push(study)
+  expect(
+    node(campaign, 'study', {
+      documents: [
+        { id: study.id, kind: 'study', contentHash: hash('forged'), verified: true, stale: false },
+      ],
+    }).state,
+  ).toBe('ready')
+  expect(
+    node(campaign, 'study', {
+      documents: [
+        {
+          id: study.id,
+          kind: 'study',
+          contentHash: study.contentHash,
+          verified: true,
+          stale: true,
+        },
+      ],
+    }).state,
+  ).toBe('ready')
+  expect(node(campaign, 'study', { documents: verifiedDocuments(campaign) }).state).toBe(
+    'satisfied',
+  )
+})
+
+test('expired or non-covering completed reviews cannot satisfy review or release', () => {
+  const campaign = baseCampaign()
+  campaign.artifactVersions.push(studyArtifact())
+  const experiment = task('review-experiment', 'experiment', 'verified')
+  const evaluation = task('review-evaluation', 'evaluation', 'verified')
+  campaign.taskRevisions.push(experiment, evaluation)
+  const experimentArtifact = scientificEvidence(campaign, experiment)
+  const evaluationArtifact = scientificEvidence(campaign, evaluation)
+  const supportingButNonCovering = JSON.stringify({
+    decision: 'supported',
+    claims: [{ claim: '只覆盖实验', artifactVersionIds: [experimentArtifact.id] }],
+    limitations: [],
+  })
+  campaign.modelReviews = [
+    {
+      id: 'review-non-covering',
+      dispatchKey: 'review',
+      approvalId: 'approval',
+      evidencePackHash: hash('pack'),
+      configHash: hash('config'),
+      artifactVersionIds: [experimentArtifact.id, evaluationArtifact.id],
+      currency: 'USD',
+      reservedCost: 0,
+      maxRequests: 1,
+      maxOutputTokens: 1,
+      requestCount: 1,
+      status: 'done',
+      ownerPid: 1,
+      sourceValidity: 'current',
+      text: supportingButNonCovering,
+      contentHash: hash(supportingButNonCovering),
+      actualCost: null,
+    },
+  ]
+  expect(node(campaign, 'review')).toMatchObject({ state: 'blocked' })
+  expect(node(campaign, 'release')).toMatchObject({ state: 'blocked' })
+  campaign.modelReviews[0] = { ...campaign.modelReviews[0]!, sourceValidity: 'stale' }
+  expect(node(campaign, 'review')).toMatchObject({ state: 'blocked', freshness: 'stale' })
+})
+
+test('existing fixed evaluation receipts map to planned experiment and evaluation without claiming v2 execution', () => {
+  const campaign = baseCampaign()
+  campaign.artifactVersions.push(studyArtifact())
+  const evaluation = task('existing-evaluation', 'evaluation', 'verified', 'supervised-phantom-v2')
+  campaign.taskRevisions.push(evaluation)
+  scientificEvidence(campaign, evaluation)
+  const experimentNode = node(campaign, 'experiment')
+  const evaluationNode = node(campaign, 'evaluation')
+  expect(experimentNode).toMatchObject({
+    state: 'satisfied',
+    legacyEvidence: 'current_receipt_mapping',
+  })
+  expect(evaluationNode).toMatchObject({
+    state: 'satisfied',
+    legacyEvidence: 'current_receipt_mapping',
+  })
+  expect(experimentNode.explanation).toContain('映射既有固定合成评估回执')
 })
