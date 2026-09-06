@@ -11,6 +11,7 @@ import {
   type ResearchCampaignInput,
   type ResearchCliPreparation,
   type ResearchCommand,
+  type ResearchCostSubject,
   type ResearchEvent,
   type ResearchTaskRevision,
   type ResearchWriteResult,
@@ -225,10 +226,164 @@ function invalidateChangedApprovals(campaign: ResearchCampaign, now: number): Re
   }
 }
 
-function reservedCliPreparationCost(campaign: ResearchCampaign): number {
-  return (campaign.cliPreparations ?? [])
-    .filter((preparation) => preparation.status === 'claimed' || preparation.status === 'candidate')
-    .reduce((sum, preparation) => sum + preparation.maxCost, 0)
+function costSubjectKey(subject: ResearchCostSubject): string {
+  return `${subject.kind}:${subject.id}`
+}
+
+function reservationForSubject(
+  campaign: ResearchCampaign,
+  subject: ResearchCostSubject,
+): number | null {
+  if (subject.kind === 'cli_preparation') {
+    const preparation = (campaign.cliPreparations ?? []).find((item) => item.id === subject.id)
+    return preparation && (preparation.status === 'claimed' || preparation.status === 'candidate')
+      ? preparation.maxCost
+      : null
+  }
+  const review = (campaign.modelReviews ?? []).find((item) => item.id === subject.id)
+  return review ? review.reservedCost : null
+}
+
+function knownActualCost(campaign: ResearchCampaign, subject: ResearchCostSubject): number {
+  const reviewAmount =
+    subject.kind === 'model_review'
+      ? ((campaign.modelReviews ?? []).find((item) => item.id === subject.id)?.actualCost ?? 0)
+      : 0
+  const evidenceAmount = (campaign.costEvidence ?? [])
+    .filter((evidence) => costSubjectKey(evidence.subject) === costSubjectKey(subject))
+    .reduce((maximum, evidence) => Math.max(maximum, evidence.amount), 0)
+  return Math.max(reviewAmount, evidenceAmount)
+}
+
+/** Settled spend plus the conservative outstanding cost for each un-settled subject. */
+function committedCost(campaign: ResearchCampaign): number {
+  const settled = campaign.costSettlements ?? []
+  const settledSubjects = new Set(settled.map((settlement) => costSubjectKey(settlement.subject)))
+  const outstanding: ResearchCostSubject[] = [
+    ...(campaign.cliPreparations ?? [])
+      .filter(
+        (preparation) => preparation.status === 'claimed' || preparation.status === 'candidate',
+      )
+      .map((preparation) => ({ kind: 'cli_preparation' as const, id: preparation.id })),
+    ...(campaign.modelReviews ?? []).map((review) => ({
+      kind: 'model_review' as const,
+      id: review.id,
+    })),
+  ]
+  return (
+    settled.reduce((sum, settlement) => sum + settlement.amount, 0) +
+    outstanding
+      .filter((subject) => !settledSubjects.has(costSubjectKey(subject)))
+      .reduce(
+        (sum, subject) =>
+          sum +
+          Math.max(
+            reservationForSubject(campaign, subject) ?? 0,
+            knownActualCost(campaign, subject),
+          ),
+        0,
+      )
+  )
+}
+
+function hasCostCommitment(campaign: ResearchCampaign): boolean {
+  return (
+    committedCost(campaign) > 0 ||
+    (campaign.costEvidence ?? []).length > 0 ||
+    (campaign.costSettlements ?? []).length > 0
+  )
+}
+
+export function researchCostSummary(campaign: ResearchCampaign) {
+  const settlements = campaign.costSettlements ?? []
+  const subjects: ResearchCostSubject[] = [
+    ...(campaign.cliPreparations ?? [])
+      .filter(
+        (preparation) => preparation.status === 'claimed' || preparation.status === 'candidate',
+      )
+      .map((preparation) => ({ kind: 'cli_preparation' as const, id: preparation.id })),
+    ...(campaign.modelReviews ?? []).map((review) => ({
+      kind: 'model_review' as const,
+      id: review.id,
+    })),
+  ]
+  const rows = subjects.map((subject) => {
+    const settlement = settlements.find(
+      (item) => costSubjectKey(item.subject) === costSubjectKey(subject),
+    )
+    return {
+      subject,
+      reservation: reservationForSubject(campaign, subject) ?? 0,
+      knownActualCost: knownActualCost(campaign, subject),
+      settled: settlement !== undefined,
+      settledAmount: settlement?.amount ?? null,
+    }
+  })
+  const settledCost = settlements.reduce((sum, settlement) => sum + settlement.amount, 0)
+  const reservedCost = rows
+    .filter((row) => !row.settled)
+    .reduce((sum, row) => sum + row.reservation, 0)
+  const committed = committedCost(campaign)
+  return {
+    currency: campaign.budget.currency,
+    limit: campaign.budget.limit,
+    settledCost,
+    reservedCost,
+    committedCost: committed,
+    availableCost: Math.max(0, campaign.budget.limit - committed),
+    overLimit: committed > campaign.budget.limit,
+    subjects: rows,
+  }
+}
+
+function validCostSubject(
+  campaign: ResearchCampaign,
+  subject: unknown,
+): subject is ResearchCostSubject {
+  if (!subject || typeof subject !== 'object' || Array.isArray(subject)) return false
+  const value = subject as { kind?: unknown; id?: unknown }
+  if (
+    (value.kind !== 'cli_preparation' && value.kind !== 'model_review') ||
+    typeof value.id !== 'string' ||
+    value.id !== value.id.trim() ||
+    textError(value.id, 'cost subject id')
+  )
+    return false
+  return reservationForSubject(campaign, { kind: value.kind, id: value.id.trim() }) !== null
+}
+
+function costSubjectLabel(campaign: ResearchCampaign, subject: ResearchCostSubject): string | null {
+  const entries =
+    subject.kind === 'cli_preparation'
+      ? (campaign.cliPreparations ?? [])
+      : (campaign.modelReviews ?? [])
+  const index = entries.findIndex((entry) => entry.id === subject.id)
+  if (index < 0) return null
+  return `第 ${index + 1} 次${subject.kind === 'cli_preparation' ? '代码准备' : '独立复核'}`
+}
+
+export function costEvidenceApprovalScope(
+  campaign: ResearchCampaign,
+  evidenceId: string,
+  expiresAt: number,
+) {
+  const evidence = (campaign.costEvidence ?? []).find((item) => item.id === evidenceId)
+  if (!evidence) throw new Error('Unknown cost evidence')
+  const label = costSubjectLabel(campaign, evidence.subject)
+  if (!label) throw new Error('Unknown cost evidence subject')
+  return {
+    kind: 'cost_settlement' as const,
+    costEvidenceId: evidence.id,
+    costEvidenceHash: digest(canonicalJson(evidence)),
+    costSubjectLabel: label,
+    costDescription: evidence.description,
+    costSubject: cloneJson(evidence.subject),
+    costAmount: evidence.amount,
+    artifactVersionIds: [],
+    currency: evidence.currency,
+    maxCost: evidence.amount,
+    expiresAt,
+  }
 }
 
 function validateProof(proof: {
@@ -266,9 +421,19 @@ function taskStatus(
   return 'pending' as const
 }
 
-function taskContextHash(campaign: ResearchCampaign): string {
+/** v1 preserves the historical budget-inclusive hash; v2 binds science only. */
+export function scientificContextHash(campaign: ResearchCampaign, version: 1 | 2 = 1): string {
   return digest(
-    canonicalJson({ policy: campaign.policy, inputs: campaign.inputs, budget: campaign.budget }),
+    canonicalJson(
+      version === 1
+        ? { policy: campaign.policy, inputs: campaign.inputs, budget: campaign.budget }
+        : {
+            schema: 'research-scientific-context-v2',
+            goal: campaign.goal,
+            policy: campaign.policy,
+            inputs: campaign.inputs,
+          },
+    ),
   )
 }
 
@@ -287,7 +452,10 @@ function withDerivedTaskStatuses(campaign: ResearchCampaign): ResearchCampaign {
         .toSorted((a, b) => b.version - a.version)[0]
       if (!bound || latest?.contentHash !== contentHash) stale.add(task.id)
     }
-    if (task.sourceContextHash && task.sourceContextHash !== taskContextHash(campaign))
+    if (
+      task.sourceContextHash &&
+      task.sourceContextHash !== scientificContextHash(campaign, task.sourceContextVersion ?? 1)
+    )
       stale.add(task.id)
     if (campaign.taskRevisions.some((next) => next.previousRevisionId === task.id))
       stale.add(task.id)
@@ -321,7 +489,8 @@ function withDerivedTaskStatuses(campaign: ResearchCampaign): ResearchCampaign {
             ...review,
             sourceValidity:
               (review.sourceContextHash !== undefined &&
-                review.sourceContextHash !== reviewSourceContextHash(campaign)) ||
+                review.sourceContextHash !==
+                  reviewSourceContextHash(campaign, review.sourceContextVersion ?? 1)) ||
               review.artifactVersionIds.some((id) => {
                 const artifact = campaign.artifactVersions.find((a) => a.id === id)
                 return (
@@ -348,10 +517,10 @@ function withDerivedTaskStatuses(campaign: ResearchCampaign): ResearchCampaign {
   }
 }
 
-function reviewSourceContextHash(campaign: ResearchCampaign): string {
+export function reviewSourceContextHash(campaign: ResearchCampaign, version: 1 | 2 = 1): string {
   return digest(
     canonicalJson({
-      context: taskContextHash(campaign),
+      context: scientificContextHash(campaign, version),
       literatureCitations: campaign.literatureCitations ?? [],
     }),
   )
@@ -363,13 +532,13 @@ export function hasSupportedReleaseReview(
   artifactVersionIds: readonly string[],
 ): boolean {
   const expectedIds = [...artifactVersionIds].sort()
-  const expectedSourceContextHash = reviewSourceContextHash(campaign)
   const derived = withDerivedTaskStatuses(campaign)
   return (derived.modelReviews ?? []).some((review) => {
     if (
       review.status !== 'done' ||
       review.sourceValidity !== 'current' ||
-      review.sourceContextHash !== expectedSourceContextHash ||
+      review.sourceContextHash !==
+        reviewSourceContextHash(campaign, review.sourceContextVersion ?? 1) ||
       typeof review.text !== 'string' ||
       review.contentHash !== digest(review.text) ||
       canonicalJson([...review.artifactVersionIds].sort()) !== canonicalJson(expectedIds)
@@ -494,6 +663,92 @@ function nextCampaign(
       }
       break
     }
+    case 'recordCostEvidence': {
+      const evidence = command.evidence
+      if (
+        !evidence ||
+        textError(evidence.id, 'cost evidence id') ||
+        evidence.id !== evidence.id.trim() ||
+        !validCostSubject(campaign, evidence.subject) ||
+        textError(evidence.currency, 'cost evidence currency') ||
+        evidence.currency !== campaign.budget.currency ||
+        !Number.isFinite(evidence.amount) ||
+        evidence.amount < 0 ||
+        typeof evidence.description !== 'string' ||
+        !evidence.description.trim() ||
+        evidence.description.length > 2_000 ||
+        !SHA256.test(evidence.sourceHash) ||
+        (evidence.source !== 'human-attestation' && evidence.source !== 'provider-receipt') ||
+        (campaign.costEvidence ?? []).some((item) => item.id === evidence.id.trim())
+      )
+        return invalid(
+          'invalid_cost_evidence',
+          'Cost evidence must exactly bind a known budget subject',
+        )
+      next = {
+        ...campaign,
+        costEvidence: [
+          ...(campaign.costEvidence ?? []),
+          {
+            ...cloneJson(evidence),
+            id: evidence.id.trim(),
+            subject: { ...evidence.subject },
+            recordedAt: now,
+          },
+        ],
+      }
+      break
+    }
+    case 'settleCostEvidence': {
+      const evidence = (campaign.costEvidence ?? []).find((item) => item.id === command.evidenceId)
+      const approval = campaign.approvals.find((item) => item.id === command.approvalId)
+      const scope = approval?.scope
+      if (
+        !evidence ||
+        !approval ||
+        approval.status !== 'active' ||
+        approval.consumedBy ||
+        approval.bundleHash !== campaign.bundleHash ||
+        scope?.kind !== 'cost_settlement' ||
+        scope.expiresAt <= now ||
+        scope.costEvidenceId !== evidence.id ||
+        scope.costEvidenceHash !== digest(canonicalJson(evidence)) ||
+        scope.costSubjectLabel !== costSubjectLabel(campaign, evidence.subject) ||
+        scope.costDescription !== evidence.description ||
+        canonicalJson(scope.costSubject) !== canonicalJson(evidence.subject) ||
+        scope.currency !== evidence.currency ||
+        scope.costAmount !== evidence.amount ||
+        scope.maxCost !== evidence.amount ||
+        (campaign.costSettlements ?? []).some(
+          (item) =>
+            item.evidenceId === evidence.id ||
+            costSubjectKey(item.subject) === costSubjectKey(evidence.subject),
+        )
+      )
+        return invalid(
+          'cost_settlement_approval_required',
+          'Settlement requires one active exact human approval for one evidence subject',
+        )
+      const settlement = {
+        id: randomId('rcs'),
+        subject: cloneJson(evidence.subject),
+        evidenceId: evidence.id,
+        approvalId: approval.id,
+        currency: evidence.currency,
+        amount: evidence.amount,
+        settledAt: now,
+      }
+      next = {
+        ...campaign,
+        costSettlements: [...(campaign.costSettlements ?? []), settlement],
+        approvals: campaign.approvals.map((item) =>
+          item.id === approval.id
+            ? { ...item, consumedBy: `cost-settlement:${settlement.id}` }
+            : item,
+        ),
+      }
+      break
+    }
     case 'applyResearchPattern': {
       const selection = command.plan?.selection
       if (!selection || typeof selection !== 'object' || Array.isArray(selection))
@@ -585,10 +840,7 @@ function nextCampaign(
           (id) => !campaign.artifactVersions.some((a) => a.id === id && a.validation),
         ) ||
         (campaign.modelReviews ?? []).some((r) => r.dispatchKey === spec.dispatchKey) ||
-        (campaign.modelReviews ?? []).reduce((sum, r) => sum + r.reservedCost, 0) +
-          reservedCliPreparationCost(campaign) +
-          spec.reservedCost >
-          campaign.budget.limit
+        committedCost(campaign) + spec.reservedCost > campaign.budget.limit
       )
         return invalid(
           'review_approval_required',
@@ -601,7 +853,8 @@ function nextCampaign(
           ...(campaign.modelReviews ?? []),
           {
             ...cloneJson(spec),
-            sourceContextHash: reviewSourceContextHash(campaign),
+            sourceContextVersion: 2,
+            sourceContextHash: reviewSourceContextHash(campaign, 2),
             id,
             ownerPid: process.pid,
             requestCount: 0,
@@ -744,11 +997,8 @@ function nextCampaign(
       const error = budgetError(command.budget)
       if (error) return invalid('invalid_budget', error)
       if (
-        (campaign.modelReviews ?? []).reduce((sum, r) => sum + r.reservedCost, 0) +
-          reservedCliPreparationCost(campaign) >
-          command.budget.limit ||
-        (((campaign.modelReviews ?? []).length || reservedCliPreparationCost(campaign) > 0) &&
-          command.budget.currency !== campaign.budget.currency)
+        committedCost(campaign) > command.budget.limit ||
+        (hasCostCommitment(campaign) && command.budget.currency !== campaign.budget.currency)
       )
         return invalid(
           'reserved_budget',
@@ -864,10 +1114,7 @@ function nextCampaign(
         approval.scope.preparationLimits?.memoryMb !== 256 ||
         approval.scope.preparationLimits?.adapterConfigHash !== preparation.adapterConfigHash ||
         approval.scope.preparationLimits?.acknowledgeUnknownCost !== true ||
-        (campaign.modelReviews ?? []).reduce((sum, review) => sum + review.reservedCost, 0) +
-          reservedCliPreparationCost(campaign) +
-          preparation.maxCost >
-          campaign.budget.limit ||
+        committedCost(campaign) + preparation.maxCost > campaign.budget.limit ||
         campaign.attempts.some((attempt) => attempt.dispatchKey === preparation.dispatchKey)
       )
         return invalid('cli_preparation_approval_required', '准备任务需要精确且未消费的人类审批')
@@ -1177,6 +1424,12 @@ function nextCampaign(
                   candidate.backendPolicyHash === scope.backendPolicyHash,
               )
             : undefined
+        const costEvidence =
+          scope?.kind === 'cost_settlement'
+            ? (campaign.costEvidence ?? []).find(
+                (candidate) => candidate.id === scope.costEvidenceId,
+              )
+            : undefined
         if (
           !scope ||
           (scope.display !== undefined &&
@@ -1197,16 +1450,21 @@ function nextCampaign(
           (scope.backendPolicyHash !== undefined &&
             (!['execution', 'cli_preparation'].includes(scope.kind) ||
               !SHA256.test(scope.backendPolicyHash))) ||
-          !['protocol', 'execution', 'cli_preparation', 'model_review', 'release'].includes(
-            scope.kind,
-          ) ||
+          ![
+            'protocol',
+            'execution',
+            'cli_preparation',
+            'model_review',
+            'release',
+            'cost_settlement',
+          ].includes(scope.kind) ||
           !Number.isSafeInteger(scope.expiresAt) ||
           scope.expiresAt <= now ||
           scope.expiresAt > now + 24 * 60 * 60 * 1000 ||
           scope.currency !== campaign.budget.currency ||
           !Number.isFinite(scope.maxCost) ||
           scope.maxCost < 0 ||
-          scope.maxCost > campaign.budget.limit ||
+          (scope.kind !== 'cost_settlement' && scope.maxCost > campaign.budget.limit) ||
           !Array.isArray(scope.artifactVersionIds) ||
           new Set(scope.artifactVersionIds).size !== scope.artifactVersionIds.length ||
           scope.artifactVersionIds.some(
@@ -1232,7 +1490,24 @@ function nextCampaign(
               scope.preparationLimits?.cpu !== 1 ||
               scope.preparationLimits?.memoryMb !== 256 ||
               scope.preparationLimits?.adapterConfigHash !== cliPreparation.adapterConfigHash ||
-              scope.preparationLimits?.acknowledgeUnknownCost !== true))
+              scope.preparationLimits?.acknowledgeUnknownCost !== true)) ||
+          (scope.kind === 'cost_settlement' &&
+            (!costEvidence ||
+              !validCostSubject(campaign, scope.costSubject) ||
+              canonicalJson(scope.costSubject) !== canonicalJson(costEvidence.subject) ||
+              scope.costEvidenceId !== costEvidence.id ||
+              scope.costEvidenceHash !== digest(canonicalJson(costEvidence)) ||
+              scope.costSubjectLabel !== costSubjectLabel(campaign, costEvidence.subject) ||
+              scope.costDescription !== costEvidence.description ||
+              scope.costAmount !== costEvidence.amount ||
+              scope.maxCost !== costEvidence.amount ||
+              scope.currency !== costEvidence.currency ||
+              scope.artifactVersionIds.length !== 0 ||
+              (campaign.costSettlements ?? []).some(
+                (settlement) =>
+                  settlement.evidenceId === costEvidence.id ||
+                  costSubjectKey(settlement.subject) === costSubjectKey(costEvidence.subject),
+              )))
         )
           return invalid(
             'invalid_approval_scope',
@@ -1387,7 +1662,8 @@ function nextCampaign(
           : {}),
         revision: (previous?.revision ?? 0) + 1,
         ...(previous ? { previousRevisionId: previous.id } : {}),
-        sourceContextHash: taskContextHash(campaign),
+        sourceContextVersion: 2,
+        sourceContextHash: scientificContextHash(campaign, 2),
         ...(command.skillBinding ? { skillBinding: cloneJson(command.skillBinding) } : {}),
         artifactVersionIds: [...command.artifactVersionIds].sort(),
         stage: 'execution',
@@ -1516,7 +1792,8 @@ function nextCampaign(
         dataClass: 'synthetic',
         status: 'pending',
         createdAt: now,
-        sourceContextHash: taskContextHash(campaign),
+        sourceContextVersion: 2,
+        sourceContextHash: scientificContextHash(campaign, 2),
         artifactVersionIds: [],
         ...(command.skillBinding ? { skillBinding: cloneJson(command.skillBinding) } : {}),
       }

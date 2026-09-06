@@ -7,6 +7,7 @@ import { canonicalResearchBundle, type ResearchCampaign } from '@oph-autoresearc
 import { Store } from './db.ts'
 import { createConversation, upsertWorkspace } from './repos.ts'
 import {
+  costEvidenceApprovalScope,
   createResearchCampaign,
   findRunningSyntheticAttempts,
   getResearchCampaign,
@@ -15,6 +16,7 @@ import {
   mutateResearchCampaign,
   rebuildResearchCampaignProjection,
   recoverRunningSyntheticAttempts,
+  scientificContextHash,
 } from './research.ts'
 
 const CONTENT_HASH = `sha256:${'a'.repeat(64)}`
@@ -1557,6 +1559,225 @@ describe('CLI preparation authorization ledger', () => {
       expect(denied).toMatchObject({ ok: false, code: 'progress_held' })
     } finally {
       reviewStore.close()
+    }
+  })
+
+  test('cost evidence settles only under an exact human approval and retains conservative occupancy', () => {
+    const store = fresh()
+    try {
+      const initial = created(store).campaign
+      const campaign = replaceCampaignSnapshot(store, {
+        ...initial,
+        modelReviews: [
+          {
+            id: 'rmr_cost',
+            dispatchKey: 'cost-review',
+            approvalId: 'hap-review',
+            evidencePackHash: `sha256:${'d'.repeat(64)}`,
+            configHash: `sha256:${'e'.repeat(64)}`,
+            artifactVersionIds: [],
+            currency: 'USD',
+            reservedCost: 10,
+            maxRequests: 2,
+            maxOutputTokens: 1024,
+            requestCount: 1,
+            status: 'failed',
+            ownerPid: process.pid,
+            actualCost: null,
+          },
+        ],
+      })
+      const wrongCurrency = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'cost-eur',
+        expectedVersion: campaign.version,
+        command: {
+          kind: 'recordCostEvidence',
+          evidence: {
+            id: 'rce-eur',
+            subject: { kind: 'model_review', id: 'rmr_cost' },
+            currency: 'EUR',
+            amount: 20,
+            description: 'Recorded provider cost in the wrong currency.',
+            sourceHash: CONTENT_HASH,
+            source: 'provider-receipt',
+          },
+        },
+      })
+      expect(wrongCurrency).toMatchObject({ ok: false, code: 'invalid_cost_evidence' })
+      const recorded = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'cost-provider',
+        expectedVersion: campaign.version,
+        command: {
+          kind: 'recordCostEvidence',
+          evidence: {
+            id: 'rce-provider',
+            subject: { kind: 'model_review', id: 'rmr_cost' },
+            currency: 'USD',
+            amount: 20,
+            description: 'Provider receipt reports the completed independent review cost.',
+            sourceHash: CONTENT_HASH,
+            source: 'provider-receipt',
+          },
+        },
+      })
+      if (!recorded.ok) throw new Error(recorded.message)
+      const lowerBudget = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'cost-overrun-budget',
+        expectedVersion: recorded.campaign.version,
+        command: { kind: 'setBudget', budget: { currency: 'USD', limit: 15 } },
+      })
+      expect(lowerBudget).toMatchObject({ ok: false, code: 'reserved_budget' })
+      const changedCurrency = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'cost-currency-budget',
+        expectedVersion: recorded.campaign.version,
+        command: { kind: 'setBudget', budget: { currency: 'EUR', limit: 100 } },
+      })
+      expect(changedCurrency).toMatchObject({ ok: false, code: 'reserved_budget' })
+      const scope = costEvidenceApprovalScope(
+        recorded.campaign,
+        'rce-provider',
+        Date.now() + 60_000,
+      )
+      const approved = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-cost',
+        expectedVersion: recorded.campaign.version,
+        command: {
+          kind: 'approve',
+          approvalId: 'hap-cost',
+          bundleHash: recorded.campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'cost-proof-1', verifiedAt: Date.now() },
+          scope,
+        },
+      })
+      if (!approved.ok) throw new Error(approved.message)
+      const differentProofReplay = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-cost',
+        expectedVersion: recorded.campaign.version,
+        command: {
+          kind: 'approve',
+          approvalId: 'hap-cost',
+          bundleHash: recorded.campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'cost-proof-2', verifiedAt: Date.now() },
+          scope,
+        },
+      })
+      expect(differentProofReplay).toMatchObject({ ok: false, code: 'idempotency_conflict' })
+      const settled = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'settle-cost',
+        expectedVersion: approved.campaign.version,
+        command: { kind: 'settleCostEvidence', evidenceId: 'rce-provider', approvalId: 'hap-cost' },
+      })
+      expect(settled).toMatchObject({
+        ok: true,
+        campaign: { costSettlements: [{ amount: 20, evidenceId: 'rce-provider' }] },
+      })
+      if (!settled.ok) return
+      const secondEvidence = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'cost-second-evidence',
+        expectedVersion: settled.campaign.version,
+        command: {
+          kind: 'recordCostEvidence',
+          evidence: {
+            id: 'rce-second',
+            subject: { kind: 'model_review', id: 'rmr_cost' },
+            currency: 'USD',
+            amount: 21,
+            description: 'A later human attestation for the same finished review.',
+            sourceHash: `sha256:${'f'.repeat(64)}`,
+            source: 'human-attestation',
+          },
+        },
+      })
+      if (!secondEvidence.ok) throw new Error(secondEvidence.message)
+      const duplicateSubjectApproval = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-second-cost',
+        expectedVersion: secondEvidence.campaign.version,
+        command: {
+          kind: 'approve',
+          bundleHash: secondEvidence.campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'cost-proof-3', verifiedAt: Date.now() },
+          scope: costEvidenceApprovalScope(
+            secondEvidence.campaign,
+            'rce-second',
+            Date.now() + 60_000,
+          ),
+        },
+      })
+      expect(duplicateSubjectApproval).toMatchObject({ ok: false, code: 'invalid_approval_scope' })
+      const tamperedScope = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-tampered-cost',
+        expectedVersion: secondEvidence.campaign.version,
+        command: {
+          kind: 'approve',
+          bundleHash: secondEvidence.campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'cost-proof-4', verifiedAt: Date.now() },
+          scope: {
+            ...costEvidenceApprovalScope(
+              secondEvidence.campaign,
+              'rce-second',
+              Date.now() + 60_000,
+            ),
+            costAmount: 20,
+            maxCost: 20,
+          },
+        },
+      })
+      expect(tamperedScope).toMatchObject({ ok: false, code: 'invalid_approval_scope' })
+      const misleadingLabel = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-misleading-label',
+        expectedVersion: secondEvidence.campaign.version,
+        command: {
+          kind: 'approve',
+          bundleHash: secondEvidence.campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'cost-proof-5', verifiedAt: Date.now() },
+          scope: {
+            ...costEvidenceApprovalScope(
+              secondEvidence.campaign,
+              'rce-second',
+              Date.now() + 60_000,
+            ),
+            costSubjectLabel: '第 99 次独立复核',
+          },
+        },
+      })
+      expect(misleadingLabel).toMatchObject({ ok: false, code: 'invalid_approval_scope' })
+    } finally {
+      store.close()
+    }
+  })
+
+  test('v2 scientific context ignores budget changes while legacy v1 remains budget-bound', () => {
+    const store = fresh()
+    try {
+      const v2 = completeReleaseArtifact(store)
+      expect(v2.taskRevisions[0]).toMatchObject({ sourceContextVersion: 2 })
+      const raised = mutateResearchCampaign(store, v2.id, {
+        idempotencyKey: 'raise-v2-budget',
+        expectedVersion: v2.version,
+        command: { kind: 'setBudget', budget: { currency: 'USD', limit: 101 } },
+      })
+      expect(raised).toMatchObject({ ok: true })
+      if (!raised.ok) return
+      expect(raised.campaign.taskRevisions[0]).toMatchObject({ status: 'verified' })
+
+      const legacy = replaceCampaignSnapshot(store, {
+        ...raised.campaign,
+        taskRevisions: raised.campaign.taskRevisions.map(
+          ({ sourceContextVersion: _version, ...task }) => ({
+            ...task,
+            sourceContextHash: scientificContextHash(raised.campaign, 1),
+          }),
+        ),
+      })
+      const changed = mutateResearchCampaign(store, legacy.id, {
+        idempotencyKey: 'raise-v1-budget',
+        expectedVersion: legacy.version,
+        command: { kind: 'setBudget', budget: { currency: 'USD', limit: 102 } },
+      })
+      expect(changed).toMatchObject({ ok: true })
+      if (changed.ok) expect(changed.campaign.taskRevisions[0]).toMatchObject({ status: 'stale' })
+    } finally {
+      store.close()
     }
   })
 })

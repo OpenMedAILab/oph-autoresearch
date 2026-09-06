@@ -2,7 +2,13 @@ import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ArtifactVersion, ResearchCampaign } from '@oph-autoresearch/core'
-import { getResearchCampaign, mutateResearchCampaign, type Store } from '@oph-autoresearch/store'
+import {
+  getResearchCampaign,
+  mutateResearchCampaign,
+  reviewSourceContextHash,
+  type Store,
+  scientificContextHash,
+} from '@oph-autoresearch/store'
 import { parseModelReview } from './review-contract.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
 
@@ -87,13 +93,13 @@ function requirePreviousVersion(
 
 function staleTaskIds(campaign: ResearchCampaign): Set<string> {
   const stale = new Set<string>()
-  const contextHash = sha256(
-    canonicalJson({ policy: campaign.policy, inputs: campaign.inputs, budget: campaign.budget }),
-  )
   for (const task of campaign.taskRevisions) {
-    if (task.sourceContextHash && task.sourceContextHash !== contextHash) stale.add(task.id)
-    if (campaign.taskRevisions.some((next) => next.previousRevisionId === task.id))
-      stale.add(task.id)
+    if (
+      task.sourceContextHash &&
+      task.sourceContextHash !== scientificContextHash(campaign, task.sourceContextVersion ?? 1)
+    )
+      if (campaign.taskRevisions.some((next) => next.previousRevisionId === task.id))
+        stale.add(task.id)
     for (const contentHash of task.labelSetContentHashes ?? []) {
       const bound = campaign.labelSets?.find((labelSet) => labelSet.contentHash === contentHash)
       const latest = campaign.labelSets
@@ -159,23 +165,12 @@ function reviewEvidence(campaign: ResearchCampaign, reviewId: unknown) {
     typeof reviewId === 'string'
       ? campaign.modelReviews?.find((item) => item.id === reviewId)
       : undefined
-  const sourceContextHash = sha256(
-    canonicalJson({
-      context: sha256(
-        canonicalJson({
-          policy: campaign.policy,
-          inputs: campaign.inputs,
-          budget: campaign.budget,
-        }),
-      ),
-      literatureCitations: campaign.literatureCitations ?? [],
-    }),
-  )
   if (
     !review ||
     review.status !== 'done' ||
     review.sourceValidity !== 'current' ||
-    review.sourceContextHash !== sourceContextHash ||
+    review.sourceContextHash !==
+      reviewSourceContextHash(campaign, review.sourceContextVersion ?? 1) ||
     review.artifactVersionIds.some((id) => !isCurrentValidatedArtifact(campaign, id))
   )
     return null

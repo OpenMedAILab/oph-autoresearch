@@ -71,6 +71,7 @@ export {
   workspaceOf,
 } from './repos.ts'
 export {
+  costEvidenceApprovalScope,
   createResearchCampaign,
   findRunningSyntheticAttempts,
   getResearchCampaign,
@@ -82,6 +83,9 @@ export {
   type ResearchRunningAttempt,
   rebuildResearchCampaignProjection,
   recoverRunningSyntheticAttempts,
+  researchCostSummary,
+  reviewSourceContextHash,
+  scientificContextHash,
 } from './research.ts'
 export { deliverResearchOutbox } from './research-outbox.ts'
 // 中间资源：runtime 的 sink 落盘与回读
