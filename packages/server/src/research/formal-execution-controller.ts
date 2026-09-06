@@ -614,6 +614,16 @@ export class FormalExecutionController {
           const current = await this.fresh(scope, attemptId, route, held, true)
           if (!current) return
           if (
+            job &&
+            (job.specHash !== sha256(canonicalJson(held.spec)) ||
+              canonicalJson(job.spec) !== canonicalJson(held.spec))
+          ) {
+            await this.markUnknown(scope, attemptId, held)
+            resume = true
+            await Bun.sleep(this.pollIntervalMs)
+            continue
+          }
+          if (
             !job ||
             ['queued', 'running', 'cancel_requested', 'completion_requested'].includes(job.status)
           ) {
@@ -690,6 +700,13 @@ export class FormalExecutionController {
             }
             return
           }
+          const task = current.campaign.taskRevisions.find(
+            (item) => item.id === current.attempt.taskRevisionId,
+          )
+          if (!task || !current.attempt.formalExecutionJobSpecHash) {
+            await this.markUnknown(scope, attemptId, held)
+            return
+          }
           this.mutate(scope, `finish-formal:${attemptId}:${held.observer.generation}`, {
             kind: 'finishFormalExecution',
             attemptId,
@@ -697,6 +714,16 @@ export class FormalExecutionController {
             uri: saved.uri,
             contentHash: saved.hash,
             receiptHash: saved.hash,
+            validation: {
+              schema: 'research-formal-oci-completion-v1',
+              jobSpecHash: current.attempt.formalExecutionJobSpecHash,
+              formalPlanHash: held.spec.formalPlanHash,
+              inputHash: task.inputHash,
+              contentHash: saved.hash,
+              byteLength: receipt.byteLength,
+              evaluatorHash: held.spec.formalPlan.trustedEvaluatorHash,
+              validatedAt: Date.now(),
+            },
           })
           resume = false
           return

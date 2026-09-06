@@ -151,8 +151,10 @@ export {
 // 服务端 → 客户端的事件
 export {
   type ArtifactVersion,
+  type CompletionValidation,
   canonicalResearchBundle,
   canonicalResearchControllerBasis,
+  type FormalCompletionValidation,
   foldResearchEvents,
   type HumanApproval,
   isResearchTemplateId,

@@ -100,7 +100,7 @@ export interface ArtifactVersion {
   dataClass?: 'synthetic' | 'public' | 'restricted-reference'
   inputArtifactVersionIds?: string[]
   schemaId?: string
-  validation?: SyntheticCompletionValidation
+  validation?: CompletionValidation
   producerAttemptId?: string
   producerTaskRevisionId?: string
   id: string
@@ -297,6 +297,23 @@ export interface SyntheticCompletionValidation {
   byteLength: number
   verifiedAt: number
 }
+
+/** A v4 OCI receipt whose evaluator and frozen execution contract were verified by authority. */
+export interface FormalCompletionValidation {
+  schema: 'research-formal-oci-completion-v1'
+  /** Hash of the exact persisted v4 JobSpec, distinct from the task input. */
+  jobSpecHash: string
+  formalPlanHash: string
+  /** The task's original input hash, never a substitute plan hash. */
+  inputHash: string
+  contentHash: string
+  byteLength: number
+  evaluatorHash: string
+  validatedAt: number
+}
+
+/** Existing synthetic completions remain wire-compatible; formal receipts add a frozen-contract proof. */
+export type CompletionValidation = SyntheticCompletionValidation | FormalCompletionValidation
 
 export interface ResearchModelReview {
   executionOutcome?: 'completed' | 'failed'
@@ -625,6 +642,7 @@ export type ResearchCommand =
       uri: string
       contentHash: string
       receiptHash: string
+      validation: FormalCompletionValidation
     }
   | {
       /** Records an authority-confirmed terminal state without admitting an artifact. */

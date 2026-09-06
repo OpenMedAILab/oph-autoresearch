@@ -5,6 +5,7 @@ import {
   canonicalFormalExecutionPlan,
   canonicalResearchBundle,
   canonicalResearchControllerBasis,
+  type FormalCompletionValidation,
   foldResearchEvents,
   type HumanApproval,
   isResearchTemplateId,
@@ -30,6 +31,28 @@ import type { Store } from './db.ts'
 const SHA256 = /^sha256:[a-f0-9]{64}$/
 const AUTHORITY_EPOCH = /^[A-Za-z0-9_-]{16,128}$/
 const OBSERVER_LEASE_MAX_MS = 60_000
+
+function isFormalCompletionValidation(value: unknown): value is FormalCompletionValidation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const validation = value as Partial<FormalCompletionValidation>
+  return (
+    validation.schema === 'research-formal-oci-completion-v1' &&
+    [
+      validation.jobSpecHash,
+      validation.formalPlanHash,
+      validation.inputHash,
+      validation.contentHash,
+      validation.evaluatorHash,
+    ].every((hash) => typeof hash === 'string' && SHA256.test(hash)) &&
+    typeof validation.byteLength === 'number' &&
+    Number.isSafeInteger(validation.byteLength) &&
+    validation.byteLength >= 0 &&
+    validation.byteLength <= 1024 * 1024 &&
+    typeof validation.validatedAt === 'number' &&
+    Number.isSafeInteger(validation.validatedAt) &&
+    validation.validatedAt > 0
+  )
+}
 
 type EventRow = {
   id: string
@@ -939,6 +962,29 @@ function hasExactReleasableArtifact(
   )
   const attempt = campaign.attempts.find((candidate) => candidate.id === artifact.producerAttemptId)
   if (!task || !attempt) return false
+  if (artifact.kind === 'formal_execution_receipt') {
+    const dispatch = (campaign.formalExecutionDispatches ?? []).find(
+      (candidate) => candidate.attemptId === attempt.id,
+    )
+    const plan = (campaign.formalExecutionPlans ?? []).find(
+      (candidate) => candidate.planId === dispatch?.planId,
+    )
+    const validation = artifact.validation
+    if (
+      !dispatch ||
+      !plan ||
+      dispatch.status !== 'completed' ||
+      dispatch.receiptHash !== artifact.contentHash ||
+      !isFormalCompletionValidation(validation) ||
+      validation.jobSpecHash !== attempt.formalExecutionJobSpecHash ||
+      validation.formalPlanHash !== dispatch.planHash ||
+      validation.formalPlanHash !== formalExecutionPlanHash(plan) ||
+      validation.inputHash !== task.inputHash ||
+      validation.contentHash !== artifact.contentHash ||
+      validation.evaluatorHash !== plan.trustedEvaluatorHash
+    )
+      return false
+  }
   return (
     task.id === artifact.producerTaskRevisionId &&
     artifact.validation.inputHash === task.inputHash &&
@@ -2388,10 +2434,17 @@ function nextCampaign(
         (item) => item.attemptId === attempt?.id,
       )
       const approval = campaign.approvals.find((item) => item.id === dispatch?.approvalId)
+      const plan = (campaign.formalExecutionPlans ?? []).find(
+        (item) => item.planId === dispatch?.planId,
+      )
+      const task = campaign.taskRevisions.find((item) => item.id === attempt?.taskRevisionId)
+      const validation = command.validation
       if (
         !attempt ||
         !dispatch ||
         !approval ||
+        !plan ||
+        !task ||
         approval.status === 'revoked' ||
         approval.consumedBy !== `formal-execution:${dispatch.id}` ||
         !currentFormalObserver(attempt, command.observer, now) ||
@@ -2399,6 +2452,14 @@ function nextCampaign(
         !SHA256.test(command.contentHash) ||
         !SHA256.test(command.receiptHash) ||
         command.contentHash !== command.receiptHash ||
+        !isFormalCompletionValidation(validation) ||
+        validation.jobSpecHash !== attempt.formalExecutionJobSpecHash ||
+        validation.formalPlanHash !== dispatch.planHash ||
+        validation.formalPlanHash !== formalExecutionPlanHash(plan) ||
+        validation.inputHash !== task.inputHash ||
+        validation.contentHash !== command.contentHash ||
+        validation.evaluatorHash !== plan.trustedEvaluatorHash ||
+        validation.validatedAt > now + 60_000 ||
         textError(command.uri, 'uri')
       )
         return invalid(
@@ -2416,6 +2477,7 @@ function nextCampaign(
         mediaType: 'application/json',
         dataClass: 'restricted-reference',
         schemaId: 'research-formal-oci-receipt-v1',
+        validation: cloneJson(validation),
         producerAttemptId: attempt.id,
         producerTaskRevisionId: attempt.taskRevisionId,
       }

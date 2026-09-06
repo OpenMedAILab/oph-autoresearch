@@ -2,7 +2,11 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { FormalExecutionPlan, ResearchCampaign } from '@oph-autoresearch/core'
+import type {
+  FormalExecutionJobSpec,
+  FormalExecutionPlan,
+  ResearchCampaign,
+} from '@oph-autoresearch/core'
 import {
   createConversation,
   createResearchCampaign,
@@ -36,6 +40,7 @@ class FixtureAuthority {
   throwAfterSubmit = false
   acceptReceipt = true
   queryFailures = 0
+  mismatchTerminalSpec = false
   current: DurableJob | null = null
   async identity() {
     return { schema: 'research-authority-identity-v1' as const, epoch }
@@ -50,7 +55,7 @@ class FixtureAuthority {
     expect(hash(input.candidateReceipt)).toBe(hash(candidateReceipt))
     this.staged++
   }
-  async submit(spec: DurableJob['spec'], expectedEpoch: string) {
+  async submit(spec: FormalExecutionJobSpec, expectedEpoch: string) {
     expect(expectedEpoch).toBe(epoch)
     this.submitted++
     this.current = {
@@ -64,7 +69,7 @@ class FixtureAuthority {
     if (this.throwAfterSubmit) throw new Error('lost submit response')
     return this.current
   }
-  async query(key: string, expectedEpoch: string) {
+  async query(key: string, expectedEpoch: string): Promise<DurableJob | null> {
     expect(expectedEpoch).toBe(epoch)
     if (this.queryFailures > 0) {
       this.queryFailures--
@@ -72,6 +77,13 @@ class FixtureAuthority {
     }
     if (!this.current || this.current.spec.dispatchKey !== key) return null
     this.queried++
+    if (this.mismatchTerminalSpec)
+      return {
+        ...this.current,
+        specHash: hash('wrong-formal-spec'),
+        status: 'failed' as const,
+        error: 'wrong job',
+      }
     if (this.queried >= this.completeOnQuery && this.current.status === 'queued')
       this.current = { ...this.current, status: 'completed', contentHash: hash(receipt) }
     return this.current
@@ -89,7 +101,7 @@ class FixtureAuthority {
   async reconcileInterrupted() {
     return this.current ? [this.current] : []
   }
-  async verifyReceipt(_spec: DurableJob['spec'], bytes: Uint8Array) {
+  async verifyReceipt(_spec: FormalExecutionJobSpec, bytes: Uint8Array) {
     return this.acceptReceipt && hash(bytes) === hash(receipt)
   }
 }
@@ -206,7 +218,7 @@ function seed(store: Store, root: string) {
           formalEvaluatorId: frozen.trustedEvaluatorId,
           formalResources: frozen.resources,
           artifactVersionIds: ['candidate-artifact'],
-          maxCost: 0,
+          maxCost: 1,
           currency: 'USD',
           expiresAt: Date.now() + 60_000,
         },
@@ -289,6 +301,12 @@ test('formal controller persists a frozen v4 attempt, polls to receipt, and neve
     )!
     expect(artifact.uri.startsWith('file://')).toBe(true)
     expect(hash(await readFile(new URL(artifact.uri)))).toBe(hash(receipt))
+    expect(artifact.validation).toMatchObject({
+      schema: 'research-formal-oci-completion-v1',
+      inputHash: campaign.taskRevisions[0]!.inputHash,
+      contentHash: artifact.contentHash,
+      formalPlanHash: hash(canonicalJson(seeded.frozen)),
+    })
   } finally {
     controller.close()
     store.close()
@@ -410,6 +428,60 @@ test('a tampered formal receipt remains unknown and is never admitted as an arti
     expect(campaign.artifactVersions.some((item) => item.kind === 'formal_execution_receipt')).toBe(
       false,
     )
+  } finally {
+    controller.close()
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a terminal response for a different frozen spec remains unknown', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'oph-formal-controller-'))
+  const store = new Store({ path: ':memory:' })
+  const authority = new FixtureAuthority()
+  authority.mismatchTerminalSpec = true
+  const seeded = seed(store, root)
+  const scope: FormalExecutionScope = {
+    workspaceId: seeded.workspace.id,
+    workspaceRoot: root,
+    campaignId: seeded.campaign.id,
+  }
+  const controller = new FormalExecutionController(
+    store,
+    [route(authority)],
+    {
+      async read() {
+        return { code, candidateReceipt }
+      },
+    },
+    () => {},
+    async () => ({
+      profileId: 'fixture-profile',
+      workspaceBindingHash: bindingHash,
+      connectionHash,
+      remoteRoot: '/srv/formal',
+    }),
+    'fixture-observer-four',
+    5,
+  )
+  try {
+    const submitted = await controller.submit(scope, {
+      planId: seeded.frozen.planId,
+      approvalId: 'execution-approval',
+      routeId: 'formal-route',
+      expectedVersion: seeded.campaign.version,
+      idempotencyKey: 'wrong-terminal',
+    })
+    await eventually(() =>
+      getResearchCampaign(store, seeded.campaign.id)?.attempts.find(
+        (item) => item.id === submitted.attemptId,
+      )?.status === 'unknown'
+        ? 1
+        : undefined,
+    )
+    expect(
+      getResearchCampaign(store, seeded.campaign.id)?.formalExecutionDispatches?.[0]?.status,
+    ).toBe('unknown')
   } finally {
     controller.close()
     store.close()
