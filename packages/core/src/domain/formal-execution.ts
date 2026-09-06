@@ -101,11 +101,12 @@ export function validFormalExecutionPlan(plan: unknown): plan is FormalExecution
     'resources',
     'schema',
     'taskRevisionId',
-    'trustedEvaluatorId',
     'trustedEvaluatorHash',
+    'trustedEvaluatorId',
     'workspaceBindingHash',
   ]
-  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) return false
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index]))
+    return false
   const resources = value.resources as Partial<FormalExecutionResources> | null
   const datasetMount = value.datasetMount as Record<string, unknown> | null
   const outputMount = value.outputMount as Record<string, unknown> | null
@@ -135,14 +136,30 @@ export function validFormalExecutionPlan(plan: unknown): plan is FormalExecution
       value.entryArgv.every((item, index) => item === FORMAL_ENTRY_ARGV[index]) &&
       resources &&
       Object.keys(resources).sort().join(',') === 'cpu,maxRuntimeMs,memoryMb,network,pidsLimit' &&
-      typeof maxRuntimeMs === 'number' && Number.isSafeInteger(maxRuntimeMs) && maxRuntimeMs > 0 && maxRuntimeMs <= 24 * 60 * 60 * 1000 &&
-      typeof cpu === 'number' && Number.isSafeInteger(cpu) && cpu > 0 && cpu <= 256 &&
-      typeof memoryMb === 'number' && Number.isSafeInteger(memoryMb) && memoryMb >= 128 && memoryMb <= 1_048_576 &&
-      typeof pidsLimit === 'number' && Number.isSafeInteger(pidsLimit) && pidsLimit >= 1 && pidsLimit <= 65_536 &&
+      typeof maxRuntimeMs === 'number' &&
+      Number.isSafeInteger(maxRuntimeMs) &&
+      maxRuntimeMs > 0 &&
+      maxRuntimeMs <= 24 * 60 * 60 * 1000 &&
+      typeof cpu === 'number' &&
+      Number.isSafeInteger(cpu) &&
+      cpu > 0 &&
+      cpu <= 256 &&
+      typeof memoryMb === 'number' &&
+      Number.isSafeInteger(memoryMb) &&
+      memoryMb >= 128 &&
+      memoryMb <= 1_048_576 &&
+      typeof pidsLimit === 'number' &&
+      Number.isSafeInteger(pidsLimit) &&
+      pidsLimit >= 1 &&
+      pidsLimit <= 65_536 &&
       resources.network === 'disabled' &&
-      datasetMount && datasetMount.target === FORMAL_DATASET_TARGET && datasetMount.readOnly === true &&
+      datasetMount &&
+      datasetMount.target === FORMAL_DATASET_TARGET &&
+      datasetMount.readOnly === true &&
       Object.keys(datasetMount).length === 2 &&
-      outputMount && outputMount.target === FORMAL_OUTPUT_TARGET && Object.keys(outputMount).length === 1,
+      outputMount &&
+      outputMount.target === FORMAL_OUTPUT_TARGET &&
+      Object.keys(outputMount).length === 1,
   )
 }
 
@@ -151,32 +168,92 @@ export function validFormalCodeReviewResult(value: unknown): value is FormalCode
   const review = value as Record<string, unknown>
   const hasRunnerReceipt = Object.hasOwn(review, 'runnerReceiptHash')
   const expected = hasRunnerReceipt
-    ? ['candidateArtifactId', 'candidateReceiptHash', 'codeHash', 'dataManifestHash', 'decision', 'findings', 'labelSetContentHash', 'ociImageDigest', 'reviewId', 'reviewKind', 'reviewedAt', 'reviewerId', 'runnerReceiptHash', 'schema', 'taskRevisionId', 'trustedEvaluatorId', 'trustedEvaluatorHash', 'workspaceBindingHash']
-    : ['candidateArtifactId', 'candidateReceiptHash', 'codeHash', 'dataManifestHash', 'decision', 'findings', 'labelSetContentHash', 'ociImageDigest', 'reviewId', 'reviewKind', 'reviewedAt', 'reviewerId', 'schema', 'taskRevisionId', 'trustedEvaluatorId', 'trustedEvaluatorHash', 'workspaceBindingHash']
+    ? [
+        'candidateArtifactId',
+        'candidateReceiptHash',
+        'codeHash',
+        'dataManifestHash',
+        'decision',
+        'findings',
+        'labelSetContentHash',
+        'ociImageDigest',
+        'reviewId',
+        'reviewKind',
+        'reviewedAt',
+        'reviewerId',
+        'runnerReceiptHash',
+        'schema',
+        'taskRevisionId',
+        'trustedEvaluatorHash',
+        'trustedEvaluatorId',
+        'workspaceBindingHash',
+      ]
+    : [
+        'candidateArtifactId',
+        'candidateReceiptHash',
+        'codeHash',
+        'dataManifestHash',
+        'decision',
+        'findings',
+        'labelSetContentHash',
+        'ociImageDigest',
+        'reviewId',
+        'reviewKind',
+        'reviewedAt',
+        'reviewerId',
+        'schema',
+        'taskRevisionId',
+        'trustedEvaluatorHash',
+        'trustedEvaluatorId',
+        'workspaceBindingHash',
+      ]
   if (
     Object.keys(review).sort().join(',') !== expected.join(',') ||
     review.schema !== 'research-formal-code-review-v1' ||
     !['isolated-api', 'human-signed'].includes(String(review.reviewKind)) ||
     !['accepted', 'rejected', 'needs_changes'].includes(String(review.decision)) ||
     !Number.isSafeInteger(review.reviewedAt) ||
-    !Array.isArray(review.findings) || review.findings.length > 100 ||
-    (hasRunnerReceipt && (typeof review.runnerReceiptHash !== 'string' || !SHA256.test(review.runnerReceiptHash))) ||
+    !Array.isArray(review.findings) ||
+    review.findings.length > 100 ||
+    (hasRunnerReceipt &&
+      (typeof review.runnerReceiptHash !== 'string' || !SHA256.test(review.runnerReceiptHash))) ||
     (review.reviewKind === 'human-signed' && hasRunnerReceipt)
-  ) return false
+  )
+    return false
   const ids = [
-    review.reviewId, review.candidateArtifactId, review.taskRevisionId, review.trustedEvaluatorId, review.reviewerId,
+    review.reviewId,
+    review.candidateArtifactId,
+    review.taskRevisionId,
+    review.trustedEvaluatorId,
+    review.reviewerId,
   ]
   const hashes = [
-    review.codeHash, review.candidateReceiptHash, review.workspaceBindingHash, review.ociImageDigest, review.dataManifestHash, review.labelSetContentHash, review.trustedEvaluatorHash,
+    review.codeHash,
+    review.candidateReceiptHash,
+    review.workspaceBindingHash,
+    review.ociImageDigest,
+    review.dataManifestHash,
+    review.labelSetContentHash,
+    review.trustedEvaluatorHash,
   ]
-  return ids.every((item) => typeof item === 'string' && ID.test(item)) &&
+  return (
+    ids.every((item) => typeof item === 'string' && ID.test(item)) &&
     hashes.every((item) => typeof item === 'string' && SHA256.test(item)) &&
     review.findings.every((finding) => {
       if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return false
       const row = finding as Record<string, unknown>
-      return Object.keys(row).sort().join(',') === 'code,message,severity' &&
+      return (
+        Object.keys(row).sort().join(',') === 'code,message,severity' &&
         ['info', 'warning', 'error'].includes(String(row.severity)) &&
-        typeof row.code === 'string' && ID.test(row.code) &&
-        typeof row.message === 'string' && row.message.length <= 4000
-    }) && !(review.decision === 'accepted' && review.findings.some((finding) => finding.severity === 'error'))
+        typeof row.code === 'string' &&
+        ID.test(row.code) &&
+        typeof row.message === 'string' &&
+        row.message.length <= 4000
+      )
+    }) &&
+    !(
+      review.decision === 'accepted' &&
+      review.findings.some((finding) => finding.severity === 'error')
+    )
+  )
 }
