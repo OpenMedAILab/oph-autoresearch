@@ -1,8 +1,10 @@
 import { timingSafeEqual } from 'node:crypto'
+import type { CliPreparationAdministratorConfig } from './cli-preparation-job.ts'
 import { type DurableJob, JobDaemon } from './job-daemon.ts'
 import type { RunnerTrackingConfig } from './runner-tracking.ts'
 
-interface RemoteServiceConfig {
+/** Administrator-only startup configuration. Requests can select only admitted adapter identities. */
+export interface RemoteDaemonServiceConfig {
   authorityId: string
   token: string
   port: number
@@ -10,6 +12,7 @@ interface RemoteServiceConfig {
   outputRoot: string
   workerArgv?: readonly string[]
   tracking?: RunnerTrackingConfig
+  cliPreparation?: CliPreparationAdministratorConfig
   executionRuntimeMs?: number
   renewalMs?: number
 }
@@ -17,7 +20,7 @@ function projection(job: DurableJob | null) {
   return job ? { ...job, outputPath: null, error: job.error ? 'worker-failure' : null } : null
 }
 /** Long-lived remote authority: SSH only transports this bounded protocol; disconnect does not own the job. */
-export function createRemoteDaemonService(config: RemoteServiceConfig) {
+export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
   if (
     !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(config.authorityId) ||
     !/^[A-Za-z0-9_-]{32,256}$/.test(config.token) ||
@@ -32,6 +35,7 @@ export function createRemoteDaemonService(config: RemoteServiceConfig) {
     dbPath: config.dbPath,
     outputRoot: config.outputRoot,
     ...(config.tracking ? { tracking: config.tracking } : {}),
+    ...(config.cliPreparation ? { cliPreparation: config.cliPreparation } : {}),
     ...(config.executionRuntimeMs ? { executionRuntimeMs: config.executionRuntimeMs } : {}),
     ...(config.renewalMs ? { renewalMs: config.renewalMs } : {}),
   })
@@ -148,8 +152,19 @@ export async function runRemoteDaemonService(
     !raw ||
     typeof raw !== 'object' ||
     Array.isArray(raw) ||
-      Object.keys(raw).some(
-      (key) => !['authorityId', 'token', 'port', 'dbPath', 'outputRoot', 'tracking', 'executionRuntimeMs', 'renewalMs'].includes(key),
+    Object.keys(raw).some(
+      (key) =>
+        ![
+          'authorityId',
+          'token',
+          'port',
+          'dbPath',
+          'outputRoot',
+          'tracking',
+          'cliPreparation',
+          'executionRuntimeMs',
+          'renewalMs',
+        ].includes(key),
     )
   )
     throw new Error('Invalid remote daemon administrator configuration')

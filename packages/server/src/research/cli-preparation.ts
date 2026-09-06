@@ -10,6 +10,7 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 export type CliPreparationAdapter = {
   kind: 'codex-exec' | 'claude-print'
   executable: string
+  binaryHash: string
   id: string
   model: string
 }
@@ -57,7 +58,8 @@ function command(a: CliPreparationAdapter, p: string) {
     !a.model ||
     a.model.length > 256 ||
     !a.executable ||
-    /[\0\r\n]/.test(a.executable)
+    /[\0\r\n]/.test(a.executable) ||
+    !/^sha256:[a-f0-9]{64}$/.test(a.binaryHash)
   )
     throw new Error('invalid admitted CLI adapter')
   return a.kind === 'codex-exec'
@@ -134,6 +136,8 @@ export async function prepareCliDraft(input: {
   adapter: CliPreparationAdapter
   capability: PreparationCapability
   credentialHome: string
+  /** A daemon worker is already a dedicated process group, so its CLI must inherit that group. */
+  processGroup?: 'isolated' | 'daemon-worker'
 }): Promise<CliPreparationDraft> {
   if (
     !input.capability.verify() ||
@@ -159,6 +163,7 @@ export async function prepareCliDraft(input: {
       id: input.adapter.id,
       model: input.adapter.model,
       executable: input.adapter.executable,
+      binaryHash: input.adapter.binaryHash,
     }),
     approved = Object.freeze({
       taskRevisionId: input.capability.taskRevisionId,
@@ -178,7 +183,7 @@ export async function prepareCliDraft(input: {
   let timedOut = false
   const terminate = (signal: 'SIGTERM' | 'SIGKILL') => {
     if (!child) return
-    if (process.platform !== 'win32') {
+    if (input.processGroup !== 'daemon-worker' && process.platform !== 'win32') {
       try {
         process.kill(-child.pid, signal)
         return
@@ -191,7 +196,7 @@ export async function prepareCliDraft(input: {
       cwd: stage,
       stdout: 'pipe',
       stderr: 'pipe',
-      detached: process.platform !== 'win32',
+      detached: input.processGroup !== 'daemon-worker' && process.platform !== 'win32',
       env: {
         PATH: process.env.PATH ?? '',
         HOME: input.credentialHome,
@@ -200,6 +205,16 @@ export async function prepareCliDraft(input: {
     })
     timer = setTimeout(() => {
       timedOut = true
+      // The daemon worker is a dedicated job group. This covers CLI descendants
+      // that ignore a direct TERM without ever signalling the daemon's group.
+      if (input.processGroup === 'daemon-worker' && process.platform !== 'win32') {
+        try {
+          process.kill(-process.pid, 'SIGTERM')
+          return
+        } catch {
+          // Fall through to the owned child where process groups are unavailable.
+        }
+      }
       terminate('SIGTERM')
       escalation = setTimeout(() => terminate('SIGKILL'), 1000)
     }, input.maxRuntimeMs)

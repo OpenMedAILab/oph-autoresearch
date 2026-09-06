@@ -9,8 +9,26 @@
 export { lanCandidates } from './pairing.ts'
 // 桌面外壳异常拉起后的单次退出现场；CLI 解析后交回 serve 的恢复路径。
 export { processExitObservationFromEnv } from './process-exit.ts'
+export {
+  type CliPreparationCandidateReceipt,
+  candidateReceipt,
+  cliPreparationJobSpecHash,
+  verifyCandidateReceipt,
+} from './research/cli-preparation-candidate.ts'
+export {
+  type CliPreparationAdministratorConfig,
+  type CliPreparationJobSpec,
+  cliPreparationAdapterConfigHash,
+  cliPreparationExecutableHash,
+  type DaemonJobSpec,
+  isCliPreparationJob,
+} from './research/cli-preparation-job.ts'
 export { runEvidenceCliWorker } from './research/evidence-cli-worker.ts'
 export { runResearchJobWorker } from './research/job-daemon-worker.ts'
-export { runRemoteDaemonService } from './research/remote-daemon-service.ts'
+export {
+  createRemoteDaemonService,
+  type RemoteDaemonServiceConfig,
+  runRemoteDaemonService,
+} from './research/remote-daemon-service.ts'
 // 服务入口
 export { serve } from './server.ts'

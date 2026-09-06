@@ -3,12 +3,23 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import type { ResearchJobSpec, ResearchTemplateId } from '@oph-autoresearch/core'
+import { verifyCandidateReceipt } from './cli-preparation-candidate.ts'
+import {
+  type CliPreparationAdministratorConfig,
+  type CliPreparationJobSpec,
+  cliPreparationAdapterConfigHash,
+  cliPreparationExecutableHash,
+  type DaemonJobSpec,
+  isCliPreparationJob,
+} from './cli-preparation-job.ts'
 import {
   captureRunnerTracking,
   type RunnerTrackingConfig,
   verifyTrackingBinding,
 } from './runner-tracking.ts'
 import { fixedResearchTemplate } from './template-registry.ts'
+
+const MAX_CLI_PREPARATION_RECEIPT_BYTES = 600_000
 
 export type JobTemplate = ResearchTemplateId
 export type JobStatus =
@@ -20,7 +31,11 @@ export type JobStatus =
   | 'cancelled'
   | 'failed'
   | 'interrupted'
-export type JobSpec = ResearchJobSpec
+export type JobSpec = DaemonJobSpec
+export type {
+  CliPreparationAdministratorConfig,
+  CliPreparationJobSpec,
+} from './cli-preparation-job.ts'
 export interface DurableJob {
   spec: JobSpec
   specHash: string
@@ -109,8 +124,92 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasKeys(value: Record<string, unknown>, keys: readonly string[]) {
   return Object.keys(value).sort().join(',') === [...keys].sort().join(',')
 }
+function parseCliPreparation(value: Record<string, unknown>): CliPreparationJobSpec {
+  if (
+    !hasKeys(value, [
+      'campaignId',
+      'backendPolicyHash',
+      'dispatchKey',
+      'execution',
+      'inputHash',
+      'lease',
+      'resource',
+      'taskRevisionId',
+      'templateId',
+      'version',
+    ]) ||
+    !isRecord(value.resource) ||
+    !hasKeys(value.resource, ['cpu', 'memoryMb']) ||
+    !isRecord(value.lease) ||
+    !hasKeys(value.lease, ['expiresAt', 'fence', 'ownerId', 'token']) ||
+    !isRecord(value.execution) ||
+    !hasKeys(value.execution, [
+      'adapter',
+      'adapterId',
+      'adapterConfigHash',
+      'candidateId',
+      'clientDispatchKey',
+      'configHash',
+      'deviceId',
+      'instructions',
+      'maxCost',
+      'maxRuntimeMs',
+      'model',
+      'preparationId',
+    ])
+  )
+    throw new Error('invalid CLI preparation JobSpec schema')
+  const resource = value.resource
+  const lease = value.lease
+  const execution = value.execution
+  if (
+    value.version !== 3 ||
+    execution.adapter !== 'cli-preparation-v1' ||
+    !['preparationId', 'candidateId', 'clientDispatchKey', 'adapterId', 'deviceId'].every((key) =>
+      validText(execution[key]),
+    ) ||
+    !/^sha256:[a-f0-9]{64}$/.test(String(execution.adapterConfigHash)) ||
+    typeof execution.model !== 'string' ||
+    execution.model.length < 1 ||
+    execution.model.length > 256 ||
+    typeof execution.instructions !== 'string' ||
+    execution.instructions.length < 1 ||
+    execution.instructions.length > 32_000 ||
+    !/^sha256:[a-f0-9]{64}$/.test(String(execution.configHash)) ||
+    typeof execution.maxRuntimeMs !== 'number' ||
+    !Number.isSafeInteger(execution.maxRuntimeMs) ||
+    execution.maxRuntimeMs < 1 ||
+    execution.maxRuntimeMs > 600_000 ||
+    typeof execution.maxCost !== 'number' ||
+    !Number.isFinite(execution.maxCost) ||
+    execution.maxCost <= 0 ||
+    !validText(value.dispatchKey) ||
+    !validText(value.campaignId) ||
+    !validText(value.taskRevisionId) ||
+    !/^sha256:[a-f0-9]{64}$/.test(String(value.backendPolicyHash)) ||
+    !/^sha256:[a-f0-9]{64}$/.test(String(value.inputHash)) ||
+    resource.cpu !== 1 ||
+    typeof resource.memoryMb !== 'number' ||
+    !Number.isSafeInteger(resource.memoryMb) ||
+    resource.memoryMb !== 256 ||
+    !validText(lease.ownerId) ||
+    !validText(lease.token) ||
+    typeof lease.fence !== 'number' ||
+    !Number.isSafeInteger(lease.fence) ||
+    lease.fence < 1 ||
+    !Number.isSafeInteger(lease.expiresAt)
+  )
+    throw new Error('invalid CLI preparation JobSpec values')
+  try {
+    fixedResearchTemplate(value.templateId)
+  } catch {
+    throw new Error('invalid CLI preparation JobSpec template')
+  }
+  return value as unknown as CliPreparationJobSpec
+}
 function parse(value: unknown): JobSpec {
   if (!isRecord(value)) throw new Error('invalid JobSpec')
+  if (value.version === 3) return parseCliPreparation(value)
   if (
     !hasKeys(value, [
       ...(value.trackingPolicyHash === undefined ? [] : ['trackingPolicyHash']),
@@ -168,7 +267,7 @@ function parse(value: unknown): JobSpec {
   } catch {
     throw new Error('invalid JobSpec template')
   }
-  return value as unknown as JobSpec
+  return value as unknown as ResearchJobSpec
 }
 function row(value: Record<string, unknown> | null): DurableJob | null {
   return value
@@ -228,10 +327,49 @@ function isSafeDirectory(path: string, boundary: string) {
     throw new Error('output escapes root')
   return real
 }
+function cliPreparationConfig(config: CliPreparationAdministratorConfig): string {
+  if (
+    !config ||
+    !/^sha256:[a-f0-9]{64}$/.test(config.backendPolicyHash) ||
+    typeof config.workspaceRoot !== 'string' ||
+    typeof config.workspaceScope !== 'string' ||
+    typeof config.credentialHome !== 'string' ||
+    !Array.isArray(config.adapters) ||
+    config.adapters.length === 0 ||
+    new Set(config.adapters.map((adapter) => adapter.deviceId)).size !== config.adapters.length ||
+    config.adapters.some(
+      (adapter) =>
+        !validText(adapter.deviceId) ||
+        !validText(adapter.id) ||
+        !['codex-exec', 'claude-print'].includes(adapter.kind) ||
+        typeof adapter.executable !== 'string' ||
+        !adapter.executable ||
+        /[\0\r\n]/.test(adapter.executable) ||
+        !/^sha256:[a-f0-9]{64}$/.test(adapter.binaryHash) ||
+        typeof adapter.model !== 'string' ||
+        !adapter.model ||
+        adapter.model.length > 256,
+    )
+  )
+    throw new Error('invalid CLI preparation administrator configuration')
+  const boundAdapters = config.adapters.map((adapter) => ({
+    ...adapter,
+    // Resolve an administrator's PATH symlink once at startup. The worker receives
+    // this immutable binary path and re-hashes it immediately before launch.
+    executable: realpathSync(adapter.executable),
+  }))
+  for (const adapter of boundAdapters) {
+    if (cliPreparationExecutableHash(adapter.executable) !== adapter.binaryHash)
+      throw new Error('CLI preparation executable has changed')
+  }
+  return JSON.stringify({ ...config, adapters: boundAdapters })
+}
 
 export class JobDaemon implements JobDaemonPort {
   readonly trackingPolicyHash: string | undefined
   private readonly trackingConfigJson: string | undefined
+  private readonly cliPreparationConfigJson: string | undefined
+  private readonly cliPreparationConfig: CliPreparationAdministratorConfig | undefined
   private readonly db: Database
   private server: ReturnType<typeof Bun.serve> | null = null
   private endpointToken: string | null = null
@@ -249,6 +387,7 @@ export class JobDaemon implements JobDaemonPort {
     dbPath: string
     outputRoot: string
     tracking?: RunnerTrackingConfig
+    cliPreparation?: CliPreparationAdministratorConfig
     /** Enables a deadline independent of a short, renewable v1 observation lease. */
     executionRuntimeMs?: number
     renewalMs?: number
@@ -259,6 +398,12 @@ export class JobDaemon implements JobDaemonPort {
       const captured = captureRunnerTracking(opts.tracking)
       this.trackingPolicyHash = captured.policyHash
       this.trackingConfigJson = JSON.stringify(captured.config)
+    }
+    if (opts.cliPreparation) {
+      this.cliPreparationConfigJson = cliPreparationConfig(opts.cliPreparation)
+      this.cliPreparationConfig = JSON.parse(
+        this.cliPreparationConfigJson,
+      ) as CliPreparationAdministratorConfig
     }
     mkdirSync(resolve(opts.outputRoot), { recursive: true })
     this.outputRoot = resolve(opts.outputRoot)
@@ -306,11 +451,25 @@ export class JobDaemon implements JobDaemonPort {
   }
   submit(input: unknown): DurableJob {
     const spec = parse(input)
-    if (spec.trackingPolicyHash !== this.trackingPolicyHash)
-      throw new Error('Tracking startup policy does not match JobSpec')
-    const plan = fixedResearchTemplate(spec.templateId)
-    if ((plan.inputHash?.() ?? plan.execute().inputHash) !== spec.inputHash)
-      throw new Error('fixed_template_input_hash_mismatch')
+    if (!isCliPreparationJob(spec)) {
+      if (spec.trackingPolicyHash !== this.trackingPolicyHash)
+        throw new Error('Tracking startup policy does not match JobSpec')
+      const plan = fixedResearchTemplate(spec.templateId)
+      if ((plan.inputHash?.() ?? plan.execute().inputHash) !== spec.inputHash)
+        throw new Error('fixed_template_input_hash_mismatch')
+    } else {
+      if (spec.backendPolicyHash !== this.cliPreparationConfig?.backendPolicyHash)
+        throw new Error('CLI preparation backend policy has changed')
+      const adapter = this.cliPreparationConfig?.adapters.find(
+        (candidate) =>
+          candidate.deviceId === spec.execution.deviceId &&
+          candidate.id === spec.execution.adapterId &&
+          candidate.model === spec.execution.model,
+      )
+      if (!adapter) throw new Error('CLI preparation adapter is not admitted')
+      if (spec.execution.adapterConfigHash !== cliPreparationAdapterConfigHash(adapter))
+        throw new Error('CLI preparation adapter configuration has changed')
+    }
     const specHash = hash(spec)
     const inserted = this.db
       .query(
@@ -327,7 +486,11 @@ export class JobDaemon implements JobDaemonPort {
         canonical(spec.lease),
         // v1 has no approved runtime budget: configuration may tighten, never enlarge its frozen expiry.
         Math.min(
-          spec.version === 2 ? Date.now() + spec.execution!.maxRuntimeMs : spec.lease.expiresAt,
+          isCliPreparationJob(spec)
+            ? Date.now() + spec.execution.maxRuntimeMs
+            : spec.version === 2
+              ? Date.now() + spec.execution!.maxRuntimeMs
+              : spec.lease.expiresAt,
           this.executionRuntimeMs === undefined ? Infinity : Date.now() + this.executionRuntimeMs,
         ),
         null,
@@ -518,8 +681,12 @@ export class JobDaemon implements JobDaemonPort {
       typeof result.outputPath !== 'string'
     )
       return null
-    const plan = fixedResearchTemplate(job.spec.templateId)
-    const expected = resolve(this.outputRoot, job.spec.dispatchKey, plan.filename)
+    const plan = isCliPreparationJob(job.spec) ? null : fixedResearchTemplate(job.spec.templateId)
+    const expected = resolve(
+      this.outputRoot,
+      job.spec.dispatchKey,
+      plan ? plan.filename : 'candidate.json',
+    )
     if (result.outputPath !== expected) return null
     try {
       const directory = join(this.outputRoot, job.spec.dispatchKey)
@@ -532,10 +699,16 @@ export class JobDaemon implements JobDaemonPort {
       )
         return null
       const bytes = readFileSync(expected)
+      if (isCliPreparationJob(job.spec) && bytes.byteLength > MAX_CLI_PREPARATION_RECEIPT_BYTES)
+        return null
       const contentHash = hashBytes(bytes)
       if (contentHash !== result.contentHash) return null
-      plan.verify(bytes)
-      verifyTrackingBinding(bytes, job.spec)
+      if (isCliPreparationJob(job.spec)) {
+        if (!verifyCandidateReceipt(JSON.parse(bytes.toString()), job.spec)) return null
+      } else {
+        fixedResearchTemplate(job.spec.templateId).verify(bytes)
+        verifyTrackingBinding(bytes, job.spec)
+      }
       return { contentHash, outputPath: expected }
     } catch {
       return null
@@ -741,6 +914,9 @@ export class JobDaemon implements JobDaemonPort {
         ),
         ...(options.waitAfterClaim ? { JOB_DAEMON_WORKER_WAIT_AFTER_CLAIM: '1' } : {}),
         ...(this.trackingConfigJson ? { OPH_RESEARCH_TRACKING_STDIN: '1' } : {}),
+        ...(this.cliPreparationConfigJson
+          ? { OPH_CLI_PREPARATION_ADMIN_CONFIG: this.cliPreparationConfigJson }
+          : {}),
       },
       detached: process.platform !== 'win32',
     })

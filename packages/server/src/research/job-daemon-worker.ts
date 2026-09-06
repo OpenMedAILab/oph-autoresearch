@@ -2,23 +2,66 @@ import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, realpathSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
+import { prepareCliDraft } from './cli-preparation.ts'
+import { candidateReceipt } from './cli-preparation-candidate.ts'
+import {
+  type CliPreparationAdministratorConfig,
+  type CliPreparationJobSpec,
+  cliPreparationAdapterConfigHash,
+  cliPreparationExecutableHash,
+  type DaemonJobSpec,
+  isCliPreparationJob,
+} from './cli-preparation-job.ts'
 import {
   captureRunnerTracking,
   collectRunnerTracking,
   verifyTrackingBinding,
 } from './runner-tracking.ts'
+import { canonicalJson, sha256 } from './skill-lock.ts'
 import { fixedResearchTemplate } from './template-registry.ts'
 
 type WorkerJob = {
-  spec: {
-    dispatchKey: string
-    inputHash: string
-    lease: unknown
-    templateId: unknown
-    trackingPolicyHash?: string
-  }
+  spec: DaemonJobSpec
   status: string
   runtimeLease?: { ownerId: string; token: string; fence: number; expiresAt: number }
+}
+
+function cliPreparationConfig(): CliPreparationAdministratorConfig | null {
+  try {
+    const value = JSON.parse(process.env.OPH_CLI_PREPARATION_ADMIN_CONFIG ?? '') as unknown
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const config = value as CliPreparationAdministratorConfig
+    if (
+      typeof config.workspaceRoot !== 'string' ||
+      !/^sha256:[a-f0-9]{64}$/.test(config.backendPolicyHash) ||
+      !config.workspaceRoot ||
+      typeof config.workspaceScope !== 'string' ||
+      typeof config.credentialHome !== 'string' ||
+      !config.credentialHome ||
+      !Array.isArray(config.adapters) ||
+      config.adapters.length === 0 ||
+      config.adapters.some(
+        (adapter) =>
+          !adapter ||
+          typeof adapter !== 'object' ||
+          !['codex-exec', 'claude-print'].includes(adapter.kind) ||
+          typeof adapter.deviceId !== 'string' ||
+          !adapter.deviceId ||
+          typeof adapter.id !== 'string' ||
+          !adapter.id ||
+          typeof adapter.model !== 'string' ||
+          !adapter.model ||
+          typeof adapter.executable !== 'string' ||
+          !adapter.executable ||
+          /[\0\r\n]/.test(adapter.executable) ||
+          !/^sha256:[a-f0-9]{64}$/.test(adapter.binaryHash),
+      )
+    )
+      return null
+    return config
+  } catch {
+    return null
+  }
 }
 
 function hashBytes(value: Uint8Array) {
@@ -58,7 +101,6 @@ export async function runResearchJobWorker(args: readonly string[]) {
   const initial = await request(`/jobs/${encodeURIComponent(dispatchKey)}`)
   const job = (initial.ok ? await initial.json() : null) as WorkerJob | null
   if (!job || job.spec.dispatchKey !== dispatchKey || job.status !== 'queued') return 3
-  const plan = fixedResearchTemplate(job.spec.templateId)
   const claimed = await request(`/claim/${encodeURIComponent(dispatchKey)}`, {
     method: 'POST',
     body: JSON.stringify({ lease: job.spec.lease, workerPid: process.pid }),
@@ -66,6 +108,13 @@ export async function runResearchJobWorker(args: readonly string[]) {
   if (!claimed.ok) return 4
   const claimedJob = (await claimed.json()) as WorkerJob
   let runtimeLease = claimedJob.runtimeLease ?? job.spec.lease
+  let terminationRequested = false
+  // Keep this leader alive after daemon SIGTERM. The daemon's owned process-group
+  // escalation can then reach a nested CLI that deliberately ignores TERM.
+  const onTermination = () => {
+    terminationRequested = true
+  }
+  if (isCliPreparationJob(job.spec)) process.on('SIGTERM', onTermination)
   let stopped = false
   let heartbeatInFlight = Promise.resolve()
   // Heartbeats only change authority runtime state. The JobSpec and its hash stay immutable.
@@ -74,7 +123,8 @@ export async function runResearchJobWorker(args: readonly string[]) {
     heartbeatInFlight = heartbeatInFlight
       .then(async () => {
         const response = await request(`/renew/${encodeURIComponent(dispatchKey)}`, {
-          method: 'POST', body: JSON.stringify({ lease: runtimeLease }),
+          method: 'POST',
+          body: JSON.stringify({ lease: runtimeLease }),
         })
         if (!response.ok) return
         const renewed = (await response.json()) as WorkerJob
@@ -91,53 +141,122 @@ export async function runResearchJobWorker(args: readonly string[]) {
     await heartbeatInFlight
   }
   try {
-  if (process.env.JOB_DAEMON_WORKER_WAIT_AFTER_CLAIM === '1') await Bun.sleep(60_000)
-  const latest = (await request(`/jobs/${encodeURIComponent(dispatchKey)}`).then((response) =>
-    response.ok ? response.json() : null,
-  )) as WorkerJob | null
-  if (!latest || latest.status !== 'running') {
-    if (latest?.status === 'cancel_requested')
-      await request(`/cancelled/${encodeURIComponent(dispatchKey)}`, {
+    if (process.env.JOB_DAEMON_WORKER_WAIT_AFTER_CLAIM === '1') await Bun.sleep(60_000)
+    const latest = (await request(`/jobs/${encodeURIComponent(dispatchKey)}`).then((response) =>
+      response.ok ? response.json() : null,
+    )) as WorkerJob | null
+    if (!latest || latest.status !== 'running') {
+      if (latest?.status === 'cancel_requested')
+        await request(`/cancelled/${encodeURIComponent(dispatchKey)}`, {
+          method: 'POST',
+          body: JSON.stringify({ lease: runtimeLease }),
+        })
+      return 0
+    }
+    if (isCliPreparationJob(job.spec)) {
+      const cliJob = job.spec as CliPreparationJobSpec
+      const config = cliPreparationConfig()
+      const adapter = config?.adapters.find(
+        (candidate) =>
+          candidate.deviceId === cliJob.execution.deviceId &&
+          candidate.id === cliJob.execution.adapterId &&
+          candidate.model === cliJob.execution.model,
+      )
+      if (
+        !config ||
+        !adapter ||
+        config.backendPolicyHash !== cliJob.backendPolicyHash ||
+        cliPreparationExecutableHash(adapter.executable) !== adapter.binaryHash ||
+        cliJob.execution.adapterConfigHash !== cliPreparationAdapterConfigHash(adapter)
+      )
+        return 8
+      const approvedConfig = {
+        kind: adapter.kind,
+        id: adapter.id,
+        model: adapter.model,
+        executable: adapter.executable,
+        binaryHash: adapter.binaryHash,
+      }
+      const capabilityHash = sha256(
+        canonicalJson({
+          taskRevisionId: cliJob.taskRevisionId,
+          workspaceScope: config.workspaceScope,
+          instructions: cliJob.execution.instructions,
+          maxRuntimeMs: cliJob.execution.maxRuntimeMs,
+          config: approvedConfig,
+        }),
+      )
+      let draft: Awaited<ReturnType<typeof prepareCliDraft>>
+      try {
+        draft = await prepareCliDraft({
+          workspaceRoot: config.workspaceRoot,
+          workspaceScope: config.workspaceScope,
+          instructions: cliJob.execution.instructions,
+          maxRuntimeMs: cliJob.execution.maxRuntimeMs,
+          adapter: approvedConfig,
+          credentialHome: config.credentialHome,
+          processGroup: 'daemon-worker',
+          capability: {
+            taskRevisionId: cliJob.taskRevisionId,
+            specHash: capabilityHash,
+            verify: () => true,
+          },
+        })
+      } catch {
+        if (terminationRequested) await Bun.sleep(300)
+        return 9
+      }
+      const bytes = Buffer.from(`${JSON.stringify(candidateReceipt(cliJob, draft))}\n`)
+      const directory = safeOutputDirectory(root, dispatchKey)
+      const path = join(directory, 'candidate.json')
+      await writeFile(path, bytes, { flag: 'wx' })
+      await heartbeatInFlight
+      const finish = await request(`/finish/${encodeURIComponent(dispatchKey)}`, {
         method: 'POST',
-        body: JSON.stringify({ lease: runtimeLease }),
+        body: JSON.stringify({
+          lease: runtimeLease,
+          result: { contentHash: hashBytes(bytes), outputPath: path },
+        }),
       })
-    return 0
-  }
-  await plan.assertSkill()
-  const payload = plan.execute()
-  if (payload.inputHash !== job.spec.inputHash) return 5
-  const trackingConfig =
-    process.env.OPH_RESEARCH_TRACKING_STDIN === '1'
-      ? captureRunnerTracking(JSON.parse(await Bun.stdin.text()))
+      return finish.ok ? 0 : 6
+    }
+    const plan = fixedResearchTemplate(job.spec.templateId)
+    await plan.assertSkill()
+    const payload = plan.execute()
+    if (payload.inputHash !== job.spec.inputHash) return 5
+    const trackingConfig =
+      process.env.OPH_RESEARCH_TRACKING_STDIN === '1'
+        ? captureRunnerTracking(JSON.parse(await Bun.stdin.text()))
+        : undefined
+    if (job.spec.trackingPolicyHash !== trackingConfig?.policyHash) return 7
+    const tracking = trackingConfig
+      ? await collectRunnerTracking(trackingConfig.config, {
+          dispatchKey,
+          policyHash: trackingConfig.policyHash,
+          payload,
+        })
       : undefined
-  if (job.spec.trackingPolicyHash !== trackingConfig?.policyHash) return 7
-  const tracking = trackingConfig
-    ? await collectRunnerTracking(trackingConfig.config, {
-        dispatchKey,
-        policyHash: trackingConfig.policyHash,
-        payload,
-      })
-    : undefined
-  const directory = safeOutputDirectory(root, dispatchKey)
-  const path = join(directory, plan.filename)
-  const bytes = Buffer.from(
-    `${JSON.stringify({ ...payload, ...(tracking ? { tracking } : {}) })}\n`,
-  )
-  verifyTrackingBinding(bytes, job.spec)
-  plan.verify(bytes)
-  await writeFile(path, bytes, { flag: 'wx' })
-  // Serialize the last renewal before finalizing so a late heartbeat cannot race finish.
-  await heartbeatInFlight
-  const finish = await request(`/finish/${encodeURIComponent(dispatchKey)}`, {
-    method: 'POST',
-    body: JSON.stringify({
-      lease: runtimeLease,
-      result: { contentHash: hashBytes(bytes), outputPath: path },
-    }),
-  })
-  return finish.ok ? 0 : 6
+    const directory = safeOutputDirectory(root, dispatchKey)
+    const path = join(directory, plan.filename)
+    const bytes = Buffer.from(
+      `${JSON.stringify({ ...payload, ...(tracking ? { tracking } : {}) })}\n`,
+    )
+    verifyTrackingBinding(bytes, job.spec)
+    plan.verify(bytes)
+    await writeFile(path, bytes, { flag: 'wx' })
+    // Serialize the last renewal before finalizing so a late heartbeat cannot race finish.
+    await heartbeatInFlight
+    const finish = await request(`/finish/${encodeURIComponent(dispatchKey)}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        lease: runtimeLease,
+        result: { contentHash: hashBytes(bytes), outputPath: path },
+      }),
+    })
+    return finish.ok ? 0 : 6
   } finally {
     await done()
+    if (isCliPreparationJob(job.spec)) process.off('SIGTERM', onTermination)
   }
 }
 

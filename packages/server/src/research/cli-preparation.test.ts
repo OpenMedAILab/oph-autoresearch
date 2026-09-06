@@ -3,6 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prepareCliDraft } from './cli-preparation.ts'
+import { cliPreparationExecutableHash } from './cli-preparation-job.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
 
 test('runs an admitted local CLI in empty staging and returns immutable review-only code', async () => {
@@ -24,7 +25,13 @@ EOF
       instructions: 'propose only',
       maxRuntimeMs: 1000,
       credentialHome: join(root, 'credentials'),
-      adapter: { kind: 'codex-exec', executable: bin, id: 'codex', model: 'fixture' },
+      adapter: {
+        kind: 'codex-exec',
+        executable: bin,
+        binaryHash: cliPreparationExecutableHash(bin),
+        id: 'codex',
+        model: 'fixture',
+      },
       capability: {
         taskRevisionId: 'task_1',
         specHash: sha256(
@@ -33,7 +40,13 @@ EOF
             workspaceScope: '.',
             instructions: 'propose only',
             maxRuntimeMs: 1000,
-            config: { kind: 'codex-exec', id: 'codex', model: 'fixture', executable: bin },
+            config: {
+              kind: 'codex-exec',
+              id: 'codex',
+              model: 'fixture',
+              executable: bin,
+              binaryHash: cliPreparationExecutableHash(bin),
+            },
           }),
         ),
         verify: () => true,
@@ -59,7 +72,13 @@ test('requires a verified capability and realpath-contained scope', async () => 
       instructions: 'propose',
       maxRuntimeMs: 1,
       credentialHome: root,
-      adapter: { kind: 'claude-print' as const, executable: 'x', id: 'claude', model: 'x' },
+      adapter: {
+        kind: 'claude-print' as const,
+        executable: 'x',
+        binaryHash: `sha256:${'a'.repeat(64)}`,
+        id: 'claude',
+        model: 'x',
+      },
       capability: {
         taskRevisionId: 'task_1',
         specHash: `sha256:${'a'.repeat(64)}`,
@@ -86,6 +105,7 @@ test('rejects timeout even when a CLI exits successfully on TERM and cleans over
     const adapter = {
       kind: 'claude-print' as const,
       executable: bin,
+      binaryHash: '',
       id: 'claude',
       model: 'fixture',
     }
@@ -114,6 +134,8 @@ test('rejects timeout even when a CLI exits successfully on TERM and cleans over
       `#!${process.execPath}\nprocess.on('SIGTERM',()=>{console.log(JSON.stringify({result:JSON.stringify({code:'candidate'})}));process.exit(0)});setInterval(()=>{},1000);`,
       { mode: 0o755 },
     )
+    adapter.binaryHash = cliPreparationExecutableHash(bin)
+    input.capability.specHash = sha256(canonicalJson(spec))
     await expect(prepareCliDraft(input)).rejects.toThrow('exceeded approved runtime')
     await writeFile(
       bin,
