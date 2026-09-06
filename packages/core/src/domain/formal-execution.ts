@@ -106,9 +106,13 @@ export function validFormalExecutionPlan(plan: unknown): plan is FormalExecution
     'workspaceBindingHash',
   ]
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) return false
-  const resources = value.resources as Record<string, unknown> | null
+  const resources = value.resources as Partial<FormalExecutionResources> | null
   const datasetMount = value.datasetMount as Record<string, unknown> | null
   const outputMount = value.outputMount as Record<string, unknown> | null
+  const maxRuntimeMs = resources?.maxRuntimeMs
+  const cpu = resources?.cpu
+  const memoryMb = resources?.memoryMb
+  const pidsLimit = resources?.pidsLimit
   return Boolean(
     value.schema === FORMAL_EXECUTION_SCHEMA &&
       [
@@ -131,10 +135,10 @@ export function validFormalExecutionPlan(plan: unknown): plan is FormalExecution
       value.entryArgv.every((item, index) => item === FORMAL_ENTRY_ARGV[index]) &&
       resources &&
       Object.keys(resources).sort().join(',') === 'cpu,maxRuntimeMs,memoryMb,network,pidsLimit' &&
-      Number.isSafeInteger(resources.maxRuntimeMs) && resources.maxRuntimeMs > 0 && resources.maxRuntimeMs <= 24 * 60 * 60 * 1000 &&
-      Number.isSafeInteger(resources.cpu) && resources.cpu > 0 && resources.cpu <= 256 &&
-      Number.isSafeInteger(resources.memoryMb) && resources.memoryMb >= 128 && resources.memoryMb <= 1_048_576 &&
-      Number.isSafeInteger(resources.pidsLimit) && resources.pidsLimit >= 1 && resources.pidsLimit <= 65_536 &&
+      typeof maxRuntimeMs === 'number' && Number.isSafeInteger(maxRuntimeMs) && maxRuntimeMs > 0 && maxRuntimeMs <= 24 * 60 * 60 * 1000 &&
+      typeof cpu === 'number' && Number.isSafeInteger(cpu) && cpu > 0 && cpu <= 256 &&
+      typeof memoryMb === 'number' && Number.isSafeInteger(memoryMb) && memoryMb >= 128 && memoryMb <= 1_048_576 &&
+      typeof pidsLimit === 'number' && Number.isSafeInteger(pidsLimit) && pidsLimit >= 1 && pidsLimit <= 65_536 &&
       resources.network === 'disabled' &&
       datasetMount && datasetMount.target === FORMAL_DATASET_TARGET && datasetMount.readOnly === true &&
       Object.keys(datasetMount).length === 2 &&
@@ -176,4 +180,3 @@ export function validFormalCodeReviewResult(value: unknown): value is FormalCode
         typeof row.message === 'string' && row.message.length <= 4000
     }) && !(review.decision === 'accepted' && review.findings.some((finding) => finding.severity === 'error'))
 }
-    'labelSetContentHash',
