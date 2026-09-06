@@ -67,6 +67,80 @@ describe('durable localhost job daemon', () => {
     daemon.close()
   })
 
+  test('durably fences delayed submission with an epoch-bound close-unstarted tombstone', async () => {
+    const { root, daemon } = await fresh()
+    const identity = daemon.identity()
+    const request = {
+      expectedEpoch: identity.epoch,
+      dispatchKey: 'delayed-submit',
+      specHash: `sha256:${'a'.repeat(64)}`,
+    }
+    const first = daemon.closeUnstarted(request)
+    expect(first).toMatchObject({ schema: 'research-authority-closure-v1', outcome: 'not_started' })
+    expect(daemon.closeUnstarted(request)).toEqual(first)
+    expect(() =>
+      daemon.closeUnstarted({ ...request, specHash: `sha256:${'b'.repeat(64)}` }),
+    ).toThrow('tombstone conflicts')
+    expect(() => daemon.submit(spec(request.dispatchKey))).toThrow('dispatch_key_closed')
+    daemon.close()
+
+    const reopened = new JobDaemon({
+      dbPath: join(root, 'jobs.sqlite'),
+      outputRoot: join(root, 'out'),
+    })
+    expect(reopened.identity()).toEqual(identity)
+    expect(reopened.closeUnstarted(request)).toEqual(first)
+    reopened.close()
+    await rm(join(root, 'jobs.sqlite'))
+    const rebuilt = new JobDaemon({
+      dbPath: join(root, 'jobs.sqlite'),
+      outputRoot: join(root, 'out'),
+    })
+    expect(rebuilt.identity().epoch).not.toBe(identity.epoch)
+    expect(() => rebuilt.closeUnstarted(request)).toThrow('epoch does not match')
+    rebuilt.close()
+  })
+
+  test('closes only a matching existing job and preserves completed facts', async () => {
+    const { daemon } = await fresh()
+    const submitted = daemon.submit(spec('close-live'))
+    expect(() =>
+      daemon.closeUnstarted({
+        expectedEpoch: daemon.identity().epoch,
+        dispatchKey: submitted.spec.dispatchKey,
+        specHash: `sha256:${'b'.repeat(64)}`,
+      }),
+    ).toThrow('job conflicts')
+    const worker = await daemon.launchWorker(submitted.spec.dispatchKey, { waitAfterClaim: true })
+    try {
+      await waitFor(daemon, submitted.spec.dispatchKey, 'running')
+      expect(
+        daemon.closeUnstarted({
+          expectedEpoch: daemon.identity().epoch,
+          dispatchKey: submitted.spec.dispatchKey,
+          specHash: submitted.specHash,
+        }),
+      ).toMatchObject({ outcome: 'cancel_requested' })
+      await worker.exited
+      await waitFor(daemon, submitted.spec.dispatchKey, 'cancelled')
+
+      const completed = daemon.submit(spec('close-completed'))
+      const completedWorker = await daemon.launchWorker(completed.spec.dispatchKey)
+      await completedWorker.exited
+      await waitFor(daemon, completed.spec.dispatchKey, 'completed')
+      expect(
+        daemon.closeUnstarted({
+          expectedEpoch: daemon.identity().epoch,
+          dispatchKey: completed.spec.dispatchKey,
+          specHash: completed.specHash,
+        }),
+      ).toMatchObject({ outcome: 'completed' })
+    } finally {
+      if (worker.exitCode === null) worker.kill()
+      daemon.close()
+    }
+  })
+
   test('requires a random loopback bearer token and refuses expired or stale leases', async () => {
     const { daemon } = await fresh()
     const expired = daemon.submit(spec('expired', 1, 'synthetic-summary-v1', Date.now() - 1))

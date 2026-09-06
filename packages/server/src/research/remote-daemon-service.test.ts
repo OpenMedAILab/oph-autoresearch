@@ -52,6 +52,75 @@ test('remote authority enforces lease expiry without a connected submitting clie
 })
 
 import { createRemoteDaemonService } from './remote-daemon-service.ts'
+
+test('remote authority authenticates and strictly validates epoch-bound close-unstarted requests', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'oph-remote-closure-'))
+  const token = 'd'.repeat(48)
+  const service = createRemoteDaemonService({
+    authorityId: 'closure',
+    token,
+    port: 0,
+    dbPath: join(root, 'jobs.sqlite'),
+    outputRoot: join(root, 'outputs'),
+  })
+  const endpoint = `http://127.0.0.1:${service.port}`
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+  try {
+    expect((await fetch(`${endpoint}/identity`)).status).toBe(401)
+    const identityResponse = await fetch(`${endpoint}/identity`, { headers })
+    expect(identityResponse.headers.get('x-oph-authority-id')).toBe('closure')
+    const identity = (await identityResponse.json()) as {
+      identity: { schema: string; epoch: string }
+    }
+    expect(identity.identity.schema).toBe('research-authority-identity-v1')
+    expect(
+      (
+        await fetch(`${endpoint}/close-unstarted`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expectedEpoch: identity.identity.epoch }),
+        })
+      ).status,
+    ).toBe(400)
+    expect(
+      (
+        await fetch(`${endpoint}/close-unstarted`, {
+          method: 'POST',
+          headers,
+          body: 'x'.repeat(5000),
+        })
+      ).status,
+    ).toBe(413)
+    const request = {
+      expectedEpoch: identity.identity.epoch,
+      dispatchKey: 'late-remote-submit',
+      specHash: `sha256:${'c'.repeat(64)}`,
+    }
+    const closed = await fetch(`${endpoint}/close-unstarted`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(request),
+    })
+    expect(closed.headers.get('x-oph-authority-id')).toBe('closure')
+    expect(await closed.json()).toMatchObject({
+      authorityId: 'closure',
+      proof: { ...request, outcome: 'not_started' },
+    })
+    expect(
+      (
+        await fetch(`${endpoint}/close-unstarted`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ...request, expectedEpoch: 'z'.repeat(32) }),
+        })
+      ).status,
+    ).toBe(409)
+  } finally {
+    service.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 import { sha256 } from './skill-lock.ts'
 import { createSshDaemonClientForTest } from './ssh-daemon-client.ts'
 import { reconcileSyntheticRun, startSyntheticRun } from './synthetic-runner.ts'
@@ -88,6 +157,14 @@ test('remote authority executes real child, preserves lost acknowledgement, and 
   )
   const backend = { kind: 'ssh-daemon' as const, daemon: client }
   try {
+    const authorityIdentity = await client.identity()
+    expect(
+      await client.closeUnstarted({
+        expectedEpoch: authorityIdentity.epoch,
+        dispatchKey: 'fenced-before-submit',
+        specHash: `sha256:${'e'.repeat(64)}`,
+      }),
+    ).toMatchObject({ outcome: 'not_started', expectedEpoch: authorityIdentity.epoch })
     const ws = upsertWorkspace(store, root, 'remote-test')
     const parent = createConversation(store, {
       workspaceId: ws.id,

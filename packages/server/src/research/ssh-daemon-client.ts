@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
+import type {
+  ResearchAuthorityClosureProof,
+  ResearchAuthorityClosureRequest,
+  ResearchAuthorityIdentity,
+} from '@oph-autoresearch/core'
 import type { DurableJob, JobSpec } from './job-daemon.ts'
 
 const MAX_RESPONSE_BYTES = 1_000_000
@@ -26,6 +31,8 @@ export interface SshDaemonConfig {
 export interface SshDaemonAuthority {
   readonly backendPolicyHash: string
   readonly trackingPolicyHash: string | undefined
+  identity(): Promise<ResearchAuthorityIdentity>
+  closeUnstarted(request: ResearchAuthorityClosureRequest): Promise<ResearchAuthorityClosureProof>
   submit(spec: JobSpec): Promise<DurableJob>
   query(dispatchKey: string): Promise<DurableJob | null>
   cancel(dispatchKey: string): Promise<DurableJob | null>
@@ -66,6 +73,71 @@ function hashBytes(value: Uint8Array): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).sort().join(',') === [...keys].sort().join(',')
+}
+function validEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value)
+}
+function validClosureRequest(value: unknown): value is ResearchAuthorityClosureRequest {
+  return (
+    isRecord(value) &&
+    exactKeys(value, ['dispatchKey', 'expectedEpoch', 'specHash']) &&
+    TEXT_ID.test(String(value.dispatchKey)) &&
+    validEpoch(value.expectedEpoch) &&
+    SHA256.test(String(value.specHash))
+  )
+}
+function responseIdentity(value: unknown, authorityId: string): ResearchAuthorityIdentity {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['authorityId', 'identity']) ||
+    value.authorityId !== authorityId ||
+    !isRecord(value.identity) ||
+    !exactKeys(value.identity, ['epoch', 'schema']) ||
+    value.identity.schema !== 'research-authority-identity-v1' ||
+    !validEpoch(value.identity.epoch)
+  )
+    throw new Error('SSH daemon authority identity does not match')
+  return value.identity as unknown as ResearchAuthorityIdentity
+}
+function responseClosureProof(
+  value: unknown,
+  authorityId: string,
+  request: ResearchAuthorityClosureRequest,
+): ResearchAuthorityClosureProof {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['authorityId', 'proof']) ||
+    value.authorityId !== authorityId ||
+    !isRecord(value.proof) ||
+    !exactKeys(value.proof, [
+      'dispatchKey',
+      'expectedEpoch',
+      'outcome',
+      'recordedAt',
+      'schema',
+      'specHash',
+    ]) ||
+    value.proof.schema !== 'research-authority-closure-v1' ||
+    value.proof.dispatchKey !== request.dispatchKey ||
+    value.proof.expectedEpoch !== request.expectedEpoch ||
+    value.proof.specHash !== request.specHash ||
+    ![
+      'not_started',
+      'cancel_requested',
+      'completion_requested',
+      'cancelled',
+      'completed',
+      'failed',
+      'interrupted',
+    ].includes(String(value.proof.outcome)) ||
+    !Number.isSafeInteger(value.proof.recordedAt) ||
+    (value.proof.recordedAt as number) < 0
+  )
+    throw new Error('SSH daemon closure proof does not match the request')
+  return value.proof as unknown as ResearchAuthorityClosureProof
 }
 
 function safePort(value: number): boolean {
@@ -288,7 +360,7 @@ class Client implements SshDaemonAuthority {
       requireAuthorityHeader &&
       response.headers.get('x-oph-authority-id') !== this.config.authorityId
     )
-      throw new Error('SSH daemon receipt authority does not match')
+      throw new Error('SSH daemon authority header does not match')
     const declared = Number(response.headers.get('content-length'))
     if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES)
       throw new Error('SSH daemon response exceeds the maximum size')
@@ -348,6 +420,40 @@ class Client implements SshDaemonAuthority {
     if (!isRecord(value) || value.authorityId !== this.config.authorityId || !('job' in value))
       throw new Error('SSH daemon authority identity does not match')
     return responseJob(value.job, expected)
+  }
+
+  async identity(): Promise<ResearchAuthorityIdentity> {
+    const body = await this.bytes(await this.endpoint(), '/identity', {}, true)
+    let value: unknown
+    try {
+      value = JSON.parse(new TextDecoder().decode(body))
+    } catch {
+      throw new Error('SSH daemon returned invalid JSON')
+    }
+    return responseIdentity(value, this.config.authorityId)
+  }
+
+  async closeUnstarted(
+    request: ResearchAuthorityClosureRequest,
+  ): Promise<ResearchAuthorityClosureProof> {
+    if (!validClosureRequest(request)) throw new Error('invalid SSH daemon closure request')
+    const body = await this.bytes(
+      await this.endpoint(),
+      '/close-unstarted',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+      },
+      true,
+    )
+    let value: unknown
+    try {
+      value = JSON.parse(new TextDecoder().decode(body))
+    } catch {
+      throw new Error('SSH daemon returned invalid JSON')
+    }
+    return responseClosureProof(value, this.config.authorityId, request)
   }
 
   async submit(spec: JobSpec): Promise<DurableJob> {

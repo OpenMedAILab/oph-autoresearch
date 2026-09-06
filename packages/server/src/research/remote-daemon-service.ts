@@ -19,6 +19,49 @@ export interface RemoteDaemonServiceConfig {
 function projection(job: DurableJob | null) {
   return job ? { ...job, outputPath: null, error: job.error ? 'worker-failure' : null } : null
 }
+const CLOSURE_KEYS = ['dispatchKey', 'expectedEpoch', 'specHash'] as const
+function isClosureRequest(value: unknown): value is {
+  dispatchKey: string
+  expectedEpoch: string
+  specHash: string
+} {
+  return (
+    Boolean(value) &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>)
+      .sort()
+      .join(',') === CLOSURE_KEYS.join(',') &&
+    /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(
+      String((value as Record<string, unknown>).dispatchKey),
+    ) &&
+    /^[A-Za-z0-9_-]{16,128}$/.test(String((value as Record<string, unknown>).expectedEpoch)) &&
+    /^sha256:[a-f0-9]{64}$/.test(String((value as Record<string, unknown>).specHash))
+  )
+}
+async function boundedJson(request: Request, maxBytes: number): Promise<unknown> {
+  const length = Number(request.headers.get('content-length') ?? 0)
+  if (length > maxBytes) throw new Error('too_large')
+  const reader = request.body?.getReader()
+  if (!reader) throw new Error('invalid')
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  while (true) {
+    const result = await reader.read()
+    if (result.done) break
+    bytes += result.value.byteLength
+    if (bytes > maxBytes) {
+      await reader.cancel()
+      throw new Error('too_large')
+    }
+    chunks.push(result.value)
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    throw new Error('invalid')
+  }
+}
 /** Long-lived remote authority: SSH only transports this bounded protocol; disconnect does not own the job. */
 export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
   if (
@@ -73,12 +116,47 @@ export function createRemoteDaemonService(config: RemoteDaemonServiceConfig) {
       const url = new URL(request.url)
       const respond = (job: DurableJob | null, status = 200) =>
         Response.json({ authorityId, job: projection(job) }, { status })
+      const authorityHeaders = { 'x-oph-authority-id': authorityId }
+      if (request.method === 'GET' && url.pathname === '/identity')
+        return Response.json(
+          { authorityId, identity: daemon.identity() },
+          { headers: authorityHeaders },
+        )
       if (request.method === 'GET' && url.pathname === '/health')
         return Response.json({
           authorityId,
           trackingPolicyHash: daemon.trackingPolicyHash ?? null,
           availableSlots: daemon.hasAvailableSlot() ? 1 : 0,
         })
+      if (request.method === 'POST' && url.pathname === '/close-unstarted') {
+        let body: unknown
+        try {
+          body = await boundedJson(request, 4096)
+        } catch (error) {
+          return new Response(
+            error instanceof Error && error.message === 'too_large'
+              ? 'too large'
+              : 'invalid request',
+            {
+              status: error instanceof Error && error.message === 'too_large' ? 413 : 400,
+              headers: authorityHeaders,
+            },
+          )
+        }
+        if (!isClosureRequest(body))
+          return new Response('invalid request', { status: 400, headers: authorityHeaders })
+        try {
+          return Response.json(
+            { authorityId, proof: daemon.closeUnstarted(body) },
+            { headers: authorityHeaders },
+          )
+        } catch {
+          return Response.json(
+            { authorityId, error: 'operation_rejected' },
+            { status: 409, headers: authorityHeaders },
+          )
+        }
+      }
       if (request.method === 'POST' && url.pathname === '/submit') {
         const length = Number(request.headers.get('content-length') ?? 0)
         if (length > 65536) return new Response('too large', { status: 413 })

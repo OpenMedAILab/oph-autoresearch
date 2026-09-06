@@ -184,6 +184,55 @@ describe('SSH daemon client', () => {
     expect(closed).toBe(true)
   })
 
+  test('validates authority headers and exact identity and closure proof bindings', async () => {
+    const config = await freshConfig()
+    const epoch = 'e'.repeat(32)
+    const request = {
+      expectedEpoch: epoch,
+      dispatchKey: 'closure-key',
+      specHash: `sha256:${'c'.repeat(64)}`,
+    }
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(httpRequest) {
+        const path = new URL(httpRequest.url).pathname
+        if (path === '/health')
+          return Response.json({ authorityId: config.authorityId, trackingPolicyHash: null })
+        if (path === '/identity')
+          return Response.json(
+            { authorityId: config.authorityId, identity: { schema: 'wrong', epoch } },
+            { headers: { 'x-oph-authority-id': config.authorityId } },
+          )
+        if (path === '/close-unstarted')
+          return Response.json(
+            {
+              authorityId: config.authorityId,
+              proof: {
+                schema: 'research-authority-closure-v1',
+                ...request,
+                specHash: `sha256:${'d'.repeat(64)}`,
+                outcome: 'not_started',
+                recordedAt: 1,
+              },
+            },
+            { headers: { 'x-oph-authority-id': config.authorityId } },
+          )
+        return new Response('not found', { status: 404 })
+      },
+    })
+    const client = createSshDaemonClientForTest(config, async () => ({
+      endpoint: `http://127.0.0.1:${server.port}`,
+      close: () => server.stop(true),
+    }))
+    try {
+      await expect(client.identity()).rejects.toThrow('identity does not match')
+      await expect(client.closeUnstarted(request)).rejects.toThrow('closure proof does not match')
+    } finally {
+      client.close()
+    }
+  })
+
   test('rejects a mismatched authority and does not retry a failed submission', async () => {
     const config = await freshConfig()
     const submitted = spec('failed-submit')

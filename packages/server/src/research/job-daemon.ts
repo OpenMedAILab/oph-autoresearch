@@ -2,7 +2,13 @@ import { Database } from 'bun:sqlite'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import type { ResearchJobSpec, ResearchTemplateId } from '@oph-autoresearch/core'
+import type {
+  ResearchAuthorityClosureProof,
+  ResearchAuthorityClosureRequest,
+  ResearchAuthorityIdentity,
+  ResearchJobSpec,
+  ResearchTemplateId,
+} from '@oph-autoresearch/core'
 import { verifyCandidateReceipt } from './cli-preparation-candidate.ts'
 import {
   type CliPreparationAdministratorConfig,
@@ -119,6 +125,19 @@ function hashBytes(value: Uint8Array) {
 }
 function validText(value: unknown) {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)
+}
+function closureRequest(value: unknown): ResearchAuthorityClosureRequest {
+  if (
+    !isRecord(value) ||
+    !hasKeys(value, ['dispatchKey', 'expectedEpoch', 'specHash']) ||
+    !validText(value.dispatchKey) ||
+    typeof value.expectedEpoch !== 'string' ||
+    !/^[A-Za-z0-9_-]{16,128}$/.test(value.expectedEpoch) ||
+    typeof value.specHash !== 'string' ||
+    !/^sha256:[a-f0-9]{64}$/.test(value.specHash)
+  )
+    throw new Error('invalid authority closure request')
+  return value as unknown as ResearchAuthorityClosureRequest
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -387,6 +406,7 @@ export class JobDaemon implements JobDaemonPort {
   private readonly renewalMs: number
   private readonly watchdog: ReturnType<typeof setInterval>
   private readonly processProbe: ProcessProbe
+  private readonly authorityEpoch: string
 
   constructor(opts: {
     dbPath: string
@@ -448,6 +468,23 @@ export class JobDaemon implements JobDaemonPort {
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN worker_start_identity TEXT')
     if (!columns.some((c) => c.name === 'cleanup_started_at'))
       this.db.exec('ALTER TABLE local_jobs ADD COLUMN cleanup_started_at INTEGER')
+    this.db.exec(
+      'CREATE TABLE IF NOT EXISTS authority_identity (singleton INTEGER PRIMARY KEY CHECK (singleton=1), epoch TEXT NOT NULL)',
+    )
+    this.db
+      .query(
+        'INSERT INTO authority_identity (singleton,epoch) VALUES (1,?) ON CONFLICT(singleton) DO NOTHING',
+      )
+      .run(randomBytes(32).toString('base64url'))
+    const authority = this.db
+      .query('SELECT epoch FROM authority_identity WHERE singleton=1')
+      .get() as { epoch: string } | null
+    if (!authority || !/^[A-Za-z0-9_-]{16,128}$/.test(authority.epoch))
+      throw new Error('invalid durable authority epoch')
+    this.authorityEpoch = authority.epoch
+    this.db.exec(
+      'CREATE TABLE IF NOT EXISTS authority_closure_tombstones (dispatch_key TEXT PRIMARY KEY, spec_hash TEXT NOT NULL, expected_epoch TEXT NOT NULL, outcome TEXT NOT NULL, recorded_at INTEGER NOT NULL)',
+    )
     // Authority-owned watchdog: localhost jobs must not depend on a reconnecting observer.
     this.watchdog = setInterval(() => {
       if (!this.closed) {
@@ -478,30 +515,38 @@ export class JobDaemon implements JobDaemonPort {
         throw new Error('CLI preparation adapter configuration has changed')
     }
     const specHash = hash(spec)
-    const inserted = this.db
-      .query(
-        'INSERT INTO local_jobs (dispatch_key,spec,spec_hash,status,output_path,content_hash,error,runtime_lease,execution_deadline_at,worker_heartbeat_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dispatch_key) DO NOTHING',
+    const inserted = this.immediateTransaction(() => {
+      if (
+        this.db
+          .query('SELECT 1 FROM authority_closure_tombstones WHERE dispatch_key=?')
+          .get(spec.dispatchKey)
       )
-      .run(
-        spec.dispatchKey,
-        canonical(spec),
-        specHash,
-        'queued',
-        null,
-        null,
-        null,
-        canonical(spec.lease),
-        // v1 has no approved runtime budget: configuration may tighten, never enlarge its frozen expiry.
-        Math.min(
-          isCliPreparationJob(spec)
-            ? Date.now() + spec.execution.maxRuntimeMs
-            : spec.version === 2
-              ? Date.now() + spec.execution!.maxRuntimeMs
-              : spec.lease.expiresAt,
-          this.executionRuntimeMs === undefined ? Infinity : Date.now() + this.executionRuntimeMs,
-        ),
-        null,
-      )
+        throw new Error('dispatch_key_closed')
+      return this.db
+        .query(
+          'INSERT INTO local_jobs (dispatch_key,spec,spec_hash,status,output_path,content_hash,error,runtime_lease,execution_deadline_at,worker_heartbeat_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dispatch_key) DO NOTHING',
+        )
+        .run(
+          spec.dispatchKey,
+          canonical(spec),
+          specHash,
+          'queued',
+          null,
+          null,
+          null,
+          canonical(spec.lease),
+          // v1 has no approved runtime budget: configuration may tighten, never enlarge its frozen expiry.
+          Math.min(
+            isCliPreparationJob(spec)
+              ? Date.now() + spec.execution.maxRuntimeMs
+              : spec.version === 2
+                ? Date.now() + spec.execution!.maxRuntimeMs
+                : spec.lease.expiresAt,
+            this.executionRuntimeMs === undefined ? Infinity : Date.now() + this.executionRuntimeMs,
+          ),
+          null,
+        )
+    })
     const job = this.query(spec.dispatchKey)
     if (!job) throw new Error('job insert failed')
     if (inserted.changes === 0 && job.specHash !== specHash)
@@ -515,6 +560,94 @@ export class JobDaemon implements JobDaemonPort {
         unknown
       > | null,
     )
+  }
+  private immediateTransaction<T>(operation: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = operation()
+      this.db.exec('COMMIT')
+      return result
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK')
+      } catch {
+        // A failed BEGIN has no transaction to roll back.
+      }
+      throw error
+    }
+  }
+  identity(): ResearchAuthorityIdentity {
+    return { schema: 'research-authority-identity-v1', epoch: this.authorityEpoch }
+  }
+  closeUnstarted(input: unknown): ResearchAuthorityClosureProof {
+    const request = closureRequest(input)
+    if (request.expectedEpoch !== this.authorityEpoch)
+      throw new Error('authority epoch does not match')
+    const tombstone = this.immediateTransaction(() => {
+      const existing = this.db
+        .query(
+          'SELECT spec_hash,expected_epoch,outcome,recorded_at FROM authority_closure_tombstones WHERE dispatch_key=?',
+        )
+        .get(request.dispatchKey) as {
+        spec_hash: string
+        expected_epoch: string
+        outcome: ResearchAuthorityClosureProof['outcome']
+        recorded_at: number
+      } | null
+      if (existing) {
+        if (
+          existing.spec_hash !== request.specHash ||
+          existing.expected_epoch !== request.expectedEpoch
+        )
+          throw new Error('authority closure tombstone conflicts')
+        return {
+          schema: 'research-authority-closure-v1' as const,
+          ...request,
+          outcome: existing.outcome,
+          recordedAt: existing.recorded_at,
+        }
+      }
+      const job = this.query(request.dispatchKey)
+      if (job) {
+        if (job.specHash !== request.specHash) throw new Error('authority closure job conflicts')
+        return null
+      }
+      const proof: ResearchAuthorityClosureProof = {
+        schema: 'research-authority-closure-v1',
+        ...request,
+        outcome: 'not_started',
+        recordedAt: Date.now(),
+      }
+      this.db
+        .query(
+          'INSERT INTO authority_closure_tombstones (dispatch_key,spec_hash,expected_epoch,outcome,recorded_at) VALUES (?,?,?,?,?)',
+        )
+        .run(
+          proof.dispatchKey,
+          proof.specHash,
+          proof.expectedEpoch,
+          proof.outcome,
+          proof.recordedAt,
+        )
+      return proof
+    })
+    if (tombstone) return tombstone
+    let job = this.query(request.dispatchKey)
+    if (!job || job.specHash !== request.specHash)
+      throw new Error('authority closure changed during handling')
+    if (job.status === 'queued' || job.status === 'running') job = this.cancel(request.dispatchKey)
+    if (job?.status === 'completion_requested') this.reconcileInterrupted()
+    job = this.query(request.dispatchKey)
+    if (!job || job.specHash !== request.specHash)
+      throw new Error('authority closure changed during handling')
+    if (job.status === 'queued' || job.status === 'running')
+      throw new Error('authority close did not persist intent')
+    return {
+      schema: 'research-authority-closure-v1',
+      ...request,
+      outcome: job.status,
+      recordedAt: Date.now(),
+    }
   }
   cancel(dispatchKey: string): DurableJob | null {
     const job = this.query(dispatchKey)
