@@ -109,8 +109,11 @@ describe('派发', () => {
       { method: 'POST', body: '{}' },
       d,
     )
+    if (!response) throw new Error('formal route did not handle request')
     expect(response.status).toBe(409)
-    expect((await response.json()).error).toBe('formal_execution_backend_unavailable')
+    expect(((await response.json()) as { error: string }).error).toBe(
+      'formal_execution_backend_unavailable',
+    )
   })
 
   test('documents route is reachable through the API dispatcher and records an immutable document', async () => {

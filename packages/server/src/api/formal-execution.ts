@@ -161,7 +161,8 @@ async function buildPlan(
     planId: input.planId,
     taskRevisionId: candidate.taskRevisionId,
     candidateArtifactId: candidate.candidateArtifactId,
-    codeHash: candidate.codeHash,
+    // The draft content hash also covers patch metadata; OCI executes these exact UTF-8 bytes.
+    codeHash: sha256(candidate.code),
     candidateReceiptHash: candidate.candidateReceiptHash,
     workspaceBindingHash: formalWorkspaceBindingHash(deps.workspaceId, binding),
     ociImageDigest: input.ociImageDigest,
@@ -268,6 +269,14 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       reviewApprovalScope: {
         kind: 'formal_code_review',
         formalPlanHash: planHash,
+        taskRevisionId: built.plan.taskRevisionId,
+        display: {
+          title: campaign.goal,
+          task: campaign.taskRevisions.find((task) => task.id === built.plan.taskRevisionId)!
+            .templateId,
+          revision: campaign.taskRevisions.find((task) => task.id === built.plan.taskRevisionId)!
+            .revision,
+        },
         formalEvaluatorId: built.plan.trustedEvaluatorId,
         formalResources: built.plan.resources,
         artifactVersionIds: [built.plan.candidateArtifactId],
@@ -319,6 +328,14 @@ export const handleFormalExecutionApi: ApiHandler = async (url, request, deps) =
       formalExecutionApprovalScope: {
         kind: 'formal_execution',
         formalPlanHash: planHash,
+        taskRevisionId: built.plan.taskRevisionId,
+        display: {
+          title: campaign.goal,
+          task: campaign.taskRevisions.find((task) => task.id === built.plan.taskRevisionId)!
+            .templateId,
+          revision: campaign.taskRevisions.find((task) => task.id === built.plan.taskRevisionId)!
+            .revision,
+        },
         formalEvaluatorId: built.plan.trustedEvaluatorId,
         formalResources: built.plan.resources,
         artifactVersionIds: [built.plan.candidateArtifactId],

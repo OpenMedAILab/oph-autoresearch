@@ -92,6 +92,7 @@ export interface ServeOptions {
   researchHumanAuth?: HumanAuthVerifierConfig
   researchRequireApproval?: boolean
   /** Administrator-owned evaluator identities; clients can only bind one of these implementation digests. */
+  researchFormalCatalog?: import('./api/types.ts').ApiDeps['researchFormalCatalog']
   researchFormalEvaluators?: readonly {
     id: 'binary-classification-v1'
     implementationHash: string
@@ -610,6 +611,9 @@ export function serve(opts: ServeOptions) {
             watchGit: () => gitWatch.retarget(),
             ...(researchHumanAuth ? { researchHumanAuth } : {}),
             ...(researchFormalCodeReviewer ? { researchFormalCodeReviewer } : {}),
+            ...(!restricted && opts.researchFormalCatalog
+              ? { researchFormalCatalog: structuredClone(opts.researchFormalCatalog) }
+              : {}),
             ...(opts.researchFormalEvaluators
               ? { researchFormalEvaluators: opts.researchFormalEvaluators }
               : {}),

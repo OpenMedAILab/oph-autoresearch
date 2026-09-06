@@ -325,7 +325,12 @@ test('formal review reserves before provider, replays safely, and binds the acce
       expiresAt: Date.now() + 60_000,
     })
     expect(quoted.status).toBe(200)
-    const quote = (await quoted.json()) as { reviewApprovalScope: unknown }
+    const quote = (await quoted.json()) as {
+      reviewApprovalScope: unknown
+      plan: { codeHash: string }
+    }
+    expect(quote.plan.codeHash).toBe(hash(draft.code))
+    expect(quote.plan.codeHash).not.toBe(draft.contentHash)
     const current = getResearchCampaign(store, campaign.id)!
     const approval = mutateResearchCampaign(store, campaign.id, {
       expectedVersion: current.version,

@@ -13,6 +13,7 @@ import {
   state,
   workspace,
 } from '../lib/store/index.ts'
+import { FormalPlanPanel } from './FormalPlanPanel.tsx'
 import { ResearchCliPreparationPanel } from './ResearchCliPreparationPanel.tsx'
 import { ResearchControllerPanel } from './ResearchControllerPanel.tsx'
 import { ResearchCostPanel } from './ResearchCostPanel.tsx'
@@ -81,6 +82,8 @@ const approvalKinds = {
   release: '结论发布审批',
   cost_settlement: '费用结算审批',
   controller: '有界主控推进审批',
+  formal_code_review: '候选代码独立审阅审批',
+  formal_execution: '正式隔离实验审批',
 }
 const templateName = (id: string) =>
   templates.find((template) => template.id === id)?.label ?? '研究任务'
@@ -621,6 +624,12 @@ export function ResearchCampaignPanel() {
                 busy={busy()}
                 act={act}
                 taskName={templateName}
+              />
+              <FormalPlanPanel
+                campaign={campaign}
+                approvalUrl={approvalChannel()}
+                busy={busy()}
+                act={act}
               />
               <ResearchDocumentsPanel campaign={campaign} busy={busy()} act={act} />
               <ResearchNotificationsPanel
