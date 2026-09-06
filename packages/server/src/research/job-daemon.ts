@@ -517,7 +517,9 @@ export class JobDaemon implements JobDaemonPort {
       if (spec.execution.authorityEpoch !== this.authorityEpoch)
         throw new Error('formal OCI authority epoch does not match')
       if (!this.formalOci) throw new Error('formal OCI is not admitted')
-      this.formalOci.validate(spec)
+      // Candidate/data bytes are deliberately revalidated by the isolated formal
+      // worker immediately before execution.  Hashing a multi-GB dataset here
+      // would block the authority event loop and let unrelated runtime leases expire.
     } else if (!isCliPreparationJob(spec)) {
       if (spec.trackingPolicyHash !== this.trackingPolicyHash)
         throw new Error('Tracking startup policy does not match JobSpec')
