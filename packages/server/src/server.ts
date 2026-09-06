@@ -35,6 +35,7 @@ import {
   contentPathFor,
   createConversation,
   getWorkspaceByPath,
+  listResearchEvents,
   mostRecentWorkspace,
   recoverRunningSyntheticAttempts,
   recoverStaleRuns,
@@ -56,11 +57,17 @@ import {
   createResearchControlPort,
 } from './research/native-research-control.ts'
 import { publishResearchEvents } from './research-events.ts'
+import {
+  type ResearchNotificationConfig,
+  ResearchNotificationCoordinator,
+} from './research-notifications.ts'
 import { ensureResearchWorkspace } from './research-template.ts'
 import { startRun } from './run-control.ts'
 import { RunManager } from './runs.ts'
 
 export interface ServeOptions {
+  /** Explicit administrator-owned external notification configuration. Disabled by default. */
+  researchNotifications?: ResearchNotificationConfig
   researchReviewCli?: { workerArgv?: readonly string[] }
   researchDeployment?: unknown
   researchSshDaemon?: SshDaemonConfig
@@ -178,6 +185,10 @@ export function serve(opts: ServeOptions) {
   const token = pairing.token
 
   const { workspace, rootPath: workspaceRoot } = bootstrapWorkspace(opts.store, opts.workspaceRoot)
+  const researchNotifications =
+    !restricted && opts.researchNotifications
+      ? new ResearchNotificationCoordinator(opts.researchNotifications)
+      : undefined
   const researchTemplate =
     restricted || !workspace ? { created: [] } : ensureResearchWorkspace(workspaceRoot)
   if (researchTemplate.created.length > 0) {
@@ -231,7 +242,16 @@ export function serve(opts: ServeOptions) {
   const stale = recoverStaleRuns(opts.store, previousExit)
   if (!restricted) {
     recoverRunningSyntheticAttempts(opts.store)
-    publishResearchEvents(opts.store, bus)
+    if (researchNotifications) {
+      const campaignIds = opts.store.db
+        .query<{ id: string }, []>('SELECT id FROM research_campaigns')
+        .all()
+        .map((campaign) => campaign.id)
+      researchNotifications.reconcile(
+        campaignIds.flatMap((campaignId) => listResearchEvents(opts.store, campaignId)),
+      )
+    }
+    publishResearchEvents(opts.store, bus, researchNotifications)
   }
   if (stale.recovered > 0) {
     process.stderr.write(
@@ -362,6 +382,7 @@ export function serve(opts: ServeOptions) {
     ...(researchDaemonBackend ? { researchDaemonBackend } : {}),
     ...(!restricted && opts.researchReviewCli ? { researchReviewCli: opts.researchReviewCli } : {}),
     ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
+    ...(researchNotifications ? { researchNotifications } : {}),
   })
 
   /**
@@ -520,6 +541,7 @@ export function serve(opts: ServeOptions) {
               ? { researchReviewCli: opts.researchReviewCli }
               : {}),
             ...(researchExecutionDevices ? { researchExecutionDevices } : {}),
+            ...(researchNotifications ? { researchNotifications } : {}),
           })
           if (res) return withCors(res)
         } catch (err) {
@@ -617,6 +639,7 @@ export function serve(opts: ServeOptions) {
     stop() {
       for (const device of researchExecutionDevices ?? []) device.authority.close()
       researchDaemonBackend?.daemon.close()
+      researchNotifications?.close()
       clearInterval(schedulerTimer)
       gitWatch.stop()
       runs.interruptAll()

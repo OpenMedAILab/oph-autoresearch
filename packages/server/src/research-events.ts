@@ -1,8 +1,13 @@
 import type { ConversationId } from '@oph-autoresearch/core'
 import { deliverResearchOutbox, type Store } from '@oph-autoresearch/store'
 import type { EventBus } from './bus.ts'
+import type { ResearchNotificationCoordinator } from './research-notifications.ts'
 
-export function publishResearchEvents(store: Store, bus: EventBus): number {
+export function publishResearchEvents(
+  store: Store,
+  bus: EventBus,
+  notifications?: ResearchNotificationCoordinator,
+): number {
   return deliverResearchOutbox(store, (event) => {
     bus.publish(
       {
@@ -15,5 +20,9 @@ export function publishResearchEvents(store: Store, bus: EventBus): number {
       },
       event.campaign.parentConversationId as ConversationId,
     )
+    // Internal delivery remains the outbox acknowledgement authority. The
+    // independent queue records after it, then repairs a crash gap by replaying
+    // the immutable event ledger during service startup.
+    notifications?.publish(event)
   })
 }

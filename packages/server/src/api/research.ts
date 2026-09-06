@@ -47,11 +47,11 @@ function respond(result: ResearchWriteResult): Response {
 /** Bearer access permits proposals. It does not attest a human reviewer. */
 export const handleResearchApi: ApiHandler = async (url, req, d) => {
   const match =
-    /^\/api\/research\/campaigns(?:\/([^/]+)(?:\/(events|proposals|approve|revoke|release|labelsets|literature|pattern(?:\/(?:preview|advance))?|review(?:\/quote)?|synthetic(?:\/(?:cancel|status|receipt|reconcile))?))?)?$/.exec(
+    /^\/api\/research\/campaigns(?:\/([^/]+)(?:\/(events|notifications|proposals|approve|revoke|release|labelsets|literature|pattern(?:\/(?:preview|advance))?|review(?:\/quote)?|synthetic(?:\/(?:cancel|status|receipt|reconcile))?))?)?$/.exec(
       url.pathname,
     )
   if (!match) return null
-  const changed = () => publishResearchEvents(d.store, d.bus)
+  const changed = () => publishResearchEvents(d.store, d.bus, d.researchNotifications)
   const respondAndPublish = (result: ResearchWriteResult) => {
     if (result.ok) changed()
     return respond(result)
@@ -105,6 +105,9 @@ export const handleResearchApi: ApiHandler = async (url, req, d) => {
   }
   if (id && req.method === 'GET' && action === 'events') {
     return json({ events: listResearchEvents(d.store, id) })
+  }
+  if (id && req.method === 'GET' && action === 'notifications') {
+    return json({ notifications: d.researchNotifications?.list(id) ?? [] })
   }
   if (id && campaign && req.method === 'GET' && action === 'pattern') {
     try {

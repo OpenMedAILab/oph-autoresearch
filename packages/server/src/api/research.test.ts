@@ -125,4 +125,47 @@ describe('research HTTP boundary', () => {
     }
     expect((await call('', { ...create, actor: { kind: 'human' } })).status).toBe(400)
   })
+
+  test('projects durable notification receipts without exposing adapter configuration', async () => {
+    const { call, create, deps } = setup()
+    const result = (await (await call('', create)).json()) as ResearchWriteResult
+    if (!result.ok) throw new Error(result.message)
+    const response = await call(`/${result.campaign.id}/notifications`, undefined, {
+      ...deps,
+      researchNotifications: {
+        list: (campaignId: string) =>
+          campaignId === result.campaign.id
+            ? [
+                {
+                  eventId: 'event-1',
+                  kind: 'completed',
+                  channel: 'administrator',
+                  status: 'delivered',
+                  attempts: 1,
+                  nextAttemptAt: null,
+                  deliveredAt: 1,
+                  lastError: null,
+                  createdAt: 1,
+                },
+              ]
+            : [],
+      },
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      notifications: [
+        {
+          eventId: 'event-1',
+          kind: 'completed',
+          channel: 'administrator',
+          status: 'delivered',
+          attempts: 1,
+          nextAttemptAt: null,
+          deliveredAt: 1,
+          lastError: null,
+          createdAt: 1,
+        },
+      ],
+    })
+  })
 })

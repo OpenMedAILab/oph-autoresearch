@@ -19,10 +19,12 @@ import type { OphConfig } from '@oph-autoresearch/runtime'
 import type { Store } from '@oph-autoresearch/store'
 import type { EventBus } from '../bus.ts'
 import type { Pairing } from '../pairing.ts'
+import type { ResearchNotificationCoordinator } from '../research-notifications.ts'
 import type { RunManager } from '../runs.ts'
 
 export interface ApiDeps {
   researchApprovalUrl?: string
+  researchNotifications?: Pick<ResearchNotificationCoordinator, 'list'>
   researchExecutionDevices?: readonly ResearchDevice[]
   researchLiteratureCollector?: ReturnType<typeof createLiteratureCollector>
   researchDaemonBackend?: ResearchDaemonBackend
