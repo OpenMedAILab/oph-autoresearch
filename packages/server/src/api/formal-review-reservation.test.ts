@@ -25,6 +25,7 @@ const hash = (value: string) => sha256(value)
 
 class Authority {
   readonly backendPolicyHash = hash('backend')
+  readonly epoch = 'fixture_epoch_0001'
   current: {
     spec: CliPreparationJobSpec
     specHash: string
@@ -34,7 +35,21 @@ class Authority {
     error: null
   } | null = null
   bytes = new Uint8Array()
-  submit(spec: CliPreparationJobSpec) {
+  identity() {
+    return { schema: 'research-authority-identity-v1' as const, epoch: this.epoch }
+  }
+  closeUnstarted({
+    expectedEpoch,
+  }: {
+    expectedEpoch: string
+    dispatchKey: string
+    specHash: string
+  }) {
+    if (expectedEpoch !== this.epoch) throw new Error('wrong epoch')
+    return { outcome: 'closed' }
+  }
+  submit(spec: CliPreparationJobSpec, expectedEpoch: string) {
+    if (expectedEpoch !== this.epoch) throw new Error('wrong epoch')
     this.current = {
       spec,
       specHash: hash(canonicalJson(spec)),
@@ -45,13 +60,16 @@ class Authority {
     }
     return this.current
   }
-  query(key: string) {
+  query(key: string, expectedEpoch: string) {
+    if (expectedEpoch !== this.epoch) throw new Error('wrong epoch')
     return this.current?.spec.dispatchKey === key ? this.current : null
   }
-  cancel() {
+  cancel(_key: string, expectedEpoch: string) {
+    if (expectedEpoch !== this.epoch) throw new Error('wrong epoch')
     return this.current
   }
-  async receipt() {
+  async receipt(_key: string, expectedEpoch: string) {
+    if (expectedEpoch !== this.epoch) throw new Error('wrong epoch')
     return this.bytes
   }
 }
@@ -261,7 +279,7 @@ test('formal review reserves before provider, replays safely, and binds the acce
       approvalId: 'prep',
       expectedVersion: approvedPrep.campaign.version,
     })
-    const spec = authority.current!.spec
+    const spec = (await eventually(() => authority.current))!.spec
     const draft = {
       schema: 'research-cli-preparation-draft-v1' as const,
       taskRevisionId: spec.taskRevisionId,
