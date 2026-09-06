@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
@@ -137,15 +137,34 @@ describe('编辑、复制与移动', () => {
       dir,
       'a.ts',
       '// 中文注释保持清晰\nexport const 视力 = 1.0\n',
-      before.mtime,
+      before.contentHash!,
     )
     expect(await readFile(join(dir, 'a.ts'), 'utf8')).toContain('中文注释保持清晰')
     expect(saved.size).toBeGreaterThan(0)
 
     await writeFile(join(dir, 'a.ts'), '// 外部修改\n', 'utf8')
-    expect(writeTextEntry(dir, 'a.ts', '// 不应覆盖\n', saved.mtime)).rejects.toThrow(
+    await expect(writeTextEntry(dir, 'a.ts', '// 不应覆盖\n', saved.contentHash!)).rejects.toThrow(
       FileChangedError,
     )
+  })
+
+  test('保留 mtime 的外部改动也拒绝覆盖，应用内并发保存只有一次成功', async () => {
+    const dir = await workspace()
+    const before = await preview(dir, 'a.ts')
+    await writeFile(join(dir, 'a.ts'), 'external content')
+    await utimes(join(dir, 'a.ts'), before.mtime / 1000, before.mtime / 1000)
+    await expect(writeTextEntry(dir, 'a.ts', 'lost update', before.contentHash!)).rejects.toThrow(
+      FileChangedError,
+    )
+    expect(await readFile(join(dir, 'a.ts'), 'utf8')).toBe('external content')
+    const current = await preview(dir, 'a.ts')
+    const results = await Promise.allSettled([
+      writeTextEntry(dir, 'a.ts', 'first', current.contentHash!),
+      writeTextEntry(dir, 'a.ts', 'second', current.contentHash!),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    await expect(writeTextEntry(dir, 'a.ts', 'unversioned', '')).rejects.toThrow(FileChangedError)
   })
 
   test('复制自动生成不冲突的副本名，移动保留名称且不覆盖', async () => {

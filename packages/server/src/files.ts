@@ -7,7 +7,18 @@
  * 永远追不上现实，而族是有限的。
  */
 
-import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import {
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, sep } from 'node:path'
 import { IGNORED_DIRS } from '@oph-autoresearch/tools'
 import JSZip from 'jszip'
@@ -31,6 +42,7 @@ export interface FileNode {
   kind: 'file' | 'dir'
   size: number
   mtime: number
+  contentHash?: string
   /** 目录才有；懒加载，未展开时为 undefined。 */
   children?: FileNode[]
 }
@@ -42,6 +54,7 @@ export interface PreviewResult {
   size: number
   /** 供编辑保存时做并发冲突检查。 */
   mtime: number
+  contentHash?: string
   /** 文本族才有。 */
   content?: string
   /** 语法高亮语言标识。 */
@@ -263,36 +276,63 @@ export class FileChangedError extends Error {
 /** 代码编辑器允许保存的上限。和预览上限一致，避免只加载到半份却覆盖整份文件。 */
 const MAX_EDIT_BYTES = MAX_TEXT_BYTES
 
-/**
- * 保存文本文件。
- *
- * `expectedMtime` 来自打开文件时的快照。模型、终端或同步程序在此期间改过文件时，
- * 拒绝覆盖并要求重新加载；科研脚本不应该因为一个晚到的 Ctrl+S 丢掉实验修改。
- */
+const pendingTextWrites = new Map<string, Promise<void>>()
+const contentHash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
+
+/** Compare byte identity, serialize app writers, then replace atomically. External writers
+ * do not participate in this lock: this is not a filesystem compare-and-swap guarantee. */
 export async function writeTextEntry(
   workspaceRoot: string,
   relPath: string,
   content: string,
-  expectedMtime?: number,
+  expectedContentHash: string,
 ): Promise<FileNode> {
-  const abs = join(workspaceRoot, relPath)
-  const before = await stat(abs)
-  if (!before.isFile()) throw new Error(`${relPath} 不是文件`)
-  if (Buffer.byteLength(content, 'utf8') > MAX_EDIT_BYTES) {
-    throw new RangeError(`文件超过 ${formatBytes(MAX_EDIT_BYTES)}，不能在内置编辑器中保存`)
-  }
-  if (expectedMtime !== undefined && Math.abs(before.mtimeMs - expectedMtime) > 0.5) {
+  if (!/^[a-f0-9]{64}$/.test(expectedContentHash ?? '')) {
     throw new FileChangedError(relPath)
   }
-
-  await writeFile(abs, content, 'utf8')
-  const after = await stat(abs)
-  return {
-    name: basename(abs),
-    path: toPosix(relPath),
-    kind: 'file',
-    size: after.size,
-    mtime: after.mtimeMs,
+  const abs = await realpath(join(workspaceRoot, relPath))
+  const prior = pendingTextWrites.get(abs) ?? Promise.resolve()
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  pendingTextWrites.set(abs, pending)
+  await prior
+  let temporary: string | undefined
+  try {
+    const before = await stat(abs)
+    if (!before.isFile()) throw new Error(`${relPath} 不是文件`)
+    const bytes = Buffer.from(content, 'utf8')
+    if (bytes.length > MAX_EDIT_BYTES) {
+      throw new RangeError(`文件超过 ${formatBytes(MAX_EDIT_BYTES)}，不能在内置编辑器中保存`)
+    }
+    const assertCurrent = async () => {
+      if (
+        (await stat(abs)).size > MAX_EDIT_BYTES ||
+        contentHash(await readFile(abs)) !== expectedContentHash
+      ) {
+        throw new FileChangedError(relPath)
+      }
+    }
+    await assertCurrent()
+    temporary = join(dirname(abs), `.oph-edit-${randomUUID()}.tmp`)
+    await writeFile(temporary, bytes, { flag: 'wx', mode: before.mode & 0o777 })
+    await assertCurrent()
+    await rename(temporary, abs)
+    temporary = undefined
+    const after = await stat(abs)
+    return {
+      name: basename(abs),
+      path: toPosix(relPath),
+      kind: 'file',
+      size: bytes.length,
+      mtime: after.mtimeMs,
+      contentHash: contentHash(bytes),
+    }
+  } finally {
+    if (temporary) await rm(temporary, { force: true }).catch(() => undefined)
+    release()
+    if (pendingTextWrites.get(abs) === pending) pendingTextWrites.delete(abs)
   }
 }
 
@@ -527,7 +567,12 @@ export async function preview(workspaceRoot: string, relPath: string): Promise<P
     if (looksBinary(text)) {
       return { ...base, kind: 'binary', truncated: false, note: '二进制内容，无法以文本预览' }
     }
-    return { ...base, content: text, truncated: buf.length > MAX_TEXT_BYTES }
+    return {
+      ...base,
+      content: text,
+      contentHash: buf.length <= MAX_TEXT_BYTES ? contentHash(buf) : undefined,
+      truncated: buf.length > MAX_TEXT_BYTES,
+    }
   }
 
   if (kind === 'office') {

@@ -111,21 +111,29 @@ export const handleWorkspaceFsApi: ApiHandler = async (url, req, d) => {
     return json({ ok: true })
   }
 
-  /** 保存内置编辑器里的文本；mtime 不一致时拒绝覆盖外部修改。 */
+  /** 保存内置编辑器里的文本；内容版本不一致时拒绝覆盖外部修改。 */
   if (p === '/api/files/write' && req.method === 'POST') {
     const body = (await req.json().catch(() => null)) as {
       path?: string
       content?: string
-      expectedMtime?: number
+      expectedContentHash?: string
     } | null
     const rel = body?.path?.trim()
-    if (!rel || typeof body?.content !== 'string') {
-      return json({ error: 'invalid', message: '文件路径和文本内容都得给' }, 422)
+    if (
+      !rel ||
+      typeof body?.content !== 'string' ||
+      typeof body.expectedContentHash !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(body.expectedContentHash)
+    ) {
+      return json(
+        { error: 'invalid', message: '需要文件路径、文本内容和打开时的内容版本，请重新打开文件' },
+        422,
+      )
     }
     try {
       await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
       return json({
-        node: await writeTextEntry(d.workspaceRoot, rel, body.content, body.expectedMtime),
+        node: await writeTextEntry(d.workspaceRoot, rel, body.content, body.expectedContentHash),
       })
     } catch (err) {
       if (err instanceof FileChangedError) {

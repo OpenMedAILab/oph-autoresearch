@@ -9,6 +9,7 @@ import {
   Show,
   Suspense,
   Switch,
+  untrack,
 } from 'solid-js'
 import { filterXSS, getDefaultWhiteList } from 'xss'
 import {
@@ -49,6 +50,7 @@ interface PreviewResult {
   mime: string
   size: number
   mtime: number
+  contentHash?: string
   content?: string
   language?: string
   dataUri?: string
@@ -81,7 +83,8 @@ export default function FileView(props: { path: string; refresh?: number }) {
   let copyReceipt: ReturnType<typeof setTimeout> | undefined
   let saveReceipt: ReturnType<typeof setTimeout> | undefined
   let snapshotKey = ''
-  let expectedMtime = 0
+  let expectedContentHash = ''
+  let snapshotPath = ''
   // 路径与文件页的统一失效序号直接走资源判据。失效序号不在 `run.started` 清空，
   // 因此发起新一轮不会把“摘要从非空变空”误判成一次磁盘改动。
   const [result] = createResource(
@@ -91,6 +94,11 @@ export default function FileView(props: { path: string; refresh?: number }) {
 
   createEffect(() => {
     props.path
+    snapshotKey = ''
+    snapshotPath = ''
+    expectedContentHash = ''
+    setSaveError('')
+    setSaveState('idle')
     setDocMode('preview')
     setCopyState('idle')
     setDraft('')
@@ -100,11 +108,17 @@ export default function FileView(props: { path: string; refresh?: number }) {
 
   createEffect(() => {
     const value = current()
-    if (!value || value.content === undefined) return
-    const key = `${value.path}:${value.mtime}`
+    if (!value || value.path !== props.path || value.content === undefined) return
+    const key = `${value.path}:${value.contentHash ?? value.mtime}`
     if (key === snapshotKey) return
+    if (snapshotPath === value.path && untrack(dirty)) {
+      setSaveState('error')
+      setSaveError('磁盘内容已更新，本地草稿已保留。请先复制草稿，再重新打开文件核对。')
+      return
+    }
     snapshotKey = key
-    expectedMtime = value.mtime
+    snapshotPath = value.path
+    expectedContentHash = value.contentHash ?? ''
     setDraft(value.content)
     setBaseline(value.content)
     setDirty(false)
@@ -146,28 +160,34 @@ export default function FileView(props: { path: string; refresh?: number }) {
     copyReceipt = setTimeout(() => setCopyState('idle'), 1200)
   }
 
-  const editable = () => sourceVisible() && !current()?.truncated
+  const editable = () => sourceVisible() && !current()?.truncated && !!current()?.contentHash
 
   const saveSource = async () => {
     if (!editable() || saving() || !dirty()) return
+    const savingPath = props.path
     setSaving(true)
     setSaveState('idle')
     setSaveError('')
     try {
       const content = activeEditor?.state.doc.toString() ?? draft()
-      const { node } = await client.api<{ node: { mtime: number } }>('/api/files/write', {
-        method: 'POST',
-        body: JSON.stringify({ path: props.path, content, expectedMtime }),
-      })
-      expectedMtime = node.mtime
-      setDraft(content)
-      setBaseline(content)
-      setDirty(false)
-      setSaveState('saved')
+      const { node } = await client.api<{ node: { mtime: number; contentHash: string } }>(
+        '/api/files/write',
+        {
+          method: 'POST',
+          body: JSON.stringify({ path: savingPath, content, expectedContentHash }),
+        },
+      )
       invalidateWorkspaceFiles()
+      if (props.path !== savingPath) return
+      expectedContentHash = node.contentHash
+      snapshotKey = `${savingPath}:${node.contentHash}`
+      setBaseline(content)
+      setDirty(draft() !== content)
+      setSaveState('saved')
       if (saveReceipt) clearTimeout(saveReceipt)
       saveReceipt = setTimeout(() => setSaveState('idle'), 1500)
     } catch (error) {
+      if (props.path !== savingPath) return
       setSaveState('error')
       setSaveError(explainApiError(error, '保存失败'))
     } finally {
