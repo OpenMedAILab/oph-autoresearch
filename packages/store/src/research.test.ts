@@ -279,6 +279,11 @@ function installReleaseReview(
     actualCost: null,
   }
   const snapshot = { ...campaign, modelReviews: [review], bundleHash: '' }
+  return replaceCampaignSnapshot(store, snapshot)
+}
+
+function replaceCampaignSnapshot(store: Store, campaign: ResearchCampaign) {
+  const snapshot = { ...campaign, bundleHash: '' }
   snapshot.bundleHash = sha256(canonicalResearchBundle(snapshot))
   store.db
     .query('UPDATE research_campaigns SET snapshot = ? WHERE id = ?')
@@ -1229,5 +1234,329 @@ describe('CLI preparation authorization ledger', () => {
       'release-different-claim',
     )
     expect(differentClaim).toMatchObject({ ok: false, code: 'approval_required' })
+  })
+
+  test('release rejects an artifact that is not exactly bound to its verified task attempt', () => {
+    const releaseWith = (
+      rewrite: (campaign: ResearchCampaign) => ResearchCampaign,
+      key: string,
+    ) => {
+      const store = fresh()
+      const completed = completeReleaseArtifact(store)
+      const artifactIds = completed.artifactVersions.map((item) => item.id)
+      const reviewed = installReleaseReview(store, completed)
+      const altered = replaceCampaignSnapshot(store, rewrite(reviewed))
+      const approved = approveRelease(store, altered, artifactIds)
+      const result = mutateResearchCampaign(store, altered.id, {
+        idempotencyKey: key,
+        expectedVersion: approved.version,
+        command: {
+          kind: 'release',
+          approvalId: approved.approvals.at(-1)!.id,
+          artifactVersionIds: artifactIds,
+        },
+      })
+      store.close()
+      return result
+    }
+    const updateArtifact = (
+      campaign: ResearchCampaign,
+      update: (
+        artifact: ResearchCampaign['artifactVersions'][number],
+      ) => ResearchCampaign['artifactVersions'][number],
+    ) => ({
+      ...campaign,
+      artifactVersions: campaign.artifactVersions.map((artifact, index) =>
+        index === 0 ? update(artifact) : artifact,
+      ),
+    })
+    expect(
+      releaseWith(
+        (campaign) =>
+          updateArtifact(campaign, (artifact) => ({
+            ...artifact,
+            contentHash: `sha256:${'f'.repeat(64)}`,
+          })),
+        'release-content-hash-mismatch',
+      ),
+    ).toMatchObject({ ok: false, code: 'approval_required' })
+    expect(
+      releaseWith(
+        (campaign) =>
+          updateArtifact(campaign, (artifact) => ({
+            ...artifact,
+            validation: { ...artifact.validation!, inputHash: `sha256:${'f'.repeat(64)}` },
+          })),
+        'release-input-hash-mismatch',
+      ),
+    ).toMatchObject({ ok: false, code: 'approval_required' })
+    expect(
+      releaseWith(
+        (campaign) =>
+          updateArtifact(campaign, (artifact) => ({ ...artifact, producerAttemptId: 'rat_other' })),
+        'release-attempt-mismatch',
+      ),
+    ).toMatchObject({ ok: false, code: 'approval_required' })
+    expect(
+      releaseWith(
+        (campaign) => ({
+          ...campaign,
+          attempts: campaign.attempts.map((attempt) => ({ ...attempt, artifactVersionId: null })),
+        }),
+        'release-attempt-artifact-mismatch',
+      ),
+    ).toMatchObject({ ok: false, code: 'approval_required' })
+    expect(
+      releaseWith(
+        (campaign) =>
+          updateArtifact(campaign, (artifact) => ({
+            ...artifact,
+            producerTaskRevisionId: 'rtr_other',
+          })),
+        'release-task-mismatch',
+      ),
+    ).toMatchObject({ ok: false, code: 'approval_required' })
+    expect(
+      releaseWith(
+        (campaign) =>
+          updateArtifact(campaign, (artifact) => ({
+            ...artifact,
+            kind: 'cli_preparation_candidate',
+          })),
+        'release-cli-candidate',
+      ),
+    ).toMatchObject({ ok: false, code: 'approval_required' })
+  })
+
+  test('persists manual progress holds with generation CAS while retaining legacy defaults', () => {
+    const path = join('/tmp', `oph-research-progress-${crypto.randomUUID()}.sqlite`)
+    let campaignId = ''
+    const store = fresh(path)
+    try {
+      const campaign = created(store).campaign
+      campaignId = campaign.id
+      expect(
+        getResearchCampaign(store, campaign.id)?.progressControl ?? {
+          mode: 'manual',
+          state: 'active',
+          generation: 0,
+        },
+      ).toEqual({ mode: 'manual', state: 'active', generation: 0 })
+      const held = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'hold',
+        expectedVersion: campaign.version,
+        command: { kind: 'setResearchProgress', state: 'held', expectedGeneration: 0 },
+      })
+      expect(held).toMatchObject({
+        ok: true,
+        campaign: { progressControl: { mode: 'manual', state: 'held', generation: 1 } },
+      })
+      const replay = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'hold',
+        expectedVersion: campaign.version,
+        command: { kind: 'setResearchProgress', state: 'held', expectedGeneration: 0 },
+      })
+      expect(replay).toMatchObject({ ok: true, replayed: true })
+      const staleGeneration = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'stale-hold',
+        expectedVersion: held.ok ? held.campaign.version : campaign.version,
+        command: { kind: 'setResearchProgress', state: 'active', expectedGeneration: 0 },
+      })
+      expect(staleGeneration).toMatchObject({ ok: false, code: 'progress_generation_conflict' })
+    } finally {
+      store.close()
+    }
+    const reopened = fresh(path)
+    try {
+      expect(getResearchCampaign(reopened, campaignId)?.progressControl).toEqual({
+        mode: 'manual',
+        state: 'held',
+        generation: 1,
+      })
+    } finally {
+      reopened.close()
+      rmSync(path, { force: true })
+    }
+  })
+
+  test('a hold blocks new synthetic claims but keeps existing replay, finish, and unknown cancellation available', () => {
+    const store = fresh()
+    try {
+      const campaign = created(store).campaign
+      const claimed = claim(store, campaign.id, campaign.version, 'held-existing')
+      if (!claimed.ok) throw new Error(claimed.message)
+      const held = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'hold-existing',
+        expectedVersion: claimed.campaign.version,
+        command: { kind: 'setResearchProgress', state: 'held', expectedGeneration: 0 },
+      })
+      if (!held.ok) throw new Error(held.message)
+      const replay = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'replay-existing-after-hold',
+        expectedVersion: held.campaign.version,
+        command: { kind: 'claimSynthetic', dispatchKey: 'held-existing', inputHash: INPUT_HASH },
+      })
+      expect(replay).toMatchObject({ ok: true, replayed: true })
+      const blocked = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'claim-new-after-hold',
+        expectedVersion: held.campaign.version,
+        command: { kind: 'claimSynthetic', dispatchKey: 'held-new', inputHash: INPUT_HASH },
+      })
+      expect(blocked).toMatchObject({ ok: false, code: 'progress_held' })
+      const finished = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'finish-existing-after-hold',
+        expectedVersion: held.campaign.version,
+        command: {
+          kind: 'finishSynthetic',
+          attemptId: claimed.campaign.attempts[0]!.id,
+          uri: 'research/held-existing.json',
+          artifactKind: 'synthetic-summary-v1',
+          contentHash: CONTENT_HASH,
+          validation: {
+            inputHash: INPUT_HASH,
+            contentHash: CONTENT_HASH,
+            byteLength: 1,
+            verifiedAt: Date.now(),
+          },
+        },
+      })
+      expect(finished).toMatchObject({ ok: true, campaign: { progressControl: { state: 'held' } } })
+    } finally {
+      store.close()
+    }
+
+    const unknownStore = fresh()
+    try {
+      const campaign = created(unknownStore).campaign
+      const claimed = mutateResearchCampaign(unknownStore, campaign.id, {
+        idempotencyKey: 'claim-unknown-before-hold',
+        expectedVersion: campaign.version,
+        command: {
+          kind: 'claimSynthetic',
+          dispatchKey: 'held-unknown',
+          inputHash: INPUT_HASH,
+          backend: 'localhost-daemon',
+        },
+      })
+      if (!claimed.ok) throw new Error(claimed.message)
+      const held = mutateResearchCampaign(unknownStore, campaign.id, {
+        idempotencyKey: 'hold-unknown',
+        expectedVersion: claimed.campaign.version,
+        command: { kind: 'setResearchProgress', state: 'held', expectedGeneration: 0 },
+      })
+      if (!held.ok) throw new Error(held.message)
+      const unknown = mutateResearchCampaign(unknownStore, campaign.id, {
+        idempotencyKey: 'mark-unknown-after-hold',
+        expectedVersion: held.campaign.version,
+        command: {
+          kind: 'markSyntheticUnknown',
+          attemptId: claimed.campaign.attempts[0]!.id,
+          reason: 'lost',
+        },
+      })
+      if (!unknown.ok) throw new Error(unknown.message)
+      const cancelled = mutateResearchCampaign(unknownStore, campaign.id, {
+        idempotencyKey: 'cancel-unknown-after-hold',
+        expectedVersion: unknown.campaign.version,
+        command: { kind: 'requestCancelSynthetic', attemptId: claimed.campaign.attempts[0]!.id },
+      })
+      expect(cancelled).toMatchObject({
+        ok: true,
+        campaign: { attempts: [{ cancelRequestedAt: expect.any(Number) }] },
+      })
+    } finally {
+      unknownStore.close()
+    }
+  })
+
+  test('a hold blocks new CLI preparation claims and model-review reservations', () => {
+    const store = fresh()
+    try {
+      const initial = created(store).campaign
+      const declared = declareCliTask(store, initial)
+      const proposal = cliProposal(declared.taskRevisions[0]!.id)
+      const proposed = mutateResearchCampaign(store, declared.id, {
+        idempotencyKey: 'propose-held-cli',
+        expectedVersion: declared.version,
+        command: proposal,
+      })
+      if (!proposed.ok) throw new Error(proposed.message)
+      const approved = approveCliPreparation(store, proposed.campaign, proposal, 'approve-held-cli')
+      if (!approved.ok) throw new Error(approved.message)
+      const held = mutateResearchCampaign(store, initial.id, {
+        idempotencyKey: 'hold-cli',
+        expectedVersion: approved.campaign.version,
+        command: { kind: 'setResearchProgress', state: 'held', expectedGeneration: 0 },
+      })
+      if (!held.ok) throw new Error(held.message)
+      const denied = mutateResearchCampaign(store, initial.id, {
+        idempotencyKey: 'claim-held-cli',
+        expectedVersion: held.campaign.version,
+        command: {
+          kind: 'claimCliPreparation',
+          preparationId: proposal.preparationId,
+          approvalId: approved.campaign.approvals[0]!.id,
+        },
+      })
+      expect(denied).toMatchObject({ ok: false, code: 'progress_held' })
+    } finally {
+      store.close()
+    }
+
+    const reviewStore = fresh()
+    try {
+      const completed = completeReleaseArtifact(reviewStore)
+      const artifactVersionIds = completed.artifactVersions.map((artifact) => artifact.id)
+      const scope = {
+        kind: 'model_review' as const,
+        dispatchKey: 'held-review',
+        evidencePackHash: `sha256:${'d'.repeat(64)}`,
+        configHash: `sha256:${'e'.repeat(64)}`,
+        maxRequests: 2,
+        maxOutputTokens: 1024,
+        artifactVersionIds,
+        currency: completed.budget.currency,
+        maxCost: 1,
+        expiresAt: Date.now() + 60_000,
+      }
+      const approved = mutateResearchCampaign(reviewStore, completed.id, {
+        idempotencyKey: 'approve-held-review',
+        expectedVersion: completed.version,
+        command: {
+          kind: 'approve',
+          bundleHash: completed.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'held-review-proof', verifiedAt: Date.now() },
+          scope,
+        },
+      })
+      if (!approved.ok) throw new Error(approved.message)
+      const held = mutateResearchCampaign(reviewStore, completed.id, {
+        idempotencyKey: 'hold-review',
+        expectedVersion: approved.campaign.version,
+        command: { kind: 'setResearchProgress', state: 'held', expectedGeneration: 0 },
+      })
+      if (!held.ok) throw new Error(held.message)
+      const denied = mutateResearchCampaign(reviewStore, completed.id, {
+        idempotencyKey: 'reserve-held-review',
+        expectedVersion: held.campaign.version,
+        command: {
+          kind: 'reserveModelReview',
+          spec: {
+            dispatchKey: scope.dispatchKey,
+            approvalId: approved.campaign.approvals[0]!.id,
+            evidencePackHash: scope.evidencePackHash,
+            configHash: scope.configHash,
+            artifactVersionIds,
+            currency: scope.currency,
+            reservedCost: 1,
+            maxRequests: 2,
+            maxOutputTokens: 1024,
+          },
+        },
+      })
+      expect(denied).toMatchObject({ ok: false, code: 'progress_held' })
+    } finally {
+      reviewStore.close()
+    }
   })
 })

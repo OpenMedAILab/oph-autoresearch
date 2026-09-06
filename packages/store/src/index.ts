@@ -74,6 +74,7 @@ export {
   createResearchCampaign,
   findRunningSyntheticAttempts,
   getResearchCampaign,
+  hasSupportedReleaseReview,
   listResearchCampaigns,
   listResearchEvents,
   mutateResearchCampaign,

@@ -35,6 +35,8 @@ type EventRow = {
 type CampaignRow = { snapshot: string }
 type IdempotencyRow = { payload_hash: string; result_snapshot: string; event_id: string }
 
+const DEFAULT_PROGRESS_CONTROL = { mode: 'manual', state: 'active', generation: 0 } as const
+
 export interface ResearchRunningAttempt {
   campaignId: string
   taskRevision: ResearchTaskRevision
@@ -125,6 +127,10 @@ function normalizeCampaign(campaign: ResearchCampaign): ResearchCampaign {
     taskRevisions: Array.isArray(campaign.taskRevisions) ? campaign.taskRevisions : [],
     attempts: Array.isArray(campaign.attempts) ? campaign.attempts : [],
   }
+}
+
+function progressControl(campaign: ResearchCampaign) {
+  return campaign.progressControl ?? DEFAULT_PROGRESS_CONTROL
 }
 
 function eventOf(row: EventRow): ResearchEvent {
@@ -352,7 +358,7 @@ function reviewSourceContextHash(campaign: ResearchCampaign): string {
 }
 
 /** A release may cite only the exact, current artifact versions independently reviewed as supported. */
-function hasSupportedReleaseReview(
+export function hasSupportedReleaseReview(
   campaign: ResearchCampaign,
   artifactVersionIds: readonly string[],
 ): boolean {
@@ -381,6 +387,41 @@ function hasSupportedReleaseReview(
       return false
     }
   })
+}
+
+function hasExactReleasableArtifact(
+  campaign: ResearchCampaign,
+  artifactVersionId: string,
+): boolean {
+  const artifact = campaign.artifactVersions.find((candidate) => candidate.id === artifactVersionId)
+  if (
+    !artifact ||
+    artifact.kind === 'cli_preparation_candidate' ||
+    artifact.kind === 'cli_preparation_quarantined_candidate' ||
+    !artifact.validation ||
+    artifact.contentHash !== artifact.validation.contentHash ||
+    !artifact.producerAttemptId ||
+    !artifact.producerTaskRevisionId ||
+    campaign.artifactVersions.some(
+      (candidate) =>
+        candidate.artifactId === artifact.artifactId && candidate.version > artifact.version,
+    )
+  )
+    return false
+  const task = campaign.taskRevisions.find(
+    (candidate) => candidate.id === artifact.producerTaskRevisionId,
+  )
+  const attempt = campaign.attempts.find((candidate) => candidate.id === artifact.producerAttemptId)
+  if (!task || !attempt) return false
+  return (
+    task.id === artifact.producerTaskRevisionId &&
+    artifact.validation.inputHash === task.inputHash &&
+    attempt.taskRevisionId === task.id &&
+    attempt.status === 'completed' &&
+    attempt.artifactVersionId === artifact.id &&
+    withDerivedTaskStatuses(campaign).taskRevisions.find((candidate) => candidate.id === task.id)
+      ?.status === 'verified'
+  )
 }
 
 function attemptById(campaign: ResearchCampaign, attemptId: unknown): ResearchAttempt | null {
@@ -431,6 +472,28 @@ function nextCampaign(
       return invalid('invalid_skill_binding', '执行技能绑定无效')
   }
   switch (command.kind) {
+    case 'setResearchProgress': {
+      const control = progressControl(campaign)
+      if (
+        (command.state !== 'active' && command.state !== 'held') ||
+        !Number.isSafeInteger(command.expectedGeneration) ||
+        command.expectedGeneration < 0 ||
+        command.expectedGeneration !== control.generation
+      )
+        return invalid(
+          'progress_generation_conflict',
+          'Manual progress control requires the current generation',
+        )
+      next = {
+        ...campaign,
+        progressControl: {
+          mode: 'manual',
+          state: command.state,
+          generation: control.generation + 1,
+        },
+      }
+      break
+    }
     case 'applyResearchPattern': {
       const selection = command.plan?.selection
       if (!selection || typeof selection !== 'object' || Array.isArray(selection))
@@ -491,6 +554,8 @@ function nextCampaign(
       const spec = command.spec
       const approval = campaign.approvals.find((a) => a.id === spec?.approvalId)
       const scope = approval?.scope
+      if (progressControl(campaign).state === 'held')
+        return invalid('progress_held', 'Manual hold blocks new model review reservations')
       if (
         !spec ||
         !approval ||
@@ -773,6 +838,8 @@ function nextCampaign(
         (candidate) => candidate.id === preparation?.taskRevisionId,
       )
       const approval = campaign.approvals.find((candidate) => candidate.id === command.approvalId)
+      if (progressControl(campaign).state === 'held')
+        return invalid('progress_held', 'Manual hold blocks new CLI preparation claims')
       if (
         !preparation ||
         !task ||
@@ -1219,16 +1286,9 @@ function nextCampaign(
         new Set(command.artifactVersionIds).size !== command.artifactVersionIds.length ||
         canonicalJson([...command.artifactVersionIds].sort()) !==
           canonicalJson([...approval.scope.artifactVersionIds].sort()) ||
-        command.artifactVersionIds.some((id) => {
-          const a = campaign.artifactVersions.find((item) => item.id === id)
-          return (
-            !a?.validation ||
-            !a.producerTaskRevisionId ||
-            withDerivedTaskStatuses(campaign).taskRevisions.find(
-              (t) => t.id === a.producerTaskRevisionId,
-            )?.status !== 'verified'
-          )
-        }) ||
+        command.artifactVersionIds.some(
+          (artifactVersionId) => !hasExactReleasableArtifact(campaign, artifactVersionId),
+        ) ||
         !hasSupportedReleaseReview(campaign, command.artifactVersionIds)
       )
         return invalid(
@@ -1343,6 +1403,8 @@ function nextCampaign(
       break
     }
     case 'claimSynthetic': {
+      if (progressControl(campaign).state === 'held')
+        return invalid('progress_held', 'Manual hold blocks new execution claims')
       if (
         (command.backend === 'ssh-daemon' &&
           (!command.backendPolicyHash || !SHA256.test(command.backendPolicyHash))) ||
