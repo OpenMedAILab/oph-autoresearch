@@ -6,6 +6,7 @@ import type {
   ResearchAuthorityClosureRequest,
   ResearchAuthorityIdentity,
 } from '@oph-autoresearch/core'
+import { isFormalOciJob } from './formal-job.ts'
 import type { DurableJob, JobSpec } from './job-daemon.ts'
 
 const MAX_RESPONSE_BYTES = 1_000_000
@@ -69,6 +70,9 @@ function hash(value: unknown): string {
 
 function hashBytes(value: Uint8Array): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`
+}
+function specBindingHash(spec: JobSpec): string | undefined {
+  return isFormalOciJob(spec) ? spec.formalPlanHash : spec.inputHash
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -276,11 +280,12 @@ function responseJob(value: unknown, expected: JobSpec | undefined): DurableJob 
   if (!isRecord(value) || !isRecord(value.spec) || typeof value.specHash !== 'string')
     throw new Error('SSH daemon returned an invalid job envelope')
   const job = value as unknown as DurableJob
-  if (job.specHash !== hash(job.spec) || !SHA256.test(job.spec.inputHash))
+  const receivedBinding = specBindingHash(job.spec)
+  if (job.specHash !== hash(job.spec) || !receivedBinding || !SHA256.test(receivedBinding))
     throw new Error('SSH daemon returned an unbound job')
   if (
     expected &&
-    (canonical(job.spec) !== canonical(expected) || job.spec.inputHash !== expected.inputHash)
+    (canonical(job.spec) !== canonical(expected) || receivedBinding !== specBindingHash(expected))
   )
     throw new Error('SSH daemon returned a job that does not match the submitted binding')
   return job
@@ -464,8 +469,8 @@ class Client implements SshDaemonAuthority {
   }
 
   async submit(spec: JobSpec, expectedEpoch?: string): Promise<DurableJob> {
-    if (spec.version === 3 && !validEpoch(expectedEpoch))
-      throw new Error('CLI preparation submission requires an authority epoch')
+    if ((spec.version === 3 || isFormalOciJob(spec)) && !validEpoch(expectedEpoch))
+      throw new Error('epoch-bound submission requires an authority epoch')
     const body =
       expectedEpoch === undefined ? JSON.stringify(spec) : JSON.stringify({ expectedEpoch, spec })
     const job = await this.envelope('/submit', { method: 'POST', body }, spec, expectedEpoch)

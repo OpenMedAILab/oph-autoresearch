@@ -6,7 +6,8 @@ import {
   fstatSync,
   lstatSync,
   openSync,
-  readFileSync,
+  readdirSync,
+  readSync,
   realpathSync,
 } from 'node:fs'
 import { resolve, sep } from 'node:path'
@@ -18,6 +19,7 @@ const SHA256 = /^sha256:[a-f0-9]{64}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const MAX_STDIO_BYTES = 64 * 1024
 const MAX_PREDICTIONS_BYTES = 16 * 1024 * 1024
+const MAX_DATASET_FILE_BYTES = 4 * 1024 * 1024 * 1024
 
 export interface FormalOciAdministratorConfig {
   podmanExecutable: string
@@ -62,13 +64,55 @@ function readBoundedRegular(path: string, maximum: number, nonEmpty = false) {
     const stat = fstatSync(descriptor)
     if (!stat.isFile() || stat.nlink !== 1 || stat.size > maximum || (nonEmpty && stat.size === 0))
       throw new Error('formal OCI file is unsafe or exceeds its bound')
-    return readFileSync(descriptor)
+    // Read exactly the size that was checked. A writable /out file can grow after
+    // fstat; readFileSync would then allocate that attacker-controlled growth.
+    const bytes = Buffer.allocUnsafe(stat.size)
+    for (let offset = 0; offset < bytes.length; ) {
+      const count = readSync(descriptor, bytes, offset, bytes.length - offset, offset)
+      if (count === 0) throw new Error('formal OCI file changed while reading')
+      offset += count
+    }
+    const after = fstatSync(descriptor)
+    if (!after.isFile() || after.nlink !== 1 || after.size !== stat.size)
+      throw new Error('formal OCI file changed while reading')
+    return bytes
   } finally {
     closeSync(descriptor)
   }
 }
 function fileHash(path: string, maximum = MAX_PREDICTIONS_BYTES) {
   return bytesHash(readBoundedRegular(path, maximum))
+}
+function streamingFileHash(path: string) {
+  const listed = lstatSync(path)
+  if (!listed.isFile() || listed.isSymbolicLink() || listed.nlink !== 1)
+    throw new Error('formal dataset entry is not a unique regular file')
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const stat = fstatSync(descriptor)
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_DATASET_FILE_BYTES)
+      throw new Error('formal dataset entry is unsafe or exceeds its bound')
+    const hasher = createHash('sha256')
+    const buffer = Buffer.allocUnsafe(64 * 1024)
+    for (let offset = 0; offset < stat.size; ) {
+      const count = readSync(
+        descriptor,
+        buffer,
+        0,
+        Math.min(buffer.length, stat.size - offset),
+        offset,
+      )
+      if (count === 0) throw new Error('formal dataset entry changed while hashing')
+      hasher.update(buffer.subarray(0, count))
+      offset += count
+    }
+    const after = fstatSync(descriptor)
+    if (!after.isFile() || after.nlink !== 1 || after.size !== stat.size)
+      throw new Error('formal dataset entry changed while hashing')
+    return `sha256:${hasher.digest('hex')}`
+  } finally {
+    closeSync(descriptor)
+  }
 }
 function safeDirectory(path: string) {
   const stat = lstatSync(path)
@@ -86,6 +130,74 @@ function mountedPath(root: string, child: string) {
   const target = resolve(root, child)
   if (!target.startsWith(`${root}${sep}`)) throw new Error('formal OCI output escapes its root')
   return target
+}
+function relativeDatasetPath(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    value.split('/').every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(segment))
+  )
+}
+function listedDatasetFiles(root: string, directory = root): string[] {
+  const entries = readdirSync(directory, { withFileTypes: true })
+  const files: string[] = []
+  for (const entry of entries) {
+    const path = resolve(directory, entry.name)
+    if (!path.startsWith(`${root}${sep}`)) throw new Error('formal dataset escapes its root')
+    const stat = lstatSync(path)
+    if (stat.isSymbolicLink()) throw new Error('formal dataset contains a symlink')
+    if (stat.isDirectory()) files.push(...listedDatasetFiles(root, path))
+    else if (stat.isFile() && stat.nlink === 1) files.push(path.slice(root.length + 1))
+    else throw new Error('formal dataset contains a non-regular entry')
+  }
+  return files.sort()
+}
+function verifyDatasetSnapshot(dataset: FormalOciAdministratorConfig['datasets'][number]) {
+  const manifestBytes = readBoundedRegular(dataset.manifest, MAX_PREDICTIONS_BYTES, true)
+  if (bytesHash(manifestBytes) !== dataset.dataManifestHash)
+    throw new Error('formal dataset manifest changed')
+  let manifest: unknown
+  try {
+    manifest = JSON.parse(manifestBytes.toString())
+  } catch {
+    throw new Error('formal dataset manifest is invalid')
+  }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest))
+    throw new Error('formal dataset manifest is invalid')
+  const manifestRecord = manifest as Record<string, unknown>
+  if (
+    Object.keys(manifestRecord).sort().join(',') !== 'files' ||
+    !Array.isArray(manifestRecord.files)
+  )
+    throw new Error('formal dataset manifest is invalid')
+  const files = manifestRecord.files
+  if (files.length === 0 || files.length > 100_000)
+    throw new Error('formal dataset manifest is invalid')
+  const expected = new Map<string, string>()
+  for (const item of files) {
+    if (!item || typeof item !== 'object' || Array.isArray(item))
+      throw new Error('formal dataset manifest is invalid')
+    const record = item as Record<string, unknown>
+    if (
+      Object.keys(record).sort().join(',') !== 'path,sha256' ||
+      !relativeDatasetPath(record.path) ||
+      typeof record.sha256 !== 'string' ||
+      !SHA256.test(record.sha256) ||
+      expected.has(record.path)
+    )
+      throw new Error('formal dataset manifest is invalid')
+    expected.set(record.path, record.sha256)
+  }
+  const root = safeDirectory(dataset.root)
+  const actual = listedDatasetFiles(root)
+  if (actual.length !== expected.size || actual.some((path) => !expected.has(path)))
+    throw new Error('formal dataset snapshot does not match its manifest')
+  for (const [relative, digest] of expected) {
+    const path = resolve(root, relative)
+    if (!path.startsWith(`${root}${sep}`) || streamingFileHash(path) !== digest)
+      throw new Error('formal dataset snapshot does not match its manifest')
+  }
 }
 
 /** A production probe. macOS and rootful/cgroup-v1 Podman are explicitly refused. */
@@ -175,17 +287,14 @@ export class FormalOciAdapter {
       safeFile(item.candidateReceipt)
     }
     for (const item of config.datasets) {
-      if (
-        !SHA256.test(item.dataManifestHash) ||
-        fileHash(safeFile(item.manifest)) !== item.dataManifestHash
-      )
-        throw new Error('invalid formal dataset registry')
-      safeDirectory(item.root)
+      if (!SHA256.test(item.dataManifestHash)) throw new Error('invalid formal dataset registry')
+      verifyDatasetSnapshot(item)
     }
     for (const item of config.labels) {
       if (
         !SHA256.test(item.labelSetContentHash) ||
-        fileHash(safeFile(item.path)) !== item.labelSetContentHash
+        bytesHash(readBoundedRegular(safeFile(item.path), MAX_PREDICTIONS_BYTES, true)) !==
+          item.labelSetContentHash
       )
         throw new Error('invalid formal truth registry')
     }
@@ -213,9 +322,11 @@ export class FormalOciAdapter {
       fileHash(candidate.candidateReceipt) !== plan.candidateReceiptHash
     )
       throw new Error('formal candidate bytes changed')
-    if (fileHash(safeFile(dataset.manifest)) !== plan.dataManifestHash)
-      throw new Error('formal dataset manifest changed')
-    if (fileHash(safeFile(labels.path)) !== plan.labelSetContentHash)
+    verifyDatasetSnapshot(dataset)
+    if (
+      bytesHash(readBoundedRegular(safeFile(labels.path), MAX_PREDICTIONS_BYTES, true)) !==
+      plan.labelSetContentHash
+    )
       throw new Error('formal truth registry changed')
     return { candidate, dataset, labels, evaluator }
   }
@@ -294,7 +405,16 @@ export class FormalOciAdapter {
       this.argv(job, outputDirectory),
       job.formalPlan.resources.maxRuntimeMs + 5_000,
     )
-    return { ...result, stdout: bounded(result.stdout), stderr: bounded(result.stderr) }
+    // `podman run` can be killed by its timeout or the stdio cap while the
+    // named container remains alive. Confirm its state before returning the
+    // failed execution to the daemon's durable recovery path.
+    const cleanupConfirmed = result.exitCode === 0 || this.stopAndConfirm(job)
+    return {
+      ...result,
+      cleanupConfirmed,
+      stdout: bounded(result.stdout),
+      stderr: bounded(result.stderr),
+    }
   }
   /** Outside OCI: labels are the only truth source and worker-supplied metrics are ignored. */
   evaluate(job: FormalOciJobSpec, outputDirectory: string) {

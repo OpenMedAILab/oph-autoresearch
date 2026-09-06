@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { FormalExecutionPlan } from '@oph-autoresearch/core'
+import { type FormalOciJobSpec, formalExecutionPlanHash } from './formal-job.ts'
 import type { DurableJob, JobSpec } from './job-daemon.ts'
 import {
   createSshDaemonClient,
@@ -83,6 +85,47 @@ function spec(key = 'remote-job'): JobSpec {
     inputHash: fixedResearchTemplate(templateId).execute().inputHash,
     resource: { cpu: 1, memoryMb: 128 },
     lease: { ownerId: 'remote', token: 'lease-1', fence: 1, expiresAt: Date.now() + 60_000 },
+  }
+}
+
+function formalSpec(key = 'formal-remote-job'): FormalOciJobSpec {
+  const plan: FormalExecutionPlan = {
+    schema: 'research-formal-plan-v1',
+    planId: 'formal-plan-1',
+    taskRevisionId: 'task-1',
+    candidateArtifactId: 'candidate-1',
+    codeHash: hash('candidate'),
+    candidateReceiptHash: hash('candidate-receipt'),
+    workspaceBindingHash: hash('workspace'),
+    ociImageDigest: `sha256:${'a'.repeat(64)}`,
+    entryArgv: ['python3', 'main.py'],
+    dataManifestHash: hash('dataset'),
+    labelSetContentHash: hash('labels'),
+    trustedEvaluatorId: 'binary-classification-v1',
+    trustedEvaluatorHash: hash('evaluator'),
+    resources: {
+      maxRuntimeMs: 10_000,
+      cpu: 1,
+      memoryMb: 128,
+      pidsLimit: 32,
+      network: 'disabled',
+    },
+    datasetMount: { target: '/dataset', readOnly: true },
+    outputMount: { target: '/out' },
+  }
+  return {
+    version: 4,
+    dispatchKey: key,
+    campaignId: 'campaign-1',
+    taskRevisionId: plan.taskRevisionId,
+    formalPlan: plan,
+    formalPlanHash: formalExecutionPlanHash(plan),
+    lease: { ownerId: 'remote', token: 'lease-1', fence: 1, expiresAt: Date.now() + 60_000 },
+    execution: {
+      adapter: 'formal-rootless-oci-v1',
+      containerName: 'formal-remote-container',
+      authorityEpoch: 'e'.repeat(32),
+    },
   }
 }
 
@@ -225,6 +268,37 @@ describe('SSH daemon client', () => {
         { expectedEpoch: epoch, spec: submitted },
         { expectedEpoch: epoch },
       ])
+    } finally {
+      client.close()
+    }
+  })
+
+  test('binds a v4 formal plan to the daemon epoch and formal-plan hash', async () => {
+    const config = await freshConfig()
+    const epoch = 'e'.repeat(32)
+    const submitted = formalSpec()
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname
+        if (path === '/health')
+          return Response.json({ authorityId: config.authorityId, trackingPolicyHash: null })
+        if (path === '/submit')
+          return Response.json(
+            { authorityId: config.authorityId, job: job(submitted) },
+            { headers: { 'x-oph-authority-epoch': epoch } },
+          )
+        return new Response('not found', { status: 404 })
+      },
+    })
+    const client = createSshDaemonClientForTest(config, async () => ({
+      endpoint: `http://127.0.0.1:${server.port}`,
+      close: () => server.stop(true),
+    }))
+    try {
+      await expect(client.submit(submitted)).rejects.toThrow('epoch-bound')
+      expect((await client.submit(submitted, epoch)).spec).toEqual(submitted)
     } finally {
       client.close()
     }

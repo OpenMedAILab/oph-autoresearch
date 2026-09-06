@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, link, mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FormalExecutionPlan } from '@oph-autoresearch/core'
@@ -20,21 +20,27 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
   const candidateReceipt = join(root, 'candidate.json')
   const labels = join(root, 'labels.json')
   const manifest = join(root, 'manifest.json')
+  const dataFile = join(dataset, 'case-a.bin')
   await mkdir(dataset)
   await mkdir(output)
   await writeFile(podman, '#!/bin/sh\nexit 0\n')
   await chmod(podman, 0o755)
   await writeFile(mainPy, 'print("fixed candidate")\n')
   await writeFile(candidateReceipt, '{"candidate":"fixed"}\n')
-  await writeFile(manifest, '{"dataset":"fixed"}\n')
+  const originalData = 'immutable dataset bytes\n'
+  await writeFile(dataFile, originalData)
   await writeFile(
-    labels,
-    JSON.stringify([
-      { id: 'case-a', label: 1 },
-      { id: 'case-b', label: 0 },
-    ]),
+    manifest,
+    JSON.stringify({ files: [{ path: 'case-a.bin', sha256: hash(originalData) }] }),
   )
+  const originalLabels = JSON.stringify([
+    { id: 'case-a', label: 1 },
+    { id: 'case-b', label: 0 },
+  ])
+  await writeFile(labels, originalLabels)
   const calls: string[][] = []
+  let runExitCode = 0
+  let containerStopped = false
   const command: PodmanCommand = {
     run(argv) {
       calls.push([...argv])
@@ -49,10 +55,17 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
       if (argv[0] === 'inspect')
         return {
           exitCode: 0,
-          stdout: Buffer.from(`sha256:${'a'.repeat(64)} exited`),
+          stdout: Buffer.from(
+            `sha256:${'a'.repeat(64)} ${runExitCode && !containerStopped ? 'running' : 'exited'}`,
+          ),
           stderr: new Uint8Array(),
         }
-      return { exitCode: 0, stdout: Buffer.from('worker output'), stderr: new Uint8Array() }
+      if (argv[0] === 'stop') containerStopped = true
+      return {
+        exitCode: argv[0] === 'run' ? runExitCode : 0,
+        stdout: Buffer.from('worker output'),
+        stderr: new Uint8Array(),
+      }
     },
   }
   try {
@@ -118,6 +131,11 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
     expect(adapter.run(job, output).exitCode).toBe(0)
     expect(adapter.stopAndConfirm(job)).toBe(true)
     expect(calls[0]).toEqual(['info', '--format', 'json'])
+    runExitCode = 1
+    containerStopped = false
+    expect(adapter.run(job, output)).toMatchObject({ exitCode: 1, cleanupConfirmed: true })
+    expect(calls.at(-2)).toEqual(['stop', '--time', '1', job.execution.containerName])
+    runExitCode = 0
 
     await writeFile(
       `${output}/predictions.json`,
@@ -142,9 +160,19 @@ test('formal OCI adapter admits only rootless cgroup-v2 Podman and builds a clos
     await symlink(external, `${output}/predictions.json`)
     expect(() => adapter.evaluate(job, output)).toThrow('unique regular file')
     await unlink(`${output}/predictions.json`)
+    await link(external, `${output}/predictions.json`)
+    expect(() => adapter.evaluate(job, output)).toThrow('unique regular file')
+    await unlink(`${output}/predictions.json`)
 
     await writeFile(labels, JSON.stringify([{ id: 'case-a', label: 1 }]))
     expect(() => adapter.evaluate(job, output)).toThrow('truth registry changed')
+    await writeFile(labels, originalLabels)
+    await writeFile(labels, '')
+    expect(() => adapter.evaluate(job, output)).toThrow('unsafe or exceeds its bound')
+    await writeFile(labels, originalLabels)
+    await writeFile(dataFile, 'mutated dataset bytes\n')
+    expect(() => adapter.argv(job, output)).toThrow('dataset snapshot does not match its manifest')
+    await writeFile(dataFile, originalData)
     await writeFile(manifest, '{"dataset":"mutated"}\n')
     expect(() => adapter.argv(job, output)).toThrow('dataset manifest changed')
   } finally {
