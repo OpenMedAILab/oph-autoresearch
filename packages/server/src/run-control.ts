@@ -1,3 +1,4 @@
+import { CLI_PROVIDER_PREFIX, CliConversationSession } from './cli-conversation.ts'
 /**
  * run 的起、重试、压缩，以及**目标的自动续起**。
  *
@@ -122,20 +123,29 @@ export async function startRun(
   const controller = new AbortController()
   let currentRunId: RunId | null = null
 
-  const session = new Session({
-    store: deps.store,
-    config: deps.config,
-    content: deps.content,
-    workspaceRoot: ws.rootPath,
-    signal: controller.signal,
-    // 派活通道只给顶层会话。成员会话（`team-run.ts`）不传，因此它那边连
-    // `subagent` 工具都不注册——子 agent 再派活没有终止条件。
-    delegate: makeDelegate({ deps, workspaceRoot: ws.rootPath, conversationId }),
-    // 装插件同样只给顶层会话：成员会话不该给整台机器装插件。
-    plugins: makePluginPort({ workspaceRoot: ws.rootPath }),
-    // 跟进消息队列同样只给顶层会话：成员会话不在界面上，没有人往它里面插话。
-    followUps: (id) => deps.runs.takeSteered(id),
-  })
+  const session = getConversation(deps.store, conversationId)?.provider.startsWith(
+    CLI_PROVIDER_PREFIX,
+  )
+    ? new CliConversationSession({
+        store: deps.store,
+        config: deps.config,
+        workspaceRoot: ws.rootPath,
+        signal: controller.signal,
+      })
+    : new Session({
+        store: deps.store,
+        config: deps.config,
+        content: deps.content,
+        workspaceRoot: ws.rootPath,
+        signal: controller.signal,
+        // 派活通道只给顶层会话。成员会话（`team-run.ts`）不传，因此它那边连
+        // `subagent` 工具都不注册——子 agent 再派活没有终止条件。
+        delegate: makeDelegate({ deps, workspaceRoot: ws.rootPath, conversationId }),
+        // 装插件同样只给顶层会话：成员会话不该给整台机器装插件。
+        plugins: makePluginPort({ workspaceRoot: ws.rootPath }),
+        // 跟进消息队列同样只给顶层会话：成员会话不在界面上，没有人往它里面插话。
+        followUps: (id) => deps.runs.takeSteered(id),
+      })
 
   /*
    * 这一轮怎么收的场，只在续起判定里用。

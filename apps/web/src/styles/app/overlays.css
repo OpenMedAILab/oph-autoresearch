@@ -375,3 +375,77 @@
 .tooltip.show {
   opacity: 1;
 }
+
+.np-browser {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+.np-directory-list {
+  display: grid;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+}
+.np-directory-list .np-pick {
+  justify-content: flex-start;
+  text-align: left;
+}
+.new-project {
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.cli-model-row {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+.cli-model-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cli-model-title > span {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+.cli-model-path {
+  overflow-wrap: anywhere;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.cli-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.cli-model-row .remote-history-empty {
+  padding: 0;
+  margin: 0;
+  text-align: left;
+}
+.cli-model-actions input,
+.cli-model-actions select {
+  flex: 1;
+  min-width: 200px;
+  width: auto;
+}
+
+.model-cli-note {
+  padding: 0 10px 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.ssh-cli-host {
+  padding: 12px 0;
+}
+.ssh-cli-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

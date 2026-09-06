@@ -199,3 +199,5 @@ export function registerBuiltinTools(
     registry.register(spec)
   }
 }
+
+export { prepareSshCommand, setSshCliCapabilities } from './ssh.ts'

@@ -1,7 +1,8 @@
+import { homedir } from 'node:os'
 /** 项目：本机开过哪些、加一个、以及某个项目上装了什么扩展。 */
 
-import { mkdir, stat } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { mkdir, readdir, stat } from 'node:fs/promises'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { ToolSpec } from '@oph-autoresearch/agent'
 import { configDir } from '@oph-autoresearch/runtime'
 import {
@@ -102,6 +103,21 @@ function toolRow(s: Omit<ToolSpec, 'fn'>, source: string) {
 
 export const handleWorkspaceApi: ApiHandler = async (url, req, d) => {
   const p = url.pathname
+
+  // 使用现有令牌鉴权，浏览的是运行服务的本机目录，不上传目录内容。
+  if (p === '/api/workspace-folders' && req.method === 'GET') {
+    const path = resolve(url.searchParams.get('path') || homedir())
+    try {
+      const entries = await readdir(path, { withFileTypes: true })
+      const folders = entries
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .map((entry) => ({ name: entry.name, path: join(path, entry.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+      return json({ path, parent: dirname(path), folders })
+    } catch {
+      return json({ error: '无法读取此文件夹，请检查路径和访问权限' }, 422)
+    }
+  }
 
   if (p === '/api/workspaces') {
     /*

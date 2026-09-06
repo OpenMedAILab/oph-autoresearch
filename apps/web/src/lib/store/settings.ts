@@ -188,6 +188,8 @@ export interface ModelOption {
 
 /** 一个接口。名字是用户在设置里起的，选择器就按它分组。 */
 export interface ProviderModels {
+  source?: 'api' | 'cli'
+  label?: string
   name: string
   models: ModelOption[]
 }
@@ -362,8 +364,8 @@ export function discoverProviderModels(
 export interface WorkspaceDetail extends WorkspaceInfo {
   pendingTrust: string[]
 }
-export function loadWorkspace(): Promise<WorkspaceDetail> {
-  return client.api<WorkspaceDetail>('/api/workspace')
+export function loadWorkspace(): Promise<WorkspaceDetail | null> {
+  return client.api<WorkspaceDetail | null>('/api/workspace')
 }
 
 /**

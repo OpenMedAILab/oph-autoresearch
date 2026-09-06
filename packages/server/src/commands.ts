@@ -1,3 +1,5 @@
+import { findCli } from '@oph-autoresearch/team'
+import { CLI_PROVIDER_PREFIX, supportsCliModel } from './cli-conversation.ts'
 /**
  * 客户端指令的分发与拒绝回执。
  *
@@ -96,7 +98,19 @@ export async function handleCommand(cmd: ClientCommand, deps: CommandDeps): Prom
     case 'conversation.setModel': {
       // 接口必须在配置里真的存在。放行一个不存在的接口名，会话就指向了一个
       // 发不出请求的地方，而报错要等到下一轮才出现。
-      if (!deps.config.providers[cmd.provider]) {
+      if (cmd.provider.startsWith(CLI_PROVIDER_PREFIX)) {
+        const cliId = cmd.provider.slice(CLI_PROVIDER_PREFIX.length)
+        if (
+          cliId.startsWith('ssh:') ||
+          !(await findCli(cliId)) ||
+          !cmd.model.trim() ||
+          cmd.model.length > 200 ||
+          (cmd.model !== 'default' && !supportsCliModel(cliId))
+        ) {
+          reject(deps.ws, cmd.type, 'invalid_payload', 'CLI 不可用或模型名称无效')
+          return
+        }
+      } else if (!deps.config.providers[cmd.provider]) {
         reject(deps.ws, cmd.type, 'invalid_payload', `配置里没有名为 "${cmd.provider}" 的接口`)
         return
       }

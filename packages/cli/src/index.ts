@@ -273,7 +273,7 @@ async function runServe(args: string[]): Promise<number> {
    * 打开过的项目。
    *
    * 没给的时候交给 `serve()` 自己决定：账本里有项目就用最近打开的那个，
-   * 一个都没有才建默认工作区。
+   * 一个都没有时等待用户新建研究项目。
    */
   const workspaceRoot = flags.cwd ? resolve(flags.cwd) : null
 

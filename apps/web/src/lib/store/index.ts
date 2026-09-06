@@ -6,6 +6,7 @@
  */
 
 export * from './actions.ts'
+export * from './cli.ts'
 export * from './connection.ts'
 export { researchRefreshVersion } from './research.ts'
 export * from './settings.ts'

@@ -126,7 +126,7 @@ function spawnAgent(): ReturnType<typeof Bun.spawn> {
       String(process.pid),
       // **不传 --cwd**：传了就等于把这个仓库登记成项目，而开发态不要这个默认
       // （用户拿到的第一个项目会是 oph-autoresearch 的源码树）。不传则由服务端决定——
-      // 账本里有项目就用最近打开的，一个都没有才建默认工作区。
+      // 账本里有项目就用最近打开的，一个都没有时等待用户新建研究项目。
     ],
     { cwd: ROOT, env, stdout: 'inherit', stderr: 'inherit', stdin: 'ignore' },
   )
@@ -227,7 +227,7 @@ watch(join(ROOT, 'packages'), { recursive: true }, (_event, file) => {
  * 这个仓库钉成当前项目——用户在应用里切走，下次启动又被切回来，而且仓库自己成了
  * 那个默认项目。「首次运行挂哪儿」现在由服务端一处决定
  * （`server.ts` 的 `bootstrapWorkspace`）：账本里有项目就用最近打开的，
- * 一个都没有才建默认工作区。
+ * 一个都没有时等待用户新建研究项目。
  */
 const shell = Bun.spawn([BUN, 'run', '--cwd', join(ROOT, 'apps/desktop'), 'tauri', 'dev'], {
   cwd: ROOT,

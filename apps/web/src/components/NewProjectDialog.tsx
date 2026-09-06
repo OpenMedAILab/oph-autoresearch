@@ -1,20 +1,8 @@
-import { createEffect, createSignal, onCleanup, Show } from 'solid-js'
-import { pickWorkspace, type WorkspaceInput } from '../lib/store/index.ts'
+import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js'
+import { client, pickWorkspace, type WorkspaceInput } from '../lib/store/index.ts'
 import { IconFolder, IconPlus } from './Icons.tsx'
 
-/**
- * 新建 work。
- *
- * **为什么是弹窗，不是直接开目录选择器。** 点一下就弹系统目录选择器的话，「项目」被迫等于「一个已经
- * 存在的目录」——名字只能取目录名，也没法先建一个空目录再开始。这里把两件事分开：**名字是项目
- * 的，路径是它落在哪**。
- *
- * **源文件夹可以留空。** 留空就在 `~/.oph-autoresearch/workspaces/<名称>/` 建一个新的。会话挂的是项目 id，
- * 不是路径——所以以后改名字不会丢会话。
- *
- * **选目录只有桌面端有。** 系统目录选择器是外壳能力，浏览器拿不到。那边这颗按钮不渲染（B5），
- * 但输入名字建默认工作区仍然可用——不是整个功能都没了。
- */
+/** 创建研究项目；Web 端通过本地服务浏览文件夹，桌面端使用系统选择器。 */
 export function NewProjectDialog(props: {
   open: boolean
   /** 桌面外壳才有系统目录选择器。 */
@@ -24,12 +12,41 @@ export function NewProjectDialog(props: {
 }) {
   const [name, setName] = createSignal('')
   const [folder, setFolder] = createSignal<string | null>(null)
+  const [browsing, setBrowsing] = createSignal(false)
+  const [folderPath, setFolderPath] = createSignal('')
+  const [directory, setDirectory] = createSignal<{
+    path: string
+    parent: string
+    folders: { name: string; path: string }[]
+  } | null>(null)
+  const [loadingFolders, setLoadingFolders] = createSignal(false)
+  const browse = async (path = '') => {
+    setError(null)
+    setLoadingFolders(true)
+    setDirectory(null)
+    try {
+      const result = await client.api<{
+        path: string
+        parent: string
+        folders: { name: string; path: string }[]
+      }>(`/api/workspace-folders?path=${encodeURIComponent(path)}`)
+      setDirectory(result)
+      setFolderPath(result.path)
+      setBrowsing(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoadingFolders(false)
+    }
+  }
   const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
   // 每次打开都是干净的一张表：留着上一次的输入读起来像是它记住了什么。
   createEffect(() => {
     if (props.open) {
+      setBrowsing(false)
+      setDirectory(null)
       setName('')
       setFolder(null)
       setError(null)
@@ -54,6 +71,10 @@ export function NewProjectDialog(props: {
     name().trim() || (folder() ? (folder() as string).split(/[/\\]/).pop() : '')
 
   const pick = async () => {
+    if (!props.canPickFolder) {
+      await browse()
+      return
+    }
     setError(null)
     try {
       const picked = await pickWorkspace()
@@ -84,8 +105,8 @@ export function NewProjectDialog(props: {
     <Show when={props.open}>
       <button class="backdrop-close" type="button" aria-label="取消" onClick={props.onClose} />
       <div class="sheet-backdrop pass-through">
-        <div class="new-project" role="dialog" aria-modal="true" aria-label="新建 work">
-          <h2 class="confirm-title">新建 work</h2>
+        <div class="new-project" role="dialog" aria-modal="true" aria-label="新建研究项目">
+          <h2 class="confirm-title">新建研究项目</h2>
 
           <label class="np-field">
             <span class="np-label">项目名称</span>
@@ -104,15 +125,15 @@ export function NewProjectDialog(props: {
               when={folder()}
               fallback={
                 <div class="np-folder empty">
-                  <Show
-                    when={props.canPickFolder}
-                    fallback={<span class="np-hint">在本机新建一个文件夹</span>}
+                  <button
+                    class="np-pick"
+                    type="button"
+                    disabled={loadingFolders()}
+                    onClick={() => void pick()}
                   >
-                    <button class="np-pick" type="button" onClick={() => void pick()}>
-                      <IconPlus size={14} />
-                      选一个本机文件夹
-                    </button>
-                  </Show>
+                    <IconPlus size={14} />
+                    选择本机项目文件夹
+                  </button>
                   {/* 边界声明留全（B7）：不写的话「留空会发生什么」没有任何提示。 */}
                   <span class="np-hint">留空就在 oph-autoresearch 的数据目录下新建一个</span>
                 </div>
@@ -129,6 +150,63 @@ export function NewProjectDialog(props: {
               )}
             </Show>
           </div>
+
+          <Show when={browsing()}>
+            <section class="np-browser" aria-label="选择本机项目文件夹">
+              <label class="np-field">
+                <span class="np-label">文件夹路径</span>
+                <input
+                  class="np-input"
+                  value={folderPath()}
+                  onInput={(e) => setFolderPath(e.currentTarget.value)}
+                />
+              </label>
+              <div class="confirm-actions">
+                <button
+                  class="btn-ghost"
+                  type="button"
+                  disabled={loadingFolders()}
+                  onClick={() => void browse(folderPath())}
+                >
+                  打开路径
+                </button>
+                <button
+                  class="btn-ghost"
+                  type="button"
+                  disabled={
+                    loadingFolders() || !directory() || directory()?.parent === directory()?.path
+                  }
+                  onClick={() => void browse(directory()!.parent)}
+                >
+                  上一级
+                </button>
+              </div>
+              <div class="np-directory-list">
+                <For each={directory()?.folders}>
+                  {(entry) => (
+                    <button class="np-pick" type="button" onClick={() => void browse(entry.path)}>
+                      <IconFolder size={15} />
+                      {entry.name}
+                    </button>
+                  )}
+                </For>
+                <Show when={directory()?.folders.length === 0}>
+                  <span class="np-hint">此文件夹没有子文件夹</span>
+                </Show>
+              </div>
+              <button
+                class="btn-primary"
+                type="button"
+                disabled={loadingFolders() || !directory()}
+                onClick={() => {
+                  setFolder(directory()!.path)
+                  setBrowsing(false)
+                }}
+              >
+                选择此文件夹
+              </button>
+            </section>
+          </Show>
 
           {/* 失败要有终态：名字不合法、目录建不出来，都在这里说出来。 */}
           <Show when={error()}>{(e) => <p class="np-error">{e()}</p>}</Show>

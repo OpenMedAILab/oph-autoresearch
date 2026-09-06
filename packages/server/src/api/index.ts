@@ -86,12 +86,18 @@ export async function handleApi(url: URL, req: Request, d: ApiDeps): Promise<Res
   if (!ws) {
     // 指名道姓要一个不存在的项目：404。静默换一个等于在用户选定 A 的位置上读写 B。
     if (url.searchParams.get('ws')) return json({ error: '这个项目不存在' }, 404)
-    /*
-     * 一个项目都还没有。**只有「列项目 / 加项目」这条路能走**——第一个项目就是
-     * 从那里进来的，全部拦掉的话它永远加不进来。其余一律 404，而不是拿一个
-     * 空字符串当根继续往下跑：空根在 path.join 下面就是进程的当前目录。
-     */
-    if (url.pathname !== '/api/workspaces') return json({ error: '还没有任何项目' }, 404)
+    // 空状态只允许项目创建、目录浏览和不依赖项目的系统配置。
+    // 项目相关接口继续拒绝，避免空路径被解释为进程当前目录。
+    const globalDeps = { ...d, workspaceRoot: '', workspaceId: '' }
+    for (const handler of [handleConfigApi, handleHostApi]) {
+      const response = await handler(url, req, globalDeps)
+      if (response) return response
+    }
+    if (url.pathname === '/api/workspace' && req.method === 'GET') return json(null)
+    if (url.pathname === '/api/conversations' && req.method === 'GET')
+      return json({ conversations: [] })
+    if (!['/api/workspaces', '/api/workspace-folders'].includes(url.pathname))
+      return json({ error: '还没有任何项目' }, 404)
     return handleWorkspaceApi(url, req, { ...d, workspaceRoot: '', workspaceId: '' })
   }
   const rd: ApiRequestDeps = { ...d, workspaceRoot: ws.root, workspaceId: ws.id }

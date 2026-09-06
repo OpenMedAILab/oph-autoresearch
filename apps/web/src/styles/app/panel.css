@@ -694,7 +694,9 @@
   min-height: 0;
   overflow: auto;
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.8fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  grid-auto-rows: max-content;
+  align-content: start;
   align-items: start;
   gap: 18px;
 }
@@ -708,7 +710,7 @@
 }
 
 .remote-command-card {
-  padding: 18px;
+  padding: 24px;
 }
 
 .remote-step {
@@ -751,9 +753,14 @@
   gap: 9px;
 }
 
+.remote-target-host {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
 .remote-target-grid {
   display: grid;
-  grid-template-columns: 110px minmax(140px, 1fr) 84px;
+  grid-template-columns: minmax(0, 1fr) 120px;
   align-items: end;
   gap: 8px;
 }
@@ -793,51 +800,21 @@
 }
 
 .remote-connect-button {
-  width: 82px;
+  width: 100%;
   min-width: 0;
   min-height: 38px;
   justify-content: center;
 }
 
-.remote-target-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-
-.remote-command-preview {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-}
-
-.remote-command-preview span {
-  flex: none;
-}
-
-.remote-command-preview code {
-  overflow: hidden;
-  color: var(--text-secondary);
-  font: inherit;
-  font-family: var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .remote-auth-row {
   display: grid;
   gap: 9px;
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 .remote-auth-switch {
-  display: inline-flex;
-  width: max-content;
+  display: flex;
+  width: 100%;
   margin: 0;
   padding: 2px;
   border: 1px solid var(--border-default);
@@ -855,7 +832,8 @@
 }
 
 .remote-auth-switch button {
-  padding: 5px 11px;
+  flex: 1;
+  padding: 8px 6px;
   border-radius: calc(var(--r-md) - 2px);
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
@@ -1024,7 +1002,7 @@
 }
 
 .remote-recent-main > svg:first-child {
-  grid-row: 1 / 3;
+  color: var(--accent);
 }
 
 .remote-recent-main > span:not(.remote-history-action) {
@@ -1049,7 +1027,7 @@
 .remote-recent-main > svg:last-child,
 .remote-history-action {
   grid-column: 3;
-  grid-row: 1 / 3;
+  grid-row: 1;
 }
 
 .remote-history-action {
@@ -1131,7 +1109,7 @@
 
 .remote-directory-bar {
   display: grid;
-  grid-template-columns: auto auto minmax(160px, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(160px, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
   flex: none;
@@ -1358,12 +1336,7 @@
   }
 
   .remote-target-host {
-    grid-row: auto;
-  }
-
-  .remote-target-actions {
-    align-items: stretch;
-    flex-direction: column;
+    grid-row: 1;
   }
 
   .remote-connect-button {
@@ -3172,4 +3145,100 @@
 }
 .change-delta .del {
   color: var(--danger);
+}
+
+.remote-workspace-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.remote-workspace-mode select {
+  padding: 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-sm);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+}
+
+/* 连接页：表单按填写顺序纵向排列，历史与目录使用独立列表。 */
+.remote-connect-icon,
+.remote-folder-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.remote-command-title {
+  margin-bottom: 22px;
+}
+.remote-command-title strong {
+  font-size: 16px;
+}
+.remote-command-title > div {
+  gap: 5px;
+}
+.remote-auth-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.remote-connect-footer {
+  padding-top: 12px;
+}
+.remote-connect-footer .remote-connect-button {
+  min-height: 42px;
+  gap: 8px;
+}
+.remote-section-head {
+  min-height: 52px;
+  padding: 12px 16px;
+}
+.remote-section-count {
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-align: center;
+}
+.remote-recent-main {
+  padding: 17px 16px;
+}
+.remote-recent-meta {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.remote-saved-directory {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px;
+  text-align: left;
+  color: var(--text-primary);
+  background: transparent;
+}
+.remote-saved-directory + .remote-saved-directory {
+  border-top: 1px solid var(--border-subtle);
+}
+.remote-saved-directory:hover {
+  background: var(--bg-hover);
+}
+.remote-saved-directory:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+.remote-saved-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: 12px / 1.6 var(--font-mono);
+}
+.remote-saved-directory > svg {
+  color: var(--text-tertiary);
 }

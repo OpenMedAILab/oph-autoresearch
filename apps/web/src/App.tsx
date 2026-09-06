@@ -39,6 +39,7 @@ import { WindowControls } from './components/WindowControls.tsx'
 import {
   centerView,
   client,
+  discoverCliModels,
   exportActiveConversation,
   loadConversations,
   loadWorkspace,
@@ -48,6 +49,7 @@ import {
   panelMaximized,
   panelWidth,
   setCenterView,
+  setCreatingProject,
   setState,
   settingsPage,
   setWorkspace,
@@ -58,6 +60,7 @@ import {
   toggleSidebar,
   transcript,
   view,
+  workspace,
 } from './lib/store/index.ts'
 
 /**
@@ -152,6 +155,7 @@ export function App() {
   createEffect((wasReady: boolean) => {
     const ready = state.connection === 'ready'
     if (ready && !wasReady) {
+      void discoverCliModels()
       void restoreWorkspaceSession().catch((error) => {
         setState('notice', {
           reason: 'restore_failed',
@@ -185,7 +189,7 @@ export function App() {
       class="app"
       classList={{
         'drawer-open': drawer(),
-        'with-panel': sidePanel() !== null,
+        'with-panel': !!workspace() && sidePanel() !== null,
         'panel-max': panelMaximized(),
         'sidebar-collapsed': sidebarCollapsed(),
       }}
@@ -252,13 +256,14 @@ export function App() {
             <IconPanel size={15} />
           </button>
         </Show>
-        <h1 class="title truncate">{activeTitle()}</h1>
+        <h1 class="title truncate">{workspace() ? activeTitle() : '研究项目'}</h1>
         <span class="spacer" />
         <div class="topbar-tools">
           <button
             class="icon-btn"
             classList={{ active: centerView() === 'ssh' }}
             type="button"
+            disabled={!workspace()}
             aria-label="Remote SSH"
             aria-pressed={centerView() === 'ssh'}
             data-tip="Remote SSH"
@@ -288,6 +293,7 @@ export function App() {
             aria-label={sidePanel() ? '收起侧面板' : '展开侧面板'}
             aria-expanded={sidePanel() !== null}
             data-tip={sidePanel() ? '收起侧面板' : '展开侧面板'}
+            disabled={!workspace()}
             onClick={togglePanel}
           >
             <IconPanel size={15} />
@@ -313,6 +319,15 @@ export function App() {
             滚动容器的 scrollTop 清成 0，还原时用户落在几百条之前的开头，而
             重新挂载会走一遍「贴底」的初始态，还原就停在最新那条上。 */}
         <Switch>
+          <Match when={!workspace()}>
+            <div class="file-empty-state">
+              <strong>新建研究项目，开始研究</strong>
+              <span>请先创建研究项目，再开始对话。研究对话和产物将保存在项目中。</span>
+              <button class="btn-primary" type="button" onClick={() => setCreatingProject(true)}>
+                新建研究项目
+              </button>
+            </div>
+          </Match>
           <Match when={centerView() === 'chat'}>
             <Show when={!panelMaximized()}>
               <Transcript />
@@ -358,7 +373,7 @@ export function App() {
        * `with-panel` 给这一列留好了位置，占位块只要把那块位置占住，
        * 否则会看到栏宽先塌一下再弹回来。
        */}
-      <Show when={sidePanel()}>
+      <Show when={workspace() && sidePanel()}>
         <Suspense fallback={<aside class="side-panel" />}>
           <SidePanel />
         </Suspense>

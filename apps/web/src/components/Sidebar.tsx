@@ -2,6 +2,7 @@ import { createEffect, createResource, createSignal, For, Show } from 'solid-js'
 import { loaded } from '../lib/resource.ts'
 import {
   activateWorkspace,
+  creatingProject,
   isDesktopShell,
   type KnownWorkspace,
   loadConversations,
@@ -10,6 +11,7 @@ import {
   openSettings,
   selectConversation,
   setCenterView,
+  setCreatingProject,
   state,
   toggleSidebar,
   workspace,
@@ -54,8 +56,7 @@ export function Sidebar(props: { onClose?: () => void }) {
   /**
    * **换项目和新建项目都不需要桌面外壳**——服务端一次服务多个项目，
    * 切过去只是换一个 `?ws=`；新建只填名字的话由服务端建目录。
-   * 只有「挑一个已存在的本机目录」要外壳（系统对话框浏览器拿不到），
-   * 所以弹窗里只有那一颗按钮按 `canPickFolder` 收起来（B5）。
+   * 桌面端使用系统文件夹选择器，Web 端通过本地服务浏览目录。
    */
   const desktop = isDesktopShell()
   const [known, { refetch: refetchWorkspaces }] = createResource(loadKnownWorkspaces)
@@ -104,7 +105,8 @@ export function Sidebar(props: { onClose?: () => void }) {
    * 直接开选择器的话「项目」被迫等于「一个已经存在的目录」——名字只能取目录名，
    * 也没法先建一个空目录再开始。弹窗把两件事分开：名字是项目的，路径是它落在哪。
    */
-  const [creating, setCreating] = createSignal(false)
+  const creating = creatingProject
+  const setCreating = setCreatingProject
 
   return (
     <nav class="sidebar">

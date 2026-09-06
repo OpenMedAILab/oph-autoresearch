@@ -20,7 +20,7 @@ import {
 } from './settings.ts'
 import { isDesktopShell, tauriInvoke } from './shell.ts'
 import { isRunning, markBusy, setState, state } from './state.ts'
-import { closeAllPanelTabs, setOpenFile, setWorkspace } from './ui.ts'
+import { closeAllPanelTabs, setOpenFile, setWorkspace, workspace } from './ui.ts'
 
 /** 本地文件操作完成后，让文件树与已打开的预览统一失效。 */
 export function invalidateWorkspaceFiles(): void {
@@ -39,6 +39,10 @@ export function invalidateWorkspaceFiles(): void {
  * 而空会话不占额度、不发请求。
  */
 export async function loadConversations(): Promise<void> {
+  if (!workspace()) {
+    setState({ conversations: [], activeConversation: null })
+    return
+  }
   const res = await client.api<{ conversations: Conversation[] }>('/api/conversations')
   setState('conversations', res.conversations)
   if (state.activeConversation) return
@@ -251,9 +255,12 @@ export interface CliAgentRow {
   vendor: string
   path: string
   connected: boolean
+  profileId?: string
 }
-export function loadTeamClis(): Promise<{ agents: CliAgentRow[] }> {
-  return client.api<{ agents: CliAgentRow[] }>('/api/team/cli')
+export async function loadTeamClis(): Promise<{ agents: CliAgentRow[] }> {
+  const result = await client.api<{ agents: CliAgentRow[] }>('/api/team/cli')
+  // 团队派活目前仍是本机执行，远程条目只能走有位置标识的主对话模型入口。
+  return { agents: result.agents.filter((agent) => !agent.profileId) }
 }
 
 /**
@@ -373,6 +380,7 @@ async function dropConversation(id: string): Promise<void> {
 }
 
 export async function newConversation(): Promise<void> {
+  if (!workspace()) return
   const { conversation } = await client.api<{ conversation: Conversation }>('/api/conversations', {
     method: 'POST',
     body: JSON.stringify({}),

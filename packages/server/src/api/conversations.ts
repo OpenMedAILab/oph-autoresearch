@@ -1,3 +1,4 @@
+import { cliCatalogSnapshot } from '../cli-catalog.ts'
 /** 模型目录、会话、消息、run。前端进来第一屏要的全在这。 */
 
 import { rm } from 'node:fs/promises'
@@ -76,6 +77,8 @@ export interface ModelRow {
 
 /** 一个接口。名字是用户自己起的，界面上就按它分组。 */
 export interface ProviderRow {
+  source?: 'api' | 'cli'
+  label?: string
   name: string
   models: ModelRow[]
 }
@@ -251,6 +254,33 @@ export const handleConversationsApi: ApiHandler = async (url, req, d) => {
         }
       }),
     }))
+    for (const cli of cliCatalogSnapshot().agents) {
+      const probe = cli.probe
+      if (
+        !probe ||
+        cli.profileId ||
+        !cli.canRun ||
+        probe.status === 'unauthenticated' ||
+        probe.status === 'error'
+      )
+        continue
+      const name = cli.provider
+      providers.push({
+        name,
+        label: `${cli.id} CLI · ${cli.location}`,
+        source: 'cli',
+        models: probe.models.map((model) => ({
+          id: model.id,
+          label: model.label,
+          effortLevels: [],
+          effort: null,
+          currency: 'USD',
+          vision: false,
+          video: false,
+          known: false,
+        })),
+      })
+    }
     const res: ModelsResponse = {
       providers,
       active: d.config.active,

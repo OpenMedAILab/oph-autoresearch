@@ -14,6 +14,7 @@ import {
 } from '../../lib/store/index.ts'
 import { ConfirmDialog } from '../ConfirmDialog.tsx'
 import { IconTrash } from '../Icons.tsx'
+import { CliModels } from './CliModels.tsx'
 import { ConfigStatus } from './ConfigStatus.tsx'
 import {
   config,
@@ -271,6 +272,7 @@ export function ModelSettings() {
     >
       {(c) => (
         <>
+          <CliModels />
           <section class="settings-block">
             <div class="tab-strip">
               <For each={names()}>

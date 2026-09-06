@@ -79,6 +79,43 @@ const call = (path: string, init?: RequestInit, d: ApiDeps = deps()) =>
   handleApi(new URL(`http://127.0.0.1${path}`), new Request(`http://127.0.0.1${path}`, init), d)
 
 describe('派发', () => {
+  test('没有项目时保持空状态，允许浏览文件夹，拒绝创建对话', async () => {
+    const d = deps()
+    d.store.close()
+    d.store = new Store({ path: ':memory:' })
+    const root = await mkdtemp(join(tmpdir(), 'oph-folder-picker-'))
+    try {
+      expect(await (await call('/api/workspace', undefined, d))?.json()).toBe(null)
+      expect(await (await call('/api/conversations', undefined, d))?.json()).toEqual({
+        conversations: [],
+      })
+      expect((await call('/api/conversations', { method: 'POST', body: '{}' }, d))?.status).toBe(
+        404,
+      )
+      const folders = await call(
+        `/api/workspace-folders?path=${encodeURIComponent(root)}`,
+        undefined,
+        d,
+      )
+      expect(folders?.status).toBe(200)
+      expect(await folders?.json()).toMatchObject({ path: root, folders: [] })
+      expect(
+        (
+          await call(
+            `/api/workspace-folders?path=${encodeURIComponent(join(root, 'missing'))}`,
+            undefined,
+            d,
+          )
+        )?.status,
+      ).toBe(422)
+      expect(listWorkspaces(d.store)).toHaveLength(0)
+      expect((await call('/api/workspace?ws=missing', undefined, d))?.status).toBe(404)
+    } finally {
+      d.store.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test('没人认领的路径回 null，不是 404 —— 404 由调用方决定', async () => {
     expect(await call('/api/nope')).toBe(null)
     expect(await call('/api/plugins/x/y/z')).toBe(null)
@@ -449,7 +486,8 @@ describe('模型目录', () => {
   const body = async (d: ApiDeps) =>
     (await (await call('/api/models', undefined, d))!.json()) as ModelsResponse
   /** 摊平成一张表只是为了断言好写；界面拿到的是分好组的。 */
-  const models = async (d: ApiDeps) => (await body(d)).providers.flatMap((p) => p.models)
+  const models = async (d: ApiDeps) =>
+    (await body(d)).providers.filter((p) => p.source !== 'cli').flatMap((p) => p.models)
 
   /**
    * **只列配置里有的**。
@@ -473,9 +511,16 @@ describe('模型目录', () => {
       },
     }
     const b = await body(d)
-    expect(b.providers.map((p) => p.name)).toEqual(['官方', '中转站'])
+    expect(b.providers.filter((p) => p.source !== 'cli').map((p) => p.name)).toEqual([
+      '官方',
+      '中转站',
+    ])
     // 同一个模型 id 挂在两个接口下是常态，两条都要在，各归各的组。
-    expect(b.providers.every((p) => p.models[0]?.id === 'deepseek-v4-flash')).toBe(true)
+    expect(
+      b.providers
+        .filter((p) => p.source !== 'cli')
+        .every((p) => p.models[0]?.id === 'deepseek-v4-flash'),
+    ).toBe(true)
     expect(b.active).toEqual({ provider: '官方', model: 'deepseek-v4-flash' })
   })
 

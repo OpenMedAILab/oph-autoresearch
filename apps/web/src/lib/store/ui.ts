@@ -558,3 +558,5 @@ export function setFollowUpMode(next: FollowUpMode): void {
     // 同上：这一次的选择已经生效，存不下只影响下次启动。
   }
 }
+
+export const [creatingProject, setCreatingProject] = createSignal(false)

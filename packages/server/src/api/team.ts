@@ -1,3 +1,4 @@
+import { cliCatalogSnapshot, refreshCliCatalog } from '../cli-catalog.ts'
 /**
  * Agent Team 配置读写。
  *
@@ -57,19 +58,17 @@ export const handleTeamApi: ApiHandler = async (url, req, d) => {
     })
   }
 
-  // 本机装了哪几家外部 agent CLI。**只读**：这份清单来自探测，不落任何文件，
-  // 所以没有对应的写接口——设置页要做的只是把它显示出来。
-  if (p === '/api/team/cli' && req.method === 'GET') {
-    const { detectClis } = await import('@oph-autoresearch/team')
-    const found = await detectClis()
-    return json({
-      agents: found.map((c) => ({
-        id: c.id,
-        vendor: c.vendor,
-        path: c.path,
-        connected: c.connected,
-      })),
-    })
+  // 安装检测和实时探针分离；只回传状态及模型，不回传凭证。
+  if (
+    (p === '/api/team/cli' && req.method === 'GET') ||
+    (p === '/api/team/cli/probe' && req.method === 'POST')
+  ) {
+    // POST 只触发后台任务，前端用 GET 读取进度；多个窗口共用同一次探测。
+    if (req.method === 'POST') {
+      const body = (await req.json().catch(() => ({}))) as { automatic?: boolean } | null
+      void refreshCliCatalog(body?.automatic !== true).catch(() => undefined)
+    }
+    return json(cliCatalogSnapshot())
   }
 
   return null

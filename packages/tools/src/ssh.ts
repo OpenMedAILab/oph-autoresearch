@@ -28,6 +28,19 @@ export interface SshProfile {
   hostKeyPolicy: 'strict' | 'accept-new'
 }
 
+/** 自动探测得到的执行端能力；不代表实验审批或结果证据。 */
+export interface SshCliCapability {
+  id: string
+  path: string
+  status: string
+  models: { id: string; label: string }[]
+  checkedAt: number
+}
+const cliCapabilities = new Map<string, SshCliCapability[]>()
+export function setSshCliCapabilities(profile: SshProfile, capabilities: SshCliCapability[]): void {
+  cliCapabilities.set(sshCredentialKey(profile), capabilities)
+}
+
 export interface SshEntry {
   name: string
   path: string
@@ -545,7 +558,7 @@ function askpassPath(): string {
   return path
 }
 
-async function sshExec(
+export async function prepareSshCommand(
   profile: SshProfile,
   command: string,
   options: {
@@ -554,9 +567,12 @@ async function sshExec(
     onChunk?: (s: string) => void
     auth?: SshConnectionAuth
   } = {},
-): Promise<SshExecResult> {
-  const auth = options.auth ?? sessionCredentials.get(credentialKey(profile))
-  const authMode = auth?.mode ?? 'system-key'
+) {
+  const auth =
+    options.auth ??
+    sessionCredentials.get(credentialKey(profile)) ??
+    (await loadSshCredential(profile))
+  const authMode: SshExecResult['authMode'] = auth?.mode ?? 'system-key'
   let tempDir = ''
   let privateKeyPath = ''
   if (auth?.mode === 'private-key') {
@@ -618,12 +634,35 @@ async function sshExec(
       OPH_SSH_ASKPASS_SECRET: askpassSecret,
     })
   }
+  return {
+    argv: ['ssh', ...args],
+    env,
+    authMode,
+    cleanup: async () => {
+      if (privateKeyPath) await rm(privateKeyPath, { force: true }).catch(() => undefined)
+      if (tempDir) await rmdir(tempDir).catch(() => undefined)
+    },
+  }
+}
+
+async function sshExec(
+  profile: SshProfile,
+  command: string,
+  options: {
+    signal?: AbortSignal
+    timeoutMs?: number
+    onChunk?: (s: string) => void
+    auth?: SshConnectionAuth
+  } = {},
+): Promise<SshExecResult> {
+  const prepared = await prepareSshCommand(profile, command, options)
+  const { authMode } = prepared
   try {
-    const proc = Bun.spawn(['ssh', ...args], {
+    const proc = Bun.spawn(prepared.argv, {
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
-      env,
+      env: prepared.env,
     })
     const got = await collectProcess(proc, {
       timeoutMs: options.timeoutMs ?? 15_000,
@@ -645,8 +684,7 @@ async function sshExec(
       authMode,
     }
   } finally {
-    if (privateKeyPath) await rm(privateKeyPath, { force: true }).catch(() => undefined)
-    if (tempDir) await rmdir(tempDir).catch(() => undefined)
+    await prepared.cleanup()
   }
 }
 
@@ -848,7 +886,7 @@ export async function readSshWholeText(
   const command =
     remotePathGuard(profile, path) +
     `size=$(wc -c < "$path") || exit $?; ` +
-    `printf '__OPH_SIZE__:%s\\\\n' "$size"; head -c ${MAX_TEXT_BYTES} "$path"`
+    `printf '__OPH_SIZE__:%s\\n' "$size"; head -c ${MAX_TEXT_BYTES} "$path"`
   const result = await sshExec(profile, command, { timeoutMs: 60_000 })
   if (result.exitCode !== 0) throw new Error(sshError(result))
   const newline = result.stdout.indexOf('\n')
@@ -874,14 +912,14 @@ async function findProfile(id: string): Promise<SshProfile> {
 export const sshListTool: ToolSpec = {
   name: 'ssh_list_files',
   description:
-    '列出已配置 SSH 服务器允许根目录内的文件。认证使用系统 ssh-agent/SSH config，不读取私钥。',
+    '不传 profile 时列出已配置的远程工作区、读写模式与已探测的远程 CLI 能力（非实验执行授权）；传 profile 时列出其允许根目录内的文件。',
   parameters: {
     type: 'object',
     properties: {
       profile: { type: 'string', description: 'SSH 连接标识' },
       path: { type: 'string', description: '允许根目录内的远程路径，默认连接根目录' },
     },
-    required: ['profile'],
+    required: [],
     additionalProperties: false,
   },
   actionKind: 'read',
@@ -894,6 +932,20 @@ export const sshListTool: ToolSpec = {
   parallelSafe: true,
   resourceKeys: (a) => [`ssh:${String(a.profile)}:${String(a.path ?? '.')}`],
   async fn(args) {
+    if (args.profile === undefined) {
+      const profiles = (await loadSshProfiles()).map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        root: profile.root,
+        readOnly: profile.readOnly,
+        cliCapabilities: cliCapabilities.get(sshCredentialKey(profile)) ?? [],
+      }))
+      return {
+        status: 'success',
+        message: `已配置 ${profiles.length} 个远程工作区`,
+        data: { profiles },
+      }
+    }
     const profile = await findProfile(String(args.profile))
     const entries = await listSshFiles(
       profile,

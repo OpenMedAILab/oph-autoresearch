@@ -7,6 +7,7 @@ import {
   isRunning,
   modelCatalog,
   modelCatalogError,
+  reloadModelCatalog,
   setEffort,
   setModel,
   state,
@@ -54,7 +55,13 @@ export function ModelPicker() {
     setOpen(false)
     setSub(null)
   }
-  const toggle = () => (open() ? close() : setOpen(true))
+  const toggle = () => {
+    if (open()) close()
+    else {
+      setOpen(true)
+      void reloadModelCatalog()
+    }
+  }
   const flip = (s: Sub) => setSub((cur) => (cur === s ? null : s))
 
   /**
@@ -109,7 +116,11 @@ export function ModelPicker() {
         data-tip="模型与推理等级"
         onClick={toggle}
       >
-        <span class="truncate">{activeModel()?.model ?? '选择模型'}</span>
+        <span class="truncate">
+          {activeModel()?.provider.startsWith('cli:')
+            ? `${modelCatalog()?.providers.find((p) => p.name === activeModel()!.provider)?.label ?? activeModel()!.provider.slice(4)} · ${activeModel()!.model === 'default' ? 'CLI 默认模型' : activeModel()!.model}`
+            : (activeModel()?.model ?? '选择模型')}
+        </span>
         <Show when={selected()}>{(lv) => <span class="model-chip-effort">{lv()}</span>}</Show>
         <IconChevron size={11} dir={open() ? 'up' : 'down'} />
       </button>
@@ -124,7 +135,11 @@ export function ModelPicker() {
             onClick={() => flip('model')}
           >
             <span class="model-entry-label">模型</span>
-            <span class="model-entry-value truncate">{activeModel()?.model ?? '选择模型'}</span>
+            <span class="model-entry-value truncate">
+              {activeModel()?.provider.startsWith('cli:')
+                ? `${modelCatalog()?.providers.find((p) => p.name === activeModel()!.provider)?.label ?? activeModel()!.provider.slice(4)} · ${activeModel()!.model === 'default' ? 'CLI 默认模型' : activeModel()!.model}`
+                : (activeModel()?.model ?? '选择模型')}
+            </span>
             <IconChevron size={11} dir="right" />
           </button>
 
@@ -154,7 +169,10 @@ export function ModelPicker() {
                 {(p) => (
                   <>
                     {/* 接口名就是分组名。它是用户自己起的，比协议名有用得多。 */}
-                    <div class="model-group-name">{p.name}</div>
+                    <div class="model-group-name">{p.label ?? p.name}</div>
+                    <Show when={p.source === 'cli'}>
+                      <div class="model-cli-note">使用 CLI 登录与权限 · 仅文本输入</div>
+                    </Show>
                     <For each={p.models}>
                       {(m) => (
                         <button
@@ -176,7 +194,7 @@ export function ModelPicker() {
                           </Show>
                           {/* 内置目录里没有的标出来：它没有计价与能力信息，
                               用量和费用只能按 provider 回报的算。 */}
-                          <Show when={!m.known}>
+                          <Show when={!m.known && p.source !== 'cli'}>
                             <span class="model-tag">自定义</span>
                           </Show>
                         </button>
@@ -187,7 +205,7 @@ export function ModelPicker() {
               </For>
               {/* 一个模型都没配 = 这个选择器无事可做。说清出口，别留一个空框。 */}
               <Show when={modelCatalog()?.providers.every((p) => p.models.length === 0)}>
-                <div class="model-menu-error">先在设置 → 模型里给接口挂一个模型</div>
+                <div class="model-menu-error">在设置 → 模型中配置 API，或检测本机 CLI</div>
               </Show>
             </div>
           </Show>

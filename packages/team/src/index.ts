@@ -6,7 +6,15 @@
 // 外部 CLI 的执行器：编排器在包内用，server 的派活端口在包外用
 export { runCli } from './cli-backend.ts'
 // 本机装了哪几家外部 CLI：server 的设置页端点与派活端口按它解析目标
-export { type DetectedCli, detectClis, findCli } from './cli-detect.ts'
+export { cliTemplate, type DetectedCli, detectClis, findCli } from './cli-detect.ts'
+export {
+  type CliModel,
+  type CliProbe,
+  type CliProbeTransport,
+  cachedCliProbe,
+  cliProbeChannel,
+  probeCli,
+} from './cli-probe.ts'
 // 编排器：server 的派活端口（`workflow` 工具那条）是唯一入口
 export { type OrchestratorState, TeamOrchestrator } from './orchestrator.ts'
 // 配置形状：runtime 解析、server 消费

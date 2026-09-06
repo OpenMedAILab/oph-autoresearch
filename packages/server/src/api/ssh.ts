@@ -1,3 +1,4 @@
+import { scheduleCliRefresh } from '../cli-catalog.ts'
 /** SSH 连接配置、连通性检查与远程文件浏览。 */
 
 import { extname } from 'node:path'
@@ -222,6 +223,7 @@ export const handleSshApi: ApiHandler = async (url, req) => {
       })
       // 这次显式提交的凭证，连接成功才落盘；用保存的连接成功则原样保留。
       if (auth && !usedStored) await saveSshCredential(target, auth)
+      scheduleCliRefresh()
       const sessionId = crypto.randomUUID()
       liveSessions.set(sessionId, { ...connected, authMode, touchedAt: Date.now() })
       return json({
@@ -291,7 +293,11 @@ export const handleSshApi: ApiHandler = async (url, req) => {
       sessionId?: string
       path?: string
       name?: string
+      readOnly?: boolean
     } | null
+    if (body?.readOnly !== undefined && typeof body.readOnly !== 'boolean') {
+      return json({ error: '工作区访问模式无效' }, 400)
+    }
     const session = liveSession(body?.sessionId ?? '')
     if (!session) return json({ error: 'SSH 会话已断开，请重新连接' }, 410)
     if (!body?.path?.trim()) return json({ error: '请选择远程文件夹' }, 400)
@@ -311,16 +317,24 @@ export const handleSshApi: ApiHandler = async (url, req) => {
           candidate.port === session.profile.port &&
           candidate.root === root,
       )
-      if (existing) return json({ ok: true, profile: existing })
+      if (existing) {
+        const updated = { ...existing, readOnly: body.readOnly ?? existing.readOnly }
+        await saveSshProfiles(
+          profiles.map((profile) => (profile.id === existing.id ? updated : profile)),
+        )
+        scheduleCliRefresh()
+        return json({ ok: true, profile: updated })
+      }
       const id = profileId(session.profile, new Set(profiles.map((profile) => profile.id)))
       const saved: SshProfile = {
         ...session.profile,
         id,
         name: body.name?.trim() || `${session.profile.host}:${root}`,
         root,
-        readOnly: true,
+        readOnly: body.readOnly ?? true,
       }
       await saveSshProfiles([...profiles, saved])
+      scheduleCliRefresh()
       return json({ ok: true, profile: saved })
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : String(error) }, 502)
@@ -371,6 +385,7 @@ export const handleSshApi: ApiHandler = async (url, req) => {
     const body = (await req.json().catch(() => null)) as { profiles?: unknown } | null
     try {
       const profiles = await saveSshProfiles(body?.profiles)
+      scheduleCliRefresh()
       return json({ ok: true, path: sshConfigPath(), profiles })
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : String(error) }, 422)

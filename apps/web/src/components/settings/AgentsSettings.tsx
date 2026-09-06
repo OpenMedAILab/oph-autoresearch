@@ -396,10 +396,8 @@ export default function AgentsSettings() {
                             desc={a.path}
                             badge={<span class="entry-tag">{a.vendor}</span>}
                           >
-                            {/* 「接入」判的是见没见到凭证，不是真的跑通了——
-                                真跑一次要花钱、要几十秒，而这是打开页面就该出的结果。 */}
                             <div class="entry-extra" classList={{ bad: !a.connected }}>
-                              {a.connected ? '已接入' : '未见凭证'}
+                              {a.connected ? '已确认登录' : '登录未确认 · 请在模型设置中探测'}
                             </div>
                           </EntryCard>
                         )}

@@ -329,3 +329,9 @@ async function exists(p: string): Promise<boolean> {
     () => false,
   )
 }
+
+/** 已知 CLI 的执行模板；远程安装检测也使用同一份参数定义。 */
+export function cliTemplate(id: string, path: string): DetectedCli | undefined {
+  const cli = KNOWN.find((item) => item.id === id)
+  return cli ? { ...cli, path, command: path, connected: false } : undefined
+}

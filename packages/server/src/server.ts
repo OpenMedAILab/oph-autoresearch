@@ -1,3 +1,4 @@
+import { refreshCliCatalog } from './cli-catalog.ts'
 import { captureResearchDeployment } from './research/deployment-governance.ts'
 import { createResearchDevices, quoteResearchDevice } from './research/execution-devices.ts'
 import { createHumanAuthVerifier, type HumanAuthVerifierConfig } from './research/human-auth.ts'
@@ -17,8 +18,6 @@ import { createSshDaemonClient, type SshDaemonConfig } from './research/ssh-daem
  * 只想本机用就传 --host 127.0.0.1。
  */
 
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
 import type {
   AgentEvent,
   ClientCommand,
@@ -29,12 +28,7 @@ import type {
 } from '@oph-autoresearch/core'
 import { RESTRICTED_RESEARCH_CAPABILITY_DENIED } from '@oph-autoresearch/core'
 import type { OphConfig } from '@oph-autoresearch/runtime'
-import {
-  acquireExtensions,
-  collectSecrets,
-  configDir,
-  releaseExtensions,
-} from '@oph-autoresearch/runtime'
+import { acquireExtensions, collectSecrets, releaseExtensions } from '@oph-autoresearch/runtime'
 import type { ProcessExitObservation, Store } from '@oph-autoresearch/store'
 import {
   ContentStore,
@@ -88,7 +82,7 @@ export interface ServeOptions {
    * 启动时用哪个目录当项目。
    *
    * **不给是合法的，而且和「给了进程 cwd」不是一回事。** 不给 = 由服务端决定：
-   * 账本里有项目就用最近打开的那个，一个都没有才建默认工作区。
+   * 账本里有项目就用最近打开的那个，一个都没有时等待用户新建研究项目。
    *
    * 把进程 cwd 当默认值是错的：桌面外壳的 cwd 是安装目录或 `src-tauri`，
    * 登记进去就成了一个谁也没要过的项目。
@@ -105,29 +99,12 @@ export interface ServeOptions {
 }
 
 /** 首次运行时建的那个工作区叫什么。已落盘的目录名是历史事实，别改（D2）。 */
-const DEFAULT_WORKSPACE_NAME = '默认工作区'
 
-/**
- * 决定启动时挂在哪个项目上。**这是「首次运行挂哪儿」的唯一权威。**
- *
- * 三条路，优先级从高到低：
- *
- * 1. 显式给了根 —— 照用（`oph serve --cwd <目录>` 是 CLI 的正常用法）。
- * 2. 账本里已有项目 —— 用最近打开的那个（`mostRecentWorkspace`）。
- *    **首次之后每次启动都走这条**，所以用户在界面里切过的项目不会被启动目录顶掉。
- *    注意它和侧栏顺序是两回事：侧栏按「置顶 > 添加先后」稳定排列，不跟着切换重排。
- * 3. 一个都没有 —— 在 `~/.oph-autoresearch/workspaces/默认工作区/` 建一个。
- *
- * 第 3 条是关键：**不能无条件登记启动目录**，那样首次运行就「挂在启动目录上」——
- * 桌面端的启动目录是 oph-autoresearch 的源码树，用户拿到的默认项目会是这个仓库本身。
- *
- * 目录用 `mkdirSync`：账本这一行必须和目录同生共死，异步建目录会留下一段
- * 「行已经在了、目录还没有」的窗口，而那段时间里任何工具调用都会因为根不存在而炸。
- */
+/** 恢复显式指定或最近打开的项目；首次启动等待用户创建项目。 */
 function bootstrapWorkspace(
   store: Store,
   explicitRoot?: string,
-): { workspace: Workspace; rootPath: string } {
+): { workspace: Workspace | null; rootPath: string } {
   if (explicitRoot) {
     const name = explicitRoot.split(/[\\/]/).filter(Boolean).pop() ?? 'workspace'
     const known = getWorkspaceByPath(store, explicitRoot)
@@ -140,10 +117,7 @@ function bootstrapWorkspace(
   const recent = mostRecentWorkspace(store)
   if (recent) return { workspace: recent, rootPath: recent.rootPath }
 
-  const rootPath = join(configDir(), 'workspaces', DEFAULT_WORKSPACE_NAME)
-  mkdirSync(rootPath, { recursive: true })
-  process.stderr.write(`[oph] 首次运行，已创建默认工作区 ${rootPath}\n`)
-  return { workspace: upsertWorkspace(store, rootPath, DEFAULT_WORKSPACE_NAME), rootPath }
+  return { workspace: null, rootPath: '' }
 }
 
 export function serve(opts: ServeOptions) {
@@ -199,19 +173,9 @@ export function serve(opts: ServeOptions) {
   })
   const token = pairing.token
 
-  /*
-   * 启动时的项目。三条路，优先级从高到低：
-   *
-   * 1. **显式给了 `workspaceRoot`** —— 照用（`oph serve --cwd <目录>`）。
-   * 2. **账本里已有项目** —— 用最近打开的那个（`mostRecentWorkspace`）。
-   * 3. **一个都没有（首次运行）** —— 建一个默认工作区。
-   *
-   * 第 3 条不能省：无条件登记 `opts.workspaceRoot` 的话，首次运行就「挂在启动
-   * 目录上」——桌面端的启动目录是这个仓库自己，用户拿到的默认项目会是 oph-autoresearch
-   * 的源码树。
-   */
   const { workspace, rootPath: workspaceRoot } = bootstrapWorkspace(opts.store, opts.workspaceRoot)
-  const researchTemplate = restricted ? { created: [] } : ensureResearchWorkspace(workspaceRoot)
+  const researchTemplate =
+    restricted || !workspace ? { created: [] } : ensureResearchWorkspace(workspaceRoot)
   if (researchTemplate.created.length > 0) {
     process.stderr.write(`[oph] 已补齐研究工作区模板：${researchTemplate.created.join('、')}\n`)
   }
@@ -235,7 +199,7 @@ export function serve(opts: ServeOptions) {
    * 异步、不阻塞服务启动——一个慢插件不该让整个服务起不来。
    */
   let pluginTeardown: (() => void) | null = null
-  if (!restricted)
+  if (!restricted && workspace)
     void acquireExtensions(workspaceRoot, (line) => process.stderr.write(`${line}\n`))
       .then((ext) => {
         for (const f of ext.mcp.failures) {
@@ -307,7 +271,7 @@ export function serve(opts: ServeOptions) {
   schedulerTimer.unref?.()
 
   async function tickSchedules(): Promise<void> {
-    if (restricted) return
+    if (restricted || !workspace) return
     const all = await loadSchedules().catch(() => [] as Schedule[])
     // 只管本工作区的：一台机器上可能同时开着两个工作区的 sidecar，
     // 不加这条过滤会让同一条任务被触发两次。
@@ -580,6 +544,8 @@ export function serve(opts: ServeOptions) {
     hostname: opts.host,
   })
   boundPort = server.port ?? opts.port
+  if (!restricted && !process.env.OPH_AUTORESEARCH_TEST_TEMP)
+    void refreshCliCatalog().catch(() => undefined)
 
   // 分支名跟着 `.git/HEAD` 走，理由与边界都在 `git-watch.ts`。
   if (!restricted) gitWatch.retarget()
