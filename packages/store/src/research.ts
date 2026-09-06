@@ -239,10 +239,14 @@ function validateProof(proof: {
   )
 }
 
-function taskStatus(task: ResearchTaskRevision, attempts: readonly ResearchAttempt[]) {
+function taskStatus(
+  task: ResearchTaskRevision,
+  attempts: readonly ResearchAttempt[],
+  cliPreparationAttemptIds: ReadonlySet<string>,
+) {
   // A preparation produces an unadmitted candidate, never a verified scientific task result.
   const related = attempts.filter(
-    (attempt) => attempt.taskRevisionId === task.id && !attempt.cliPreparationJobSpec,
+    (attempt) => attempt.taskRevisionId === task.id && !cliPreparationAttemptIds.has(attempt.id),
   )
   if (related.some((attempt) => attempt.status === 'completed')) return 'verified' as const
   if (related.some((attempt) => attempt.status === 'running')) return 'pending' as const
@@ -262,6 +266,11 @@ function taskContextHash(campaign: ResearchCampaign): string {
 }
 
 function withDerivedTaskStatuses(campaign: ResearchCampaign): ResearchCampaign {
+  const cliPreparationAttemptIds = new Set(
+    (campaign.cliPreparations ?? [])
+      .map((preparation) => preparation.attemptId)
+      .filter((attemptId): attemptId is string => attemptId !== null),
+  )
   const stale = new Set<string>()
   for (const task of campaign.taskRevisions) {
     for (const contentHash of task.labelSetContentHashes ?? []) {
@@ -325,7 +334,9 @@ function withDerivedTaskStatuses(campaign: ResearchCampaign): ResearchCampaign {
       : {}),
     taskRevisions: campaign.taskRevisions.map((task) => ({
       ...task,
-      status: stale.has(task.id) ? 'stale' : taskStatus(task, campaign.attempts),
+      status: stale.has(task.id)
+        ? 'stale'
+        : taskStatus(task, campaign.attempts, cliPreparationAttemptIds),
     })),
   }
 }
@@ -638,7 +649,7 @@ function nextCampaign(
         (campaign.modelReviews ?? []).reduce((sum, r) => sum + r.reservedCost, 0) +
           reservedCliPreparationCost(campaign) >
           command.budget.limit ||
-        ((campaign.modelReviews ?? []).length &&
+        (((campaign.modelReviews ?? []).length || reservedCliPreparationCost(campaign) > 0) &&
           command.budget.currency !== campaign.budget.currency)
       )
         return invalid(
@@ -753,7 +764,10 @@ function nextCampaign(
         approval.scope.preparationLimits?.memoryMb !== 256 ||
         approval.scope.preparationLimits?.adapterConfigHash !== preparation.adapterConfigHash ||
         approval.scope.preparationLimits?.acknowledgeUnknownCost !== true ||
-        reservedCliPreparationCost(campaign) + preparation.maxCost > campaign.budget.limit ||
+        (campaign.modelReviews ?? []).reduce((sum, review) => sum + review.reservedCost, 0) +
+          reservedCliPreparationCost(campaign) +
+          preparation.maxCost >
+          campaign.budget.limit ||
         campaign.attempts.some((attempt) => attempt.dispatchKey === preparation.dispatchKey)
       )
         return invalid('cli_preparation_approval_required', '准备任务需要精确且未消费的人类审批')
@@ -817,9 +831,12 @@ function nextCampaign(
         spec.backendPolicyHash !== preparation.backendPolicyHash ||
         spec.resource?.cpu !== 1 ||
         spec.resource?.memoryMb !== 256 ||
+        textError(spec.lease?.ownerId, 'lease owner') !== null ||
         !Number.isSafeInteger(spec.lease?.fence) ||
         spec.lease.fence < 1 ||
+        !Number.isSafeInteger(spec.lease.expiresAt) ||
         spec.lease.expiresAt <= now ||
+        spec.lease.expiresAt > now + 10 * 60 * 1000 ||
         textError(spec.lease.token, 'lease token') ||
         spec.execution?.adapter !== 'cli-preparation-v1' ||
         spec.execution.preparationId !== preparation.id ||
@@ -905,7 +922,7 @@ function nextCampaign(
         uri: command.uri.trim(),
         kind: 'cli_preparation_candidate',
         mediaType: 'application/json',
-        dataClass: 'synthetic',
+        dataClass: task.dataClass,
         schemaId: 'research-cli-preparation-candidate-v1',
         contentHash: command.contentHash,
         createdAt: now,

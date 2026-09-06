@@ -831,6 +831,63 @@ describe('CLI preparation authorization ledger', () => {
     }
   })
 
+  test('does not overcommit a CLI claim after an existing model reservation', () => {
+    const store = fresh()
+    try {
+      const taskCampaign = declareCliTask(store, created(store).campaign)
+      const proposal = cliProposal(taskCampaign.taskRevisions[0]!.id, { maxCost: 60 })
+      const proposed = mutateResearchCampaign(store, taskCampaign.id, {
+        idempotencyKey: 'propose-after-review-reservation',
+        expectedVersion: taskCampaign.version,
+        command: proposal,
+      })
+      if (!proposed.ok) throw new Error(proposed.message)
+      const approved = approveCliPreparation(
+        store,
+        proposed.campaign,
+        proposal,
+        'approve-after-review',
+      )
+      if (!approved.ok) throw new Error(approved.message)
+      const reservedCampaign = {
+        ...approved.campaign,
+        modelReviews: [
+          {
+            id: 'rmr_existing',
+            dispatchKey: 'review-existing',
+            approvalId: 'hap-existing',
+            evidencePackHash: CONTENT_HASH,
+            configHash: CONTENT_HASH,
+            artifactVersionIds: [],
+            currency: 'USD',
+            reservedCost: 50,
+            maxRequests: 2,
+            maxOutputTokens: 1024,
+            requestCount: 0,
+            status: 'reserved' as const,
+            ownerPid: 1,
+          },
+        ],
+      }
+      store.db
+        .query('UPDATE research_campaigns SET snapshot = ? WHERE id = ?')
+        .run(JSON.stringify(reservedCampaign), reservedCampaign.id)
+      const denied = mutateResearchCampaign(store, reservedCampaign.id, {
+        idempotencyKey: 'claim-overcommitted',
+        expectedVersion: reservedCampaign.version,
+        command: {
+          kind: 'claimCliPreparation',
+          preparationId: proposal.preparationId,
+          approvalId: approved.campaign.approvals[0]!.id,
+        },
+      })
+      expect(denied.ok).toBe(false)
+      if (!denied.ok) expect(denied.code).toBe('cli_preparation_approval_required')
+    } finally {
+      store.close()
+    }
+  })
+
   test('binds a v3 CLI job to its attempt and finishes only a candidate artifact', () => {
     const store = fresh()
     try {
@@ -872,6 +929,19 @@ describe('CLI preparation authorization ledger', () => {
         },
       })
       expect(wrongDevice.ok).toBe(false)
+      const unsafeLease = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'bind-unsafe-lease',
+        expectedVersion: claimed.campaign.version,
+        command: {
+          kind: 'bindCliPreparationJob',
+          attemptId: attempt.id,
+          spec: {
+            ...spec,
+            lease: { ...spec.lease, ownerId: '', expiresAt: Date.now() + 10 * 60 * 1000 + 1 },
+          },
+        },
+      })
+      expect(unsafeLease.ok).toBe(false)
       const bound = mutateResearchCampaign(store, proposed.campaign.id, {
         idempotencyKey: 'bind-correct',
         expectedVersion: claimed.campaign.version,
@@ -928,6 +998,13 @@ describe('CLI preparation authorization ledger', () => {
       })
       expect(lowerBudget.ok).toBe(false)
       if (!lowerBudget.ok) expect(lowerBudget.code).toBe('reserved_budget')
+      const changedCurrency = mutateResearchCampaign(store, proposed.campaign.id, {
+        idempotencyKey: 'cannot-convert-unknown-cli-reservation',
+        expectedVersion: finished.campaign.version,
+        command: { kind: 'setBudget', budget: { currency: 'EUR', limit: 100 } },
+      })
+      expect(changedCurrency.ok).toBe(false)
+      if (!changedCurrency.ok) expect(changedCurrency.code).toBe('reserved_budget')
     } finally {
       store.close()
     }
