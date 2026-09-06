@@ -192,6 +192,16 @@ test('controller submits one approved immutable attempt and records only a candi
     expect(completed.taskRevisions[0]!.status).toBe('pending')
     expect(completed.cliPreparations?.[0]?.actualCost).toBeNull()
     expect(completed.artifactVersions[0]?.kind).toBe('cli_preparation_candidate')
+    const removedRouteController = new CliPreparationController(
+      store,
+      [route(authority, `sha256:${'f'.repeat(64)}`)],
+      () => {},
+    )
+    const queriesBeforeTerminalRecovery = authority.queried.length
+    expect(removedRouteController.recover(scope)).toEqual({ attemptIds: [] })
+    await Bun.sleep(0)
+    expect(authority.queried).toHaveLength(queriesBeforeTerminalRecovery)
+    removedRouteController.close()
     controller.close()
   } finally {
     store.close()
@@ -242,6 +252,16 @@ test('reconcile observes the original attempt after an unknown transport state w
           : undefined,
       'unknown state',
     )
+    const changedRoute = new CliPreparationController(
+      store,
+      [route(authority, `sha256:${'f'.repeat(64)}`)],
+      () => {},
+    )
+    const queriesBeforeMismatchedRecovery = authority.queried.length
+    expect(changedRoute.recover(scope)).toEqual({ attemptIds: [accepted.attemptId] })
+    await Bun.sleep(0)
+    expect(authority.submitted).toHaveLength(1)
+    expect(authority.queried).toHaveLength(queriesBeforeMismatchedRecovery)
     authority.unavailable = false
     await controller.reconcile(scope, accepted.attemptId)
     expect(authority.submitted).toHaveLength(1)
@@ -274,11 +294,6 @@ test('reconcile observes the original attempt after an unknown transport state w
         },
       ),
     ).toThrow('研究项目不存在')
-    const changedRoute = new CliPreparationController(
-      store,
-      [route(authority, `sha256:${'f'.repeat(64)}`)],
-      () => {},
-    )
     await expect(changedRoute.reconcile(scope, accepted.attemptId)).rejects.toThrow('已变化')
     controller.close()
     changedRoute.close()

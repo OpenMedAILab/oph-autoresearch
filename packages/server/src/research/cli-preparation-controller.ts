@@ -299,10 +299,21 @@ export class CliPreparationController {
   /** Startup hook: resume only already-bound durable remote jobs; never submit a replacement. */
   recover(scope: CliPreparationScope) {
     const campaign = this.campaign(scope)
-    const attemptIds = (campaign.cliPreparations ?? [])
-      .map((preparation) => preparation.attemptId)
-      .filter((attemptId): attemptId is string => attemptId !== null)
-    for (const attemptId of attemptIds) void this.reconcile(scope, attemptId)
+    const attemptIds = campaign.attempts
+      .filter(
+        (attempt) =>
+          (attempt.status === 'running' || attempt.status === 'unknown') &&
+          (campaign.cliPreparations ?? []).some(
+            (preparation) => preparation.attemptId === attempt.id,
+          ),
+      )
+      .map((attempt) => attempt.id)
+    for (const attemptId of attemptIds) {
+      void this.reconcile(scope, attemptId).catch((error) => {
+        const reason = error instanceof Error ? error.message : 'unknown recovery error'
+        console.error(`CLI preparation ${attemptId} requires manual verification: ${reason}`)
+      })
+    }
     return { attemptIds }
   }
   async cancel(scope: CliPreparationScope, attemptId: string) {
