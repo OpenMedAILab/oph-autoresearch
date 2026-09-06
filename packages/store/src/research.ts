@@ -135,17 +135,27 @@ function progressControl(campaign: ResearchCampaign) {
   return campaign.progressControl ?? DEFAULT_PROGRESS_CONTROL
 }
 
+const MAX_CONTROLLER_REQUESTS = 50
+const MAX_CONTROLLER_ADVANCES = 50
+const MAX_CONTROLLER_OUTPUT_TOKENS = 1_000_000
+const MAX_CONTROLLER_INPUT_CHARACTERS = 1_000_000
+const MAX_CONTROLLER_DEADLINE_MS = 24 * 60 * 60 * 1000
+
 function validControllerLimits(limits: ResearchControllerLimits | undefined): boolean {
   return Boolean(
     limits &&
       Number.isSafeInteger(limits.maxAdvances) &&
       limits.maxAdvances > 0 &&
+      limits.maxAdvances <= MAX_CONTROLLER_ADVANCES &&
       Number.isSafeInteger(limits.maxModelRequests) &&
       limits.maxModelRequests > 0 &&
+      limits.maxModelRequests <= MAX_CONTROLLER_REQUESTS &&
       Number.isSafeInteger(limits.maxOutputTokens) &&
       limits.maxOutputTokens > 0 &&
+      limits.maxOutputTokens <= MAX_CONTROLLER_OUTPUT_TOKENS &&
       Number.isSafeInteger(limits.maxInputCharacters) &&
       limits.maxInputCharacters > 0 &&
+      limits.maxInputCharacters <= MAX_CONTROLLER_INPUT_CHARACTERS &&
       Number.isSafeInteger(limits.deadlineAt) &&
       limits.deadlineAt > 0 &&
       (limits.stopAfter === 'candidate' || limits.stopAfter === 'review'),
@@ -282,6 +292,14 @@ function knownActualCost(campaign: ResearchCampaign, subject: ResearchCostSubjec
     amounts.push(review.actualCost)
   if (controller?.actualCost !== null && controller?.actualCost !== undefined)
     amounts.push(controller.actualCost)
+  // A controller may know individual request charges before every request has a charge.
+  // Keep those known charges committed even while its aggregate remains deliberately unknown.
+  if (controller?.actualCost === null) {
+    const partial = controller.requests
+      .map((request) => request.actualCost)
+      .filter((amount): amount is number => amount !== null && amount !== undefined)
+    if (partial.length > 0) amounts.push(saturatedCostSum(partial))
+  }
   for (const evidence of campaign.costEvidence ?? []) {
     if (costSubjectKey(evidence.subject) === costSubjectKey(subject)) amounts.push(evidence.amount)
   }
@@ -489,6 +507,7 @@ export function costEvidenceApprovalScope(
     artifactVersionIds: [],
     currency: evidence.currency,
     maxCost: evidence.amount,
+    costResearchTitle: campaign.goal,
     expiresAt,
   }
 }
@@ -523,15 +542,79 @@ export function canStartControllerRequest(
   const reservation = (campaign.controllerReservations ?? []).find(
     (item) => item.id === reservationId,
   )
+  const approval = campaign.approvals.find((item) => item.id === reservation?.approvalId)
   return Boolean(
     reservation &&
       reservation.status === 'active' &&
+      approval?.status === 'active' &&
       control.mode === 'bounded' &&
       control.state === 'active' &&
       control.reservationRef === reservation.id &&
       control.generation === generation &&
       reservation.limits.deadlineAt > now &&
-      reservation.requests.length < reservation.limits.maxModelRequests,
+      reservation.requests.length < reservation.limits.maxModelRequests &&
+      !reservation.requests.some(
+        (request) => request.status === 'sending' || request.status === 'unknown',
+      ) &&
+      !campaign.attempts.some((attempt) => attempt.status === 'unknown') &&
+      committedCost(campaign) <= campaign.budget.limit &&
+      !controllerStopReached(campaign, reservation.limits.stopAfter),
+  )
+}
+
+function canReserveControllerAdvance(
+  campaign: ResearchCampaign,
+  reservationId: string,
+  generation: number,
+  now: number,
+): boolean {
+  const control = progressControl(campaign)
+  const reservation = (campaign.controllerReservations ?? []).find(
+    (item) => item.id === reservationId,
+  )
+  const approval = campaign.approvals.find((item) => item.id === reservation?.approvalId)
+  return Boolean(
+    reservation &&
+      reservation.status === 'active' &&
+      approval?.status === 'active' &&
+      control.mode === 'bounded' &&
+      control.state === 'active' &&
+      control.reservationRef === reservation.id &&
+      control.generation === generation &&
+      reservation.limits.deadlineAt > now &&
+      reservation.advancesUsed < reservation.limits.maxAdvances &&
+      !reservation.requests.some((request) => request.status === 'unknown') &&
+      !campaign.attempts.some((attempt) => attempt.status === 'unknown') &&
+      committedCost(campaign) <= campaign.budget.limit &&
+      !controllerStopReached(campaign, reservation.limits.stopAfter),
+  )
+}
+
+function controllerStopReached(
+  campaign: ResearchCampaign,
+  stopAfter: ResearchControllerLimits['stopAfter'],
+): boolean {
+  if (stopAfter === 'candidate')
+    return (campaign.cliPreparations ?? []).some(
+      (preparation) => preparation.status === 'candidate',
+    )
+  const releasable = campaign.artifactVersions
+    .filter((artifact) => hasExactReleasableArtifact(campaign, artifact.id))
+    .map((artifact) => artifact.id)
+  return releasable.some((artifactId) => hasSupportedReleaseReview(campaign, [artifactId]))
+}
+
+function controllerReservationIsResolved(
+  campaign: ResearchCampaign,
+  reservationId: string,
+): boolean {
+  const reservation = (campaign.controllerReservations ?? []).find(
+    (item) => item.id === reservationId,
+  )
+  return Boolean(
+    reservation &&
+      ['completed', 'exhausted'].includes(reservation.status) &&
+      reservation.requests.every((request) => request.status === 'done'),
   )
 }
 
@@ -804,8 +887,41 @@ function nextCampaign(
         )
       if (control.mode === 'bounded' && control.state === 'exhausted' && command.state === 'active')
         return invalid('bounded_exhausted', 'An exhausted bounded controller cannot become active')
+      const reservation =
+        control.mode === 'bounded' && control.reservationRef
+          ? (campaign.controllerReservations ?? []).find(
+              (item) => item.id === control.reservationRef,
+            )
+          : undefined
+      if (
+        control.mode === 'bounded' &&
+        command.state === 'active' &&
+        (campaign.attempts.some((attempt) => attempt.status === 'unknown') ||
+          reservation?.requests.some((request) => request.status === 'unknown'))
+      )
+        return invalid(
+          'controller_unknown_pending',
+          'Unknown work must be reconciled before resuming',
+        )
       next = {
         ...campaign,
+        ...(reservation
+          ? {
+              controllerReservations: campaign.controllerReservations!.map((item) =>
+                item.id === reservation.id
+                  ? {
+                      ...item,
+                      status:
+                        command.state === 'held' && item.status === 'active'
+                          ? ('held' as const)
+                          : command.state === 'active' && item.status === 'held'
+                            ? ('active' as const)
+                            : item.status,
+                    }
+                  : item,
+              ),
+            }
+          : {}),
         progressControl: {
           mode: control.mode,
           state: command.state,
@@ -821,12 +937,20 @@ function nextCampaign(
       const control = progressControl(campaign)
       const approval = campaign.approvals.find((item) => item.id === command.approvalId)
       const scope = approval?.scope
+      const previousControllerResolved =
+        control.mode === 'bounded' &&
+        control.state === 'exhausted' &&
+        control.reservationRef !== undefined &&
+        controllerReservationIsResolved(campaign, control.reservationRef)
       if (
-        control.mode !== 'manual' ||
-        control.state !== 'active' ||
+        !(
+          (control.mode === 'manual' && control.state === 'active') ||
+          previousControllerResolved
+        ) ||
         control.generation !== command.expectedGeneration ||
         !validControllerLimits(command.limits) ||
         command.limits.deadlineAt <= now ||
+        command.limits.deadlineAt > now + MAX_CONTROLLER_DEADLINE_MS ||
         textError(command.reservationId, 'reservationId') ||
         !SHA256.test(command.configHash) ||
         !Number.isFinite(command.reservedCost) ||
@@ -838,6 +962,8 @@ function nextCampaign(
         approval.consumedBy ||
         approval.bundleHash !== campaign.bundleHash ||
         scope?.kind !== 'controller' ||
+        !Number.isSafeInteger(scope.expiresAt) ||
+        scope.expiresAt <= now ||
         scope.configHash !== command.configHash ||
         scope.currency !== command.currency ||
         scope.maxCost !== command.reservedCost ||
@@ -883,21 +1009,14 @@ function nextCampaign(
       break
     }
     case 'startControllerRequest': {
-      const control = progressControl(campaign)
       const reservation = (campaign.controllerReservations ?? []).find(
         (item) => item.id === command.reservationId,
       )
       if (
         !reservation ||
-        reservation.status !== 'active' ||
-        control.mode !== 'bounded' ||
-        control.state !== 'active' ||
-        control.reservationRef !== reservation.id ||
-        control.generation !== command.generation ||
-        reservation.limits.deadlineAt <= now ||
         textError(command.requestId, 'requestId') ||
-        reservation.requests.length >= reservation.limits.maxModelRequests ||
-        reservation.requests.some((item) => item.id === command.requestId)
+        reservation.requests.some((item) => item.id === command.requestId) ||
+        !canStartControllerRequest(campaign, command.reservationId, command.generation, now)
       )
         return invalid('controller_request_denied', 'Bounded controller request is not available')
       next = {
@@ -950,6 +1069,9 @@ function nextCampaign(
       const actualCost = requests.every((item) => item.actualCost !== null)
         ? saturatedCostSum(requests.map((item) => item.actualCost!))
         : null
+      const control = progressControl(campaign)
+      const finishesCurrentReservation =
+        control.mode === 'bounded' && control.reservationRef === reservation.id
       next = {
         ...campaign,
         controllerReservations: campaign.controllerReservations!.map((item) =>
@@ -957,7 +1079,7 @@ function nextCampaign(
             ? { ...item, requests, actualCost, status: exhausted ? 'exhausted' : item.status }
             : item,
         ),
-        ...(exhausted
+        ...(exhausted && finishesCurrentReservation
           ? {
               progressControl: {
                 mode: 'bounded' as const,
@@ -971,19 +1093,13 @@ function nextCampaign(
       break
     }
     case 'reserveControllerAdvance': {
-      const control = progressControl(campaign)
       const reservation = (campaign.controllerReservations ?? []).find(
         (item) => item.id === command.reservationId,
       )
       if (
         !reservation ||
-        reservation.status !== 'active' ||
-        control.mode !== 'bounded' ||
-        control.state !== 'active' ||
-        control.reservationRef !== reservation.id ||
-        control.generation !== command.generation ||
-        reservation.limits.deadlineAt <= now ||
         textError(command.actionKey, 'actionKey') ||
+        !canReserveControllerAdvance(campaign, command.reservationId, command.generation, now) ||
         reservation.advancesUsed >= reservation.limits.maxAdvances ||
         reservation.advanceKeys.includes(command.actionKey)
       )
@@ -1875,6 +1991,7 @@ function nextCampaign(
               scope.costEvidenceId !== costEvidence.id ||
               scope.costEvidenceHash !== digest(canonicalJson(costEvidence)) ||
               scope.costSubjectLabel !== costSubjectLabel(campaign, costEvidence.subject) ||
+              scope.costResearchTitle !== campaign.goal ||
               scope.costDescription !== costEvidence.description ||
               scope.costAmount !== costEvidence.amount ||
               scope.maxCost !== costEvidence.amount ||

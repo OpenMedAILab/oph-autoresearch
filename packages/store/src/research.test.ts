@@ -1896,7 +1896,59 @@ describe('CLI preparation authorization ledger', () => {
         },
       })
       if (!active.ok) throw new Error(active.message)
+      const revoked = replaceCampaignSnapshot(store, {
+        ...active.campaign,
+        approvals: active.campaign.approvals.map((approval) =>
+          approval.id === 'hap-controller' ? { ...approval, status: 'revoked' as const } : approval,
+        ),
+      })
+      expect(canStartControllerRequest(revoked, 'rcr_1', 1)).toBe(false)
+      expect(
+        mutateResearchCampaign(store, campaign.id, {
+          idempotencyKey: 'start-revoked-controller',
+          expectedVersion: revoked.version,
+          command: {
+            kind: 'startControllerRequest',
+            reservationId: 'rcr_1',
+            requestId: 'revoked_request',
+            generation: 1,
+          },
+        }),
+      ).toMatchObject({ ok: false, code: 'controller_request_denied' })
+      replaceCampaignSnapshot(store, active.campaign)
       expect(canStartControllerRequest(active.campaign, 'rcr_1', 1)).toBe(true)
+      const unknownAttempt = replaceCampaignSnapshot(store, {
+        ...active.campaign,
+        attempts: [
+          ...active.campaign.attempts,
+          {
+            id: 'unknown-controller-admission',
+            taskRevisionId: 'controller-unrelated-task',
+            dispatchKey: 'unknown-controller-admission',
+            ownerPid: process.pid,
+            status: 'unknown',
+            executionStartedAt: Date.now(),
+            endedAt: null,
+            artifactVersionId: null,
+            error: null,
+            cancelRequestedAt: null,
+          },
+        ],
+      })
+      expect(canStartControllerRequest(unknownAttempt, 'rcr_1', 1)).toBe(false)
+      expect(
+        mutateResearchCampaign(store, campaign.id, {
+          idempotencyKey: 'advance-unknown-controller',
+          expectedVersion: unknownAttempt.version,
+          command: {
+            kind: 'reserveControllerAdvance',
+            reservationId: 'rcr_1',
+            generation: 1,
+            actionKey: 'advance-unknown',
+          },
+        }),
+      ).toMatchObject({ ok: false, code: 'controller_advance_denied' })
+      replaceCampaignSnapshot(store, active.campaign)
       const started = mutateResearchCampaign(store, campaign.id, {
         idempotencyKey: 'start-controller',
         expectedVersion: active.campaign.version,
@@ -1908,6 +1960,7 @@ describe('CLI preparation authorization ledger', () => {
         },
       })
       if (!started.ok) throw new Error(started.message)
+      expect(canStartControllerRequest(started.campaign, 'rcr_1', 1)).toBe(false)
       const replayDenied = mutateResearchCampaign(store, campaign.id, {
         idempotencyKey: 'start-controller-again',
         expectedVersion: started.campaign.version,
@@ -1919,6 +1972,17 @@ describe('CLI preparation authorization ledger', () => {
         },
       })
       expect(replayDenied).toMatchObject({ ok: false, code: 'controller_request_denied' })
+      const concurrentDenied = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'start-controller-concurrent',
+        expectedVersion: started.campaign.version,
+        command: {
+          kind: 'startControllerRequest',
+          reservationId: 'rcr_1',
+          requestId: 'request_2',
+          generation: 1,
+        },
+      })
+      expect(concurrentDenied).toMatchObject({ ok: false, code: 'controller_request_denied' })
       const advanced = mutateResearchCampaign(store, campaign.id, {
         idempotencyKey: 'advance-controller',
         expectedVersion: started.campaign.version,
@@ -1952,6 +2016,216 @@ describe('CLI preparation authorization ledger', () => {
         command: { kind: 'completeBoundedResearch', reservationId: 'rcr_1', generation: 2 },
       })
       expect(completed).toMatchObject({ ok: false, code: 'controller_complete_denied' })
+    } finally {
+      store.close()
+    }
+  })
+
+  test('bounded controller rejects expired or excessive approvals and permits a fresh approval only after the old reservation resolves', () => {
+    const store = fresh()
+    try {
+      const campaign = created(store).campaign
+      const limits = {
+        maxAdvances: 1,
+        maxModelRequests: 1,
+        maxOutputTokens: 10,
+        maxInputCharacters: 10,
+        deadlineAt: Date.now() + 60_000,
+        stopAfter: 'candidate' as const,
+      }
+      const excessive = controllerApprovalScope(campaign, {
+        configHash: CONTENT_HASH,
+        reservedCost: 5,
+        limits: { ...limits, maxModelRequests: 51 },
+        expiresAt: Date.now() + 60_000,
+      })
+      const excessiveApproval = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-excessive-controller',
+        expectedVersion: campaign.version,
+        command: {
+          kind: 'approve',
+          approvalId: 'hap-excessive-controller',
+          bundleHash: campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'excessive-proof', verifiedAt: Date.now() },
+          scope: excessive,
+        },
+      })
+      expect(excessiveApproval).toMatchObject({ ok: false, code: 'invalid_approval_scope' })
+
+      const scope = controllerApprovalScope(campaign, {
+        configHash: CONTENT_HASH,
+        reservedCost: 5,
+        limits,
+        expiresAt: Date.now() + 60_000,
+      })
+      const approved = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-first-controller',
+        expectedVersion: campaign.version,
+        command: {
+          kind: 'approve',
+          approvalId: 'hap-first-controller',
+          bundleHash: campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'first-proof', verifiedAt: Date.now() },
+          scope,
+        },
+      })
+      if (!approved.ok) throw new Error(approved.message)
+      const expiredApproval = replaceCampaignSnapshot(store, {
+        ...approved.campaign,
+        approvals: approved.campaign.approvals.map((approval) =>
+          approval.id === 'hap-first-controller'
+            ? { ...approval, scope: { ...approval.scope!, expiresAt: Date.now() - 1 } }
+            : approval,
+        ),
+      })
+      expect(
+        mutateResearchCampaign(store, campaign.id, {
+          idempotencyKey: 'activate-expired-controller',
+          expectedVersion: expiredApproval.version,
+          command: {
+            kind: 'activateBoundedResearch',
+            reservationId: 'rcr_expired',
+            approvalId: 'hap-first-controller',
+            configHash: CONTENT_HASH,
+            currency: 'USD',
+            reservedCost: 5,
+            limits,
+            expectedGeneration: 0,
+          },
+        }),
+      ).toMatchObject({ ok: false, code: 'controller_approval_required' })
+      replaceCampaignSnapshot(store, approved.campaign)
+      const active = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'activate-first-controller',
+        expectedVersion: approved.campaign.version,
+        command: {
+          kind: 'activateBoundedResearch',
+          reservationId: 'rcr_first',
+          approvalId: 'hap-first-controller',
+          configHash: CONTENT_HASH,
+          currency: 'USD',
+          reservedCost: 5,
+          limits,
+          expectedGeneration: 0,
+        },
+      })
+      if (!active.ok) throw new Error(active.message)
+      const started = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'start-first-controller',
+        expectedVersion: active.campaign.version,
+        command: {
+          kind: 'startControllerRequest',
+          reservationId: 'rcr_first',
+          requestId: 'request_first',
+          generation: 1,
+        },
+      })
+      if (!started.ok) throw new Error(started.message)
+      const finished = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'finish-first-controller',
+        expectedVersion: started.campaign.version,
+        command: {
+          kind: 'finishControllerRequest',
+          reservationId: 'rcr_first',
+          requestId: 'request_first',
+          actualCost: 1,
+          completed: true,
+        },
+      })
+      if (!finished.ok) throw new Error(finished.message)
+      const completed = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'complete-first-controller',
+        expectedVersion: finished.campaign.version,
+        command: { kind: 'completeBoundedResearch', reservationId: 'rcr_first', generation: 2 },
+      })
+      if (!completed.ok) throw new Error(completed.message)
+
+      const nextScope = controllerApprovalScope(completed.campaign, {
+        configHash: `sha256:${'b'.repeat(64)}`,
+        reservedCost: 5,
+        limits: { ...limits, deadlineAt: Date.now() + 60_000 },
+        expiresAt: Date.now() + 60_000,
+      })
+      const secondApproved = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'approve-second-controller',
+        expectedVersion: completed.campaign.version,
+        command: {
+          kind: 'approve',
+          approvalId: 'hap-second-controller',
+          bundleHash: completed.campaign.bundleHash,
+          reviewer: { reviewerId: 'human', proofId: 'second-proof', verifiedAt: Date.now() },
+          scope: nextScope,
+        },
+      })
+      if (!secondApproved.ok) throw new Error(secondApproved.message)
+      const secondActive = mutateResearchCampaign(store, campaign.id, {
+        idempotencyKey: 'activate-second-controller',
+        expectedVersion: secondApproved.campaign.version,
+        command: {
+          kind: 'activateBoundedResearch',
+          reservationId: 'rcr_second',
+          approvalId: 'hap-second-controller',
+          configHash: `sha256:${'b'.repeat(64)}`,
+          currency: 'USD',
+          reservedCost: 5,
+          limits: nextScope.controllerLimits!,
+          expectedGeneration: 3,
+        },
+      })
+      expect(secondActive).toMatchObject({
+        ok: true,
+        campaign: { controllerReservations: [{ id: 'rcr_first' }, { id: 'rcr_second' }] },
+      })
+    } finally {
+      store.close()
+    }
+  })
+
+  test('partial controller request costs remain committed before the aggregate is known', () => {
+    const store = fresh()
+    try {
+      const campaign = created(store).campaign
+      const snapshot = replaceCampaignSnapshot(store, {
+        ...campaign,
+        budget: { currency: 'USD', limit: 7 },
+        controllerReservations: [
+          {
+            id: 'rcr_partial',
+            approvalId: 'hap_partial',
+            configHash: CONTENT_HASH,
+            currency: 'USD',
+            reservedCost: 5,
+            limits: {
+              maxAdvances: 2,
+              maxModelRequests: 2,
+              maxOutputTokens: 10,
+              maxInputCharacters: 10,
+              deadlineAt: Date.now() + 60_000,
+              stopAfter: 'candidate',
+            },
+            requests: [
+              {
+                id: 'known',
+                startedAt: Date.now() - 2,
+                finishedAt: Date.now() - 1,
+                status: 'done',
+                actualCost: 8,
+              },
+              { id: 'unpriced', startedAt: Date.now(), status: 'sending', actualCost: null },
+            ],
+            advancesUsed: 0,
+            advanceKeys: [],
+            status: 'active',
+            actualCost: null,
+            createdAt: Date.now() - 2,
+          },
+        ],
+      })
+      expect(researchCostSummary(snapshot)).toMatchObject({
+        committedCost: 8,
+        overLimit: true,
+        subjects: [{ knownActualCost: 8 }],
+      })
     } finally {
       store.close()
     }
