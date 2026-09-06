@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, realpathSync } from 'node:fs'
 import { unlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
-import { Worker } from 'node:worker_threads'
 import { prepareCliDraft } from './cli-preparation.ts'
 import { candidateReceipt } from './cli-preparation-candidate.ts'
 import {
@@ -15,6 +14,7 @@ import {
 } from './cli-preparation-job.ts'
 import { type FormalOciJobSpec, isFormalOciJob } from './formal-job.ts'
 import type { FormalOciAdministratorConfig } from './formal-oci.ts'
+import { runFormalOciInThread } from './formal-oci-thread.ts'
 import {
   captureRunnerTracking,
   collectRunnerTracking,
@@ -38,37 +38,6 @@ function formalOciConfig(): FormalOciAdministratorConfig | null {
   } catch {
     return null
   }
-}
-
-type FormalThreadResult = {
-  ok: boolean
-  error?: string
-  result?: { exitCode: number; stdout: Uint8Array; stderr: Uint8Array; cleanupConfirmed: boolean }
-  receipt?: Uint8Array | null
-}
-
-/** Keeps daemon lease renewal on this event loop while Podman and dataset hashing run elsewhere. */
-function runFormalOciInThread(
-  config: FormalOciAdministratorConfig,
-  job: FormalOciJobSpec,
-  directory: string,
-): Promise<FormalThreadResult> {
-  return new Promise((resolveResult) => {
-    const worker = new Worker(new URL('./formal-oci-worker.ts', import.meta.url), {
-      workerData: { config, job, directory },
-    })
-    let settled = false
-    const settle = (result: FormalThreadResult) => {
-      if (settled) return
-      settled = true
-      resolveResult(result)
-    }
-    worker.once('message', (message: FormalThreadResult) => settle(message))
-    worker.once('error', () => settle({ ok: false, error: 'formal OCI worker crashed' }))
-    worker.once('exit', (code) => {
-      if (code !== 0) settle({ ok: false, error: 'formal OCI worker exited unexpectedly' })
-    })
-  })
 }
 
 function cliPreparationConfig(): CliPreparationAdministratorConfig | null {
