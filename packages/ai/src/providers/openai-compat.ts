@@ -466,6 +466,15 @@ interface CompatOutMessage {
 
 function buildMessages(messages: WireMessage[], spec: ModelSpec): CompatOutMessage[] {
   return mergeContextIntoUsers(messages).map((m) => {
+    // DeepSeek requires the field even for an empty trace or history from a non-thinking model.
+    const reasoning =
+      m.role === 'assistant' && spec.chatReasoningProtocol === 'deepseek_preserved'
+        ? { reasoning_content: m.reasoningContent ?? '' }
+        : m.role === 'assistant' &&
+            m.reasoningContent &&
+            (m.toolCalls?.length || spec.chatReasoningProtocol !== 'standard')
+          ? { reasoning_content: m.reasoningContent }
+          : {}
     if (m.role === 'tool') {
       /*
        * **工具结果里能放图。** 官方文档把 tool 消息的 content 写成
@@ -503,26 +512,20 @@ function buildMessages(messages: WireMessage[], spec: ModelSpec): CompatOutMessa
          * 边界：`reasoningContent` 是**会话历史**的属性，不是端点的。中途换过接口的话，
          * 这里发出去的可能是另一个端点录下的思考内容。
          */
-        ...(m.reasoningContent ? { reasoning_content: m.reasoningContent } : {}),
+        ...reasoning,
       }
     }
     if (typeof m.content !== 'string') {
       return {
         role: m.role,
         content: toMultimodal(m.content),
-        ...(m.role === 'assistant' &&
-        m.reasoningContent &&
-        spec.chatReasoningProtocol !== 'standard'
-          ? { reasoning_content: m.reasoningContent }
-          : {}),
+        ...reasoning,
       }
     }
     return {
       role: m.role,
       content: m.content,
-      ...(m.role === 'assistant' && m.reasoningContent && spec.chatReasoningProtocol !== 'standard'
-        ? { reasoning_content: m.reasoningContent }
-        : {}),
+      ...reasoning,
     }
   })
 }

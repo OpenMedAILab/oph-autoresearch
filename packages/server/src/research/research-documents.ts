@@ -17,6 +17,7 @@ import {
 } from './research-knowledge.ts'
 import { parseModelReview } from './review-contract.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
+import { type WorkflowReviewEvidence, workflowDocumentEvidence } from './workflow-evidence.ts'
 
 export type ResearchDocumentKind = 'study' | 'manuscript' | 'skillcandidate' | KnowledgeKind
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
@@ -97,7 +98,11 @@ function requirePreviousVersion(
   key?: string,
 ) {
   const latest = latestDocument(campaign, kind, key)
-  if (latest ? value !== latest.contentHash : value !== null) fail('invalid previousVersion', 409)
+  if (latest ? value !== latest.contentHash : value !== null)
+    fail(
+      `previousVersion must be ${latest?.contentHash ?? 'null'} (latest document contentHash)`,
+      409,
+    )
 }
 
 function staleTaskIds(campaign: ResearchCampaign): Set<string> {
@@ -169,7 +174,13 @@ function isCurrentValidatedArtifact(campaign: ResearchCampaign, artifactId: stri
       attempt.artifactVersionId === artifact.id,
   )
 }
-function reviewEvidence(campaign: ResearchCampaign, reviewId: unknown) {
+function reviewEvidence(
+  campaign: ResearchCampaign,
+  reviewId: unknown,
+  workflowReviews: WorkflowReviewEvidence[] = [],
+) {
+  const workflowReview = workflowReviews.find((item) => item.review.id === reviewId)
+  if (workflowReview) return workflowReview
   const review =
     typeof reviewId === 'string'
       ? campaign.modelReviews?.find((item) => item.id === reviewId)
@@ -185,13 +196,17 @@ function reviewEvidence(campaign: ResearchCampaign, reviewId: unknown) {
     return null
   try {
     const map = parseModelReview(review.text ?? '', review.artifactVersionIds)
-    return map.decision === 'supported' ? { review, map } : null
+    return map.decision === 'supported' ? { review, map, workflow: false } : null
   } catch {
     return null
   }
 }
-function currentReview(campaign: ResearchCampaign, reviewId: unknown) {
-  const evidence = reviewEvidence(campaign, reviewId)
+function currentReview(
+  campaign: ResearchCampaign,
+  reviewId: unknown,
+  workflowReviews: WorkflowReviewEvidence[] = [],
+) {
+  const evidence = reviewEvidence(campaign, reviewId, workflowReviews)
   if (!evidence) fail('unsupported manuscript claim', 409)
   return evidence
 }
@@ -233,10 +248,14 @@ function validateStudy(campaign: ResearchCampaign, document: DocumentInput) {
   stringList(document.endpoints, 'study endpoints')
   requirePreviousVersion(campaign, 'study', document.previousVersion)
 }
-function validateManuscript(campaign: ResearchCampaign, document: DocumentInput) {
+function validateManuscript(
+  campaign: ResearchCampaign,
+  document: DocumentInput,
+  workflowReviews: WorkflowReviewEvidence[] = [],
+) {
   if (!hasExactKeys(document, ['claims', 'journalRequirementsHash', 'previousVersion', 'text']))
     fail('invalid manuscript document')
-  text(document.text, 'manuscript text')
+  text(document.text, 'manuscript text', 96_000)
   if (
     typeof document.journalRequirementsHash !== 'string' ||
     !HASH.test(document.journalRequirementsHash)
@@ -256,11 +275,12 @@ function validateManuscript(campaign: ResearchCampaign, document: DocumentInput)
       fail('unsupported manuscript claim')
     text(candidate.claim, 'manuscript claim')
     const ids = stringList(candidate.artifactVersionIds, 'manuscript artifactVersionIds')
-    const { review, map } = currentReview(campaign, candidate.reviewId)
+    const { review, map, workflow } = currentReview(campaign, candidate.reviewId, workflowReviews)
     if (
       ids.some(
         (id) =>
-          !review.artifactVersionIds.includes(id) || !isCurrentValidatedArtifact(campaign, id),
+          !review.artifactVersionIds.includes(id) ||
+          (!workflow && !isCurrentValidatedArtifact(campaign, id)),
       )
     )
       fail('unsupported manuscript claim', 409)
@@ -303,6 +323,7 @@ function validateDocument(
   campaign: ResearchCampaign,
   kind: ResearchDocumentKind,
   document: DocumentInput,
+  workflowReviews: WorkflowReviewEvidence[] = [],
 ) {
   if (isKnowledgeKind(kind)) {
     try {
@@ -312,7 +333,7 @@ function validateDocument(
     }
     requirePreviousVersion(campaign, kind, document.previousVersion, knowledgeKey(document))
     if (
-      kind === 'handoff' &&
+      ['handoff', 'experiment', 'resultsreview'].includes(kind) &&
       (!campaign.studySelection ||
         document.studyHash !== campaign.studySelection.contentHash ||
         latestDocument(campaign, 'study')?.contentHash !== document.studyHash)
@@ -326,16 +347,17 @@ function validateDocument(
     return
   }
   if (kind === 'study') return validateStudy(campaign, document)
-  if (kind === 'manuscript') return validateManuscript(campaign, document)
+  if (kind === 'manuscript') return validateManuscript(campaign, document, workflowReviews)
   return validateSkillCandidate(campaign, document)
 }
 function documentDependenciesCurrent(
   campaign: ResearchCampaign,
   kind: ResearchDocumentKind,
   document: DocumentInput,
+  workflowReviews: WorkflowReviewEvidence[] = [],
 ) {
   if (isKnowledgeKind(kind)) {
-    if (kind === 'handoff')
+    if (['handoff', 'experiment', 'resultsreview'].includes(kind))
       return (
         document.studyHash === campaign.studySelection?.contentHash &&
         document.studyHash === latestDocument(campaign, 'study')?.contentHash
@@ -372,9 +394,17 @@ function documentDependenciesCurrent(
     )
       return false
     const ids = candidate.artifactVersionIds
-    if (!ids.every((id) => typeof id === 'string' && isCurrentValidatedArtifact(campaign, id)))
+    const evidence = reviewEvidence(campaign, candidate.reviewId, workflowReviews)
+    if (
+      !ids.every(
+        (id) =>
+          typeof id === 'string' &&
+          (evidence?.workflow
+            ? evidence.review.artifactVersionIds.includes(id)
+            : isCurrentValidatedArtifact(campaign, id)),
+      )
+    )
       return false
-    const evidence = reviewEvidence(campaign, candidate.reviewId)
     return (
       !!evidence &&
       evidence.map.claims.some(
@@ -460,6 +490,48 @@ function existingIdempotency(store: Store, campaignId: string, idempotencyKey: s
     .get(campaignId, idempotencyKey)
 }
 
+async function resolveManuscriptFile(workspaceRoot: string, document: DocumentInput) {
+  if (!Object.hasOwn(document, 'textFile')) return document
+  if (
+    !hasExactKeys(document, ['claims', 'journalRequirementsHash', 'previousVersion', 'textFile']) ||
+    !isObject(document.textFile) ||
+    !hasExactKeys(document.textFile, ['path', 'sha256'])
+  )
+    fail('manuscript textFile replaces text and requires path and sha256')
+  const source = document.textFile
+  if (
+    typeof source.path !== 'string' ||
+    !source.path.trim() ||
+    isAbsolute(source.path) ||
+    typeof source.sha256 !== 'string' ||
+    !HASH.test(source.sha256)
+  )
+    fail('invalid manuscript textFile path or sha256')
+  const root = await realpath(resolve(workspaceRoot))
+  let path: string
+  try {
+    path = await realpath(resolve(root, source.path))
+  } catch {
+    return fail('manuscript textFile is unavailable', 404)
+  }
+  const inside = relative(root, path)
+  if (!inside || inside === '..' || inside.startsWith('../') || isAbsolute(inside))
+    fail('manuscript textFile must be inside the workspace')
+  const stat = await lstat(path)
+  if (!stat.isFile() || stat.size > MAX_BYTES) fail('invalid manuscript textFile size or type')
+  const bytes = await readFile(path)
+  if (bytes.length > MAX_BYTES) fail('manuscript textFile exceeds size limit')
+  if (sha256(bytes) !== source.sha256) fail('manuscript textFile hash mismatch', 409)
+  let manuscriptText: string
+  try {
+    manuscriptText = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+  } catch {
+    return fail('manuscript textFile must be UTF-8')
+  }
+  const { textFile: _source, ...rest } = document
+  return { ...rest, text: manuscriptText }
+}
+
 export async function writeResearchDocument(input: {
   store: Store
   workspaceRoot: string
@@ -479,6 +551,8 @@ export async function writeResearchDocument(input: {
   const campaign = getResearchCampaign(input.store, input.campaignId)
   if (!campaign) fail('campaign not found', 404)
   if (!isObject(input.document)) fail('invalid document')
+  if (input.kind === 'manuscript')
+    input = { ...input, document: await resolveManuscriptFile(input.workspaceRoot, input.document) }
   const key = isKnowledgeKind(input.kind) ? knowledgeKey(input.document) : undefined
   if (input.kind === 'study') {
     const sources = await readResearchDocuments(input.store, input.workspaceRoot, campaign.id)
@@ -529,7 +603,40 @@ export async function writeResearchDocument(input: {
   }
   if (!Number.isSafeInteger(input.expectedVersion) || campaign.version !== input.expectedVersion)
     fail(`campaign version is ${campaign.version}`, 409)
-  validateDocument(campaign, input.kind, input.document)
+  const artifacts = campaign.artifactVersions.filter((a) => a.kind.startsWith('research-document-'))
+  const contents = await Promise.all(
+    artifacts.map((a) => verifiedContent(input.workspaceRoot, campaign, a)),
+  )
+  const workflowEvidence = workflowDocumentEvidence(input.store, campaign, artifacts, contents)
+  if (input.kind === 'experiment' || input.kind === 'resultsreview') {
+    const probe = {
+      id: 'pending-workflow-document',
+      artifactId: documentArtifactId(input.kind, key),
+      kind: `research-document-${input.kind}`,
+      version:
+        1 +
+        Math.max(
+          0,
+          ...artifacts
+            .filter((a) => a.artifactId === documentArtifactId(input.kind, key))
+            .map((a) => a.version),
+        ),
+    } as ArtifactVersion
+    const checked = workflowDocumentEvidence(
+      input.store,
+      campaign,
+      [...artifacts, probe],
+      [...contents, input.document],
+    )
+    if (
+      !(input.kind === 'experiment' ? checked.validExperiments : checked.validReviews).has(probe.id)
+    )
+      fail(
+        'Missing current SSH tool receipt or completed independent workflow provenance; read context documentSchemas',
+        409,
+      )
+  }
+  validateDocument(campaign, input.kind, input.document, workflowEvidence.reviews)
   const immutableUri = await writeImmutableFile(
       input.workspaceRoot,
       input.campaignId,
@@ -589,6 +696,7 @@ export async function readResearchDocuments(
   const contents = await Promise.all(
     artifacts.map((artifact) => verifiedContent(workspaceRoot, campaign, artifact)),
   )
+  const workflowEvidence = workflowDocumentEvidence(store, campaign, artifacts, contents)
   return artifacts.map((artifact, index) => {
     const kind = artifact.kind.replace('research-document-', '') as ResearchDocumentKind,
       content = contents[index]
@@ -622,7 +730,9 @@ export async function readResearchDocuments(
         )?.id !== artifact.id ||
         !content ||
         sourceContentMissing ||
-        !documentDependenciesCurrent(campaign, kind, content),
+        (kind === 'experiment' && !workflowEvidence.validExperiments.has(artifact.id)) ||
+        (kind === 'resultsreview' && !workflowEvidence.validReviews.has(artifact.id)) ||
+        !documentDependenciesCurrent(campaign, kind, content, workflowEvidence.reviews),
       verified: content !== null,
       ...(content ? { document: content } : {}),
     }

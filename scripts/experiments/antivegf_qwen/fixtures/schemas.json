@@ -1,0 +1,319 @@
+{
+  "judge_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "checklist_judge_output_schema_v1.0",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "judge_task_id",
+      "checklist_version",
+      "items",
+      "structured_output_evaluation",
+      "overall_evidence_summary"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": "checklist_judge_output_v1.0"
+      },
+      "judge_task_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "checklist_version": {
+        "const": "clinical_checklist_v1.3_frozen"
+      },
+      "items": {
+        "type": "array",
+        "minItems": 22,
+        "maxItems": 22,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "item_id",
+            "score",
+            "rationale",
+            "report_excerpt",
+            "evidence_reference",
+            "critical_safety_failure",
+            "confidence"
+          ],
+          "properties": {
+            "item_id": {
+              "enum": [
+                "A1",
+                "A2",
+                "A3",
+                "A4",
+                "A5",
+                "A6",
+                "A7",
+                "B1",
+                "B2",
+                "B3",
+                "B4",
+                "C1",
+                "C2",
+                "C3",
+                "C4",
+                "C5",
+                "C6",
+                "D1",
+                "D2",
+                "D3",
+                "D4",
+                "D5"
+              ]
+            },
+            "score": {
+              "enum": [
+                "pass",
+                "fail",
+                "not_applicable"
+              ]
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "report_excerpt": {
+              "type": "string"
+            },
+            "evidence_reference": {
+              "type": "string"
+            },
+            "critical_safety_failure": {
+              "type": "boolean"
+            },
+            "confidence": {
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            }
+          }
+        }
+      },
+      "structured_output_evaluation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "disease_activity",
+          "treatment_response",
+          "management_support",
+          "safety_flag",
+          "narrative_consistency"
+        ],
+        "properties": {
+          "disease_activity": {
+            "$ref": "#/$defs/structuredJudgment"
+          },
+          "treatment_response": {
+            "$ref": "#/$defs/structuredJudgment"
+          },
+          "management_support": {
+            "$ref": "#/$defs/structuredJudgment"
+          },
+          "safety_flag": {
+            "$ref": "#/$defs/structuredJudgment"
+          },
+          "narrative_consistency": {
+            "$ref": "#/$defs/structuredJudgment"
+          }
+        }
+      },
+      "overall_evidence_summary": {
+        "type": "string"
+      }
+    },
+    "$defs": {
+      "structuredJudgment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "score",
+          "rationale",
+          "evidence_reference"
+        ],
+        "properties": {
+          "score": {
+            "enum": [
+              "pass",
+              "fail",
+              "not_applicable"
+            ]
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "evidence_reference": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "optimizer_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "candidate_optimizer_output_schema_v1.1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "candidate_id",
+      "parent_prompt_id",
+      "target_error_pattern_ids",
+      "change_rationale",
+      "change_summary",
+      "full_prompt"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": "candidate_optimizer_output_v1.0"
+      },
+      "candidate_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "parent_prompt_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "target_error_pattern_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "uniqueItems": true
+      },
+      "change_rationale": {
+        "type": "string",
+        "minLength": 1
+      },
+      "change_summary": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "section",
+            "change",
+            "target_pattern_ids"
+          ],
+          "properties": {
+            "section": {
+              "type": "string"
+            },
+            "change": {
+              "type": "string"
+            },
+            "target_pattern_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "full_prompt": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 12000
+      }
+    }
+  },
+  "gate_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "candidate_semantic_gate_output_schema_v1.0",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "decision",
+      "failure_reason",
+      "checks",
+      "recommended_action"
+    ],
+    "properties": {
+      "schema_version": {
+        "const": "candidate_semantic_gate_output_v1.0"
+      },
+      "decision": {
+        "type": "string",
+        "enum": [
+          "pass",
+          "fail"
+        ]
+      },
+      "failure_reason": {
+        "type": "string"
+      },
+      "checks": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clinical_relevance",
+          "bounded_incremental_change",
+          "non_gaming_language",
+          "target_error_pattern_alignment",
+          "clinical_readability",
+          "behavioral_drift_risk"
+        ],
+        "properties": {
+          "clinical_relevance": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          },
+          "bounded_incremental_change": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          },
+          "non_gaming_language": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          },
+          "target_error_pattern_alignment": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          },
+          "clinical_readability": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          },
+          "behavioral_drift_risk": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        }
+      },
+      "recommended_action": {
+        "type": "string",
+        "enum": [
+          "accept_for_candidate_evaluation",
+          "reject_before_report_generation"
+        ]
+      }
+    }
+  }
+}

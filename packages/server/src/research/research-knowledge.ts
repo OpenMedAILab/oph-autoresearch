@@ -1,5 +1,13 @@
 /** Knowledge records use the existing immutable document and campaign artifact store. */
-export const KNOWLEDGE_KINDS = ['evidence', 'venue', 'reviewcase', 'handoff', 'peerreview'] as const
+export const KNOWLEDGE_KINDS = [
+  'evidence',
+  'venue',
+  'reviewcase',
+  'handoff',
+  'experiment',
+  'resultsreview',
+  'peerreview',
+] as const
 export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number]
 export const isKnowledgeKind = (kind: string): kind is KnowledgeKind =>
   KNOWLEDGE_KINDS.includes(kind as KnowledgeKind)
@@ -91,6 +99,28 @@ export const KNOWLEDGE_GUIDE = {
     revisionRound: 1,
     previousVersion: null,
   },
+  experiment: {
+    key: 'ssh-experiment',
+    studyHash: 'Currently confirmed study hash',
+    executionChannel: 'ssh-engineering',
+    sourceStepId: 'Successful ssh_run_command step in this research conversation',
+    summary: { note: 'Exact JSON object returned in that SSH step stdout; aggregates only' },
+    limitations: ['Engineering provenance is not formal execution or clinical validation'],
+    previousVersion: null,
+  },
+  resultsreview: {
+    key: 'independent-results-review',
+    studyHash: 'Currently confirmed study hash',
+    experimentIds: ['Current experiment document artifact version ID'],
+    workflowId: 'Actually completed workflow with approved checkpoint',
+    nodeId: 'Completed independent-reviewer or reproducibility-auditor node',
+    review: {
+      decision: 'supported | insufficient',
+      claims: [{ claim: 'Exact accepted claim', artifactVersionIds: ['experiment document ID'] }],
+      limitations: ['Limitations'],
+    },
+    previousVersion: null,
+  },
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -139,9 +169,13 @@ export function knowledgeKey(document: Record<string, unknown>): string {
 }
 export function validateKnowledge(kind: KnowledgeKind, document: Record<string, unknown>) {
   knowledgeKey(document)
-  const expected = Object.keys(KNOWLEDGE_GUIDE[kind]).sort().join(',')
-  if (Object.keys(document).sort().join(',') !== expected)
-    throw new Error(`Invalid ${kind} fields; read context documentSchemas`)
+  const expected = Object.keys(KNOWLEDGE_GUIDE[kind])
+  const missing = expected.filter((key) => !Object.hasOwn(document, key))
+  const extra = Object.keys(document).filter((key) => !expected.includes(key))
+  if (missing.length || extra.length)
+    throw new Error(
+      `Invalid ${kind} fields: missing [${missing.join(', ')}]; unexpected [${extra.join(', ')}]. Include required nullable fields explicitly (previousVersion: null for a first version); read context documentSchemas.`,
+    )
   if (kind === 'evidence') {
     requireText(document.title, 'title')
     url(document.url)
@@ -221,6 +255,17 @@ export function validateKnowledge(kind: KnowledgeKind, document: Record<string, 
     texts(document.tasks, 'tasks', true)
     texts(document.expectedOutputs, 'outputs', true)
     texts(document.blockers, 'blockers')
+  } else if (kind === 'experiment') {
+    requireText(document.studyHash, 'study hash')
+    requireText(document.sourceStepId, 'SSH source step')
+    if (document.executionChannel !== 'ssh-engineering' || !record(document.summary))
+      throw new Error('Expected SSH engineering aggregate receipt')
+    texts(document.limitations, 'experiment limitations', true)
+  } else if (kind === 'resultsreview') {
+    for (const key of ['studyHash', 'workflowId', 'nodeId']) requireText(document[key], key)
+    const ids = texts(document.experimentIds, 'experiment IDs', true)
+    if (new Set(ids).size !== ids.length || !record(document.review))
+      throw new Error('Invalid result review')
   } else {
     requireText(document.manuscriptHash, 'manuscript hash')
     if (document.revisionRound !== 1)

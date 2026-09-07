@@ -94,13 +94,17 @@ export function ResearchAssistantCard() {
                     ? '已有稿件审阅'
                     : current(research, 'manuscript')
                       ? '已有证据稿件'
-                      : current(research, 'handoff')
-                        ? '实验准备已保存'
-                        : research.studySelection
-                          ? '方案已确认 · 准备交接'
-                          : current(research, 'study')
-                            ? '请确认研究方案'
-                            : '资料与课题调研'}
+                      : current(research, 'resultsreview')
+                        ? '已有独立结果复核'
+                        : current(research, 'experiment')
+                          ? '实验回执已登记'
+                          : current(research, 'handoff')
+                            ? '实验准备已保存'
+                            : research.studySelection
+                              ? '方案已确认 · 准备交接'
+                              : current(research, 'study')
+                                ? '请确认研究方案'
+                                : '资料与课题调研'}
                 </span>
               </summary>
               <div class="research-assistant-content">
@@ -181,6 +185,8 @@ export function ResearchAssistantCard() {
                               (
                                 {
                                   handoff: '实验交接包',
+                                  experiment: 'SSH 实验回执',
+                                  resultsreview: '独立结果复核',
                                   peerreview: '稿件审稿意见',
                                   reviewcase: '审稿校准案例',
                                   manuscript: '证据稿件',

@@ -98,7 +98,7 @@ export interface ModelSpec {
    * 另外两档是厂商明确要求的完整历史协议；它们同时决定请求开关和纯文本轮回放，
    * 避免「请求体开了保留、历史投影却仍丢思考」这种半套实现。
    */
-  chatReasoningProtocol: 'standard' | 'qwen_preserved' | 'glm_preserved'
+  chatReasoningProtocol: 'standard' | 'qwen_preserved' | 'glm_preserved' | 'deepseek_preserved'
   /**
    * Chat Completions 的工具参数 schema 协议。
    *
@@ -785,10 +785,9 @@ function deepseekCatalog(): ModelSpec[] {
     // 只有下面那条视觉实验模型收图片，flash 与 pro 都不收。
     vision: false,
     video: false,
-    // chat/completions 那支的回传由 `openai-compat` 无条件发 `reasoning_content`，
-    // 不读这一格。要回传的是下面 Responses 那支。
+    // Responses 和 Chat 的推理回传分别建模；Chat 历史含无工具调用的 assistant 消息。
     reasoningEcho: 'none' as const,
-    chatReasoningProtocol: 'standard' as const,
+    chatReasoningProtocol: 'deepseek_preserved' as const,
     chatToolSchema: 'openai_strict' as const,
     effortLevels: ['low', 'high', 'max'] as EffortLevel[],
     thinksByDefault: false,

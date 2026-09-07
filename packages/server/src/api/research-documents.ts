@@ -55,7 +55,21 @@ export const handleResearchDocumentsApi: ApiHandler = async (url, req, d) => {
   if (req.method !== 'POST')
     return new Response('', { status: 405, headers: { allow: 'GET, POST' } })
   const body = await req.json().catch(() => null)
-  if (!exactBody(body)) return json({ error: 'invalid_document' }, 400)
+  if (!exactBody(body))
+    return json(
+      {
+        error: 'invalid_document',
+        message:
+          'body requires exactly kind, document, expectedVersion (current campaign version), idempotencyKey. Document fields are listed in context.documentSchemas.',
+        example: {
+          kind: 'study',
+          document: { question: 'See context.documentSchemas.study for all fields' },
+          expectedVersion: campaign.version,
+          idempotencyKey: 'save-study-v1',
+        },
+      },
+      400,
+    )
   try {
     const result = await writeResearchDocument({
       store: d.store,

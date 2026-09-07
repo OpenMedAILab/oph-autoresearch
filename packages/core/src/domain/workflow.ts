@@ -262,7 +262,9 @@ export function parseWorkflowCall(args: Record<string, unknown>): WorkflowParseR
 export function workflowGroupId(
   record: Pick<WorkflowCallRecord, 'stepId' | 'args' | 'outcome'>,
 ): string {
-  return text(record.args?.workflowId) || text(record.outcome?.data?.workflowId) || record.stepId
+  return (
+    wireText(record.args?.workflowId) || wireText(record.outcome?.data?.workflowId) || record.stepId
+  )
 }
 
 export function workflowTransitionOf(

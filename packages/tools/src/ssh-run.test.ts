@@ -1,0 +1,86 @@
+import { describe, expect, test } from 'bun:test'
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { resolveSshRunOptions, type SshProfile, saveSshProfiles, sshRunTool } from './ssh.ts'
+
+const profile: SshProfile = {
+  id: 'run-test',
+  name: 'Run test',
+  host: 'test.invalid',
+  port: 22,
+  root: '/allowed',
+  readOnly: false,
+  hostKeyPolicy: 'strict',
+}
+
+describe('SSH execution limits and receipt state', () => {
+  test('rejects ineffective options and scope escapes before execution', () => {
+    for (const timeout_ms of [0, -1, 1.5, '1000', NaN, 3600001])
+      expect(() => resolveSshRunOptions(profile, { timeout_ms })).toThrow('timeout_ms')
+    expect(() => resolveSshRunOptions(profile, { cwd: '/outside' })).toThrow('越过允许根目录')
+    expect(() => resolveSshRunOptions(profile, { probe_url: 'https://example.com' })).toThrow(
+      '不支持参数',
+    )
+    expect(resolveSshRunOptions(profile, { timeout_ms: null, cwd: null })).toEqual({
+      timeoutMs: 600000,
+      cwd: '/allowed',
+    })
+  })
+
+  test('applies cwd and deadline to the actual SSH process, preserving timeout as unknown', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oph-ssh-run-'))
+    const bin = join(root, 'bin')
+    const cwd = join(root, 'work with spaces')
+    await mkdir(bin)
+    await mkdir(cwd)
+    const shim = join(bin, 'ssh')
+    await writeFile(
+      shim,
+      '#!/bin/sh\nfor arg do command="$arg"; done\nexec /bin/sh -c "$command"\n',
+    )
+    await chmod(shim, 0o700)
+    const previousHome = process.env.OPH_AUTORESEARCH_HOME
+    const previousPath = process.env.PATH
+    process.env.OPH_AUTORESEARCH_HOME = root
+    process.env.PATH = `${bin}:${previousPath}`
+    try {
+      await saveSshProfiles([{ ...profile, root }])
+      const ctx = { emit() {} } as unknown as Parameters<typeof sshRunTool.fn>[1]
+      const ok = await sshRunTool.fn(
+        { profile: profile.id, command: 'pwd', cwd, timeout_ms: 1000 },
+        ctx,
+      )
+      expect(ok.status).toBe('success')
+      expect(ok.data).toMatchObject({
+        cwd,
+        stdout: `${cwd}\n`,
+        remoteState: 'completed',
+        timedOut: false,
+      })
+      const started = Date.now()
+      const stalled = await sshRunTool.fn(
+        { profile: profile.id, command: 'exec sleep 5', timeout_ms: 1000 },
+        ctx,
+      )
+      expect(Date.now() - started).toBeLessThan(4000)
+      expect(stalled.status).toBe('failure')
+      expect(stalled.message).toContain('远端任务状态未知')
+      expect(stalled.data).toMatchObject({
+        timedOut: true,
+        timeoutMs: 1000,
+        remoteState: 'unknown',
+      })
+      const rejected = await sshRunTool.fn(
+        { profile: profile.id, command: 'pwd', cwd: '/outside' },
+        ctx,
+      )
+      expect(rejected).toMatchObject({ status: 'failure', executed: false })
+    } finally {
+      if (previousHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+      else process.env.OPH_AUTORESEARCH_HOME = previousHome
+      if (previousPath === undefined) delete process.env.PATH
+      else process.env.PATH = previousPath
+    }
+  })
+})
