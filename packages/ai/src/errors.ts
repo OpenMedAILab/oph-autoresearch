@@ -1,0 +1,381 @@
+/**
+ * Provider 错误归类。
+ *
+ * 归类的目的只有一个：让前端知道**该让用户做什么**。所以分类轴是「用户的下一步动作」
+ * （去配 key / 去充值 / 等一会重试 / 换模型 / 缩上下文），不是 HTTP 状态码的镜像。
+ *
+ * **判据的优先级**：
+ * 1. **异常类与状态码**——最稳，优先用。
+ * 2. **错误对象上的 `code`**（`ECONNRESET`、`UNKNOWN_CERTIFICATE_VERIFICATION_ERROR`…）
+ *    ——次稳，跨版本基本不动。
+ * 3. **文案匹配**——最后兜底，且**只在文案是唯一线索时**用。
+ *
+ * **文案匹配是刻意的兜底，不是 bug，别删。** 429 优先读结构化错误码，
+ * 没有错误码时仍要靠文案区分限速与欠费；传输层错误同样需要文案兜底。
+ */
+
+import type { ErrorCode, ProviderKind } from '@oph-autoresearch/core'
+import { type CapacityRejection, classifyCapacityRejection } from './capacity.ts'
+import type { ProviderUsage } from './types.ts'
+
+export class ProviderError extends Error {
+  readonly timedOut: boolean
+  readonly code: ErrorCode
+  readonly provider: ProviderKind
+  readonly status: number | undefined
+  readonly detail: Record<string, unknown> | undefined
+  /**
+   * 只有**被容量分类器证实**的上下文超限才带这个字段。
+   *
+   * 要区分「provider 明确报了超限」和「从消息里推断出超限」时判
+   * `err.capacity !== undefined`——只看 `code === 'context_overflow'` 不够，
+   * 那个码也可能来自别的路径。
+   */
+  readonly capacity: CapacityRejection | undefined
+  /**
+   * 失败前 provider 已经报过的用量。
+   *
+   * 只有传输被掐断这一类会带：流在 `finish_reason` 之前结束，但用量那一格已经到了。
+   * **不带这个字段不等于没计费**，只等于本地没收到数——落账时区分这两者，
+   * 不要把 `undefined` 当成 0。
+   */
+  readonly usage: ProviderUsage | undefined
+  /** Provider 要求的重试等待时间。null 表示响应没有给出有效等待值。 */
+  readonly retryAfterMs: number | null
+
+  constructor(opts: {
+    timedOut?: boolean
+    code: ErrorCode
+    message: string
+    provider: ProviderKind
+    status?: number
+    detail?: Record<string, unknown>
+    capacity?: CapacityRejection
+    usage?: ProviderUsage
+    retryAfterMs?: number
+    cause?: unknown
+  }) {
+    super(opts.message, opts.cause !== undefined ? { cause: opts.cause } : undefined)
+    this.name = 'ProviderError'
+    this.timedOut = opts.timedOut ?? false
+    this.code = opts.code
+    this.provider = opts.provider
+    this.status = opts.status
+    this.detail = opts.detail
+    this.capacity = opts.capacity
+    this.usage = opts.usage
+    this.retryAfterMs = opts.retryAfterMs ?? null
+  }
+}
+
+/** 从异常对象上尽力取 HTTP 状态码，兼容各家 SDK 的字段名差异。 */
+function statusOf(err: unknown): number | undefined {
+  if (typeof err !== 'object' || err === null) return undefined
+  const e = err as Record<string, unknown>
+  for (const key of ['status', 'statusCode', 'code']) {
+    const v = e[key]
+    if (typeof v === 'number' && v >= 100 && v < 600) return v
+  }
+  const res = e.response as Record<string, unknown> | undefined
+  if (res && typeof res.status === 'number') return res.status
+  return undefined
+}
+
+function messageOf(err: unknown): string {
+  if (err instanceof Error) return err.message
+  return String(err)
+}
+
+function stringField(value: unknown, key: string): string | null {
+  if (typeof value !== 'object' || value === null) return null
+  const field = (value as Record<string, unknown>)[key]
+  return typeof field === 'string' ? field : null
+}
+
+/** SDK 与直连适配器都把响应头放在错误对象的 headers 字段。 */
+function headerOf(err: unknown, name: string): string | null {
+  if (typeof err !== 'object' || err === null) return null
+  const headers = (err as Record<string, unknown>).headers
+  if (typeof headers !== 'object' || headers === null) return null
+
+  const get = (headers as { get?: unknown }).get
+  if (typeof get === 'function') {
+    const value = get.call(headers, name)
+    return typeof value === 'string' ? value : null
+  }
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === name && typeof value === 'string') return value
+  }
+  return null
+}
+
+function retryAfterOf(err: unknown, now = Date.now()): number | null {
+  const milliseconds = headerOf(err, 'retry-after-ms')
+  if (milliseconds !== null) {
+    const parsed = Number(milliseconds)
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+
+  const value = headerOf(err, 'retry-after')
+  if (value === null) return null
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000
+
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? Math.max(0, at - now) : null
+}
+
+function providerErrorField(err: unknown, key: string): string | null {
+  const direct = stringField(err, key)
+  if (direct) return direct
+  if (typeof err !== 'object' || err === null) return null
+  return stringField((err as Record<string, unknown>).error, key)
+}
+
+function quotaExhausted(err: unknown, message: string): boolean {
+  const code = providerErrorField(err, 'code')?.toLowerCase() ?? ''
+  const type = providerErrorField(err, 'type')?.toLowerCase() ?? ''
+  if (
+    /^(insufficient_quota|credit_balance_exhausted|billing_hard_limit_reached|quota_exceeded|insufficient_balance)$/.test(
+      code,
+    ) ||
+    /^(insufficient_quota|billing_error)$/.test(type)
+  ) {
+    return true
+  }
+
+  return /exceeded your current quota|insufficient (?:quota|credit|balance)|credit balance|billing hard limit|not enough credits|额度不足|余额不足|余额耗尽|余额已用完|欠费|需要充值/i.test(
+    message,
+  )
+}
+
+/** 判断是不是「没配 key」而不是「key 不对」——两者的引导文案完全不同。 */
+function looksUnconfigured(err: unknown): boolean {
+  const m = messageOf(err).toLowerCase()
+  return m.includes('unset') || m.includes('missing') || m.includes('no api key')
+}
+
+export function classifyProviderError(provider: ProviderKind, err: unknown): ProviderError {
+  if (err instanceof ProviderError) return err
+
+  const status = statusOf(err)
+  const message = messageOf(err)
+  const retryAfterMs = retryAfterOf(err)
+  const providerCode = providerErrorField(err, 'code')
+  const providerType = providerErrorField(err, 'type')
+  const detail = {
+    providerMessage: message,
+    ...(providerCode ? { providerCode } : {}),
+    ...(providerType ? { providerType } : {}),
+    ...(retryAfterMs !== null ? { retryAfterMs } : {}),
+  }
+
+  const build = (code: ErrorCode, msg?: string, timedOut = false) =>
+    new ProviderError({
+      timedOut,
+      code,
+      message: msg ?? message,
+      provider,
+      ...(status !== undefined ? { status } : {}),
+      detail,
+      ...(retryAfterMs !== null ? { retryAfterMs } : {}),
+      cause: err,
+    })
+
+  // 中断不是错误：用户点了停止，不该报红也不该重试。
+  if (err instanceof Error && (err.name === 'AbortError' || err.name === 'APIUserAbortError')) {
+    return build('internal_error', '已取消')
+  }
+
+  // 上下文超限先于状态码分支判定：它跨 400/413/422 三个码，而且判据比状态码强得多
+  // （provider 原生容量码 / 强消息匹配）。判定为真时**必须**带上 capacity——
+  // 上层靠它决定要不要压缩重发，缺了这个字段压缩永远不会触发。
+  const capacity = classifyCapacityRejection(err)
+  if (capacity) {
+    return new ProviderError({
+      code: 'context_overflow',
+      message: capacityMessage(capacity),
+      provider,
+      ...(status !== undefined ? { status } : {}),
+      capacity,
+      cause: err,
+    })
+  }
+
+  switch (status) {
+    case 401:
+      return build(
+        looksUnconfigured(err) ? 'no_api_key' : 'auth_failed',
+        looksUnconfigured(err) ? '未配置 API Key' : 'API Key 无效',
+      )
+    case 403:
+      return build('auth_failed', '当前 Key 无权访问该模型')
+    case 404:
+      return build('model_not_found', `模型不存在：检查模型 ID 与接口地址`)
+    case 413:
+      // 走到这里说明容量分类器已经否掉了它 —— 那就不是上下文超限，
+      // 而是网关的请求体大小限制（nginx client_max_body_size 之类）。
+      // 报成上下文超限会把用户引向「精简对话」，而真正该做的是缩小附件。
+      return build('invalid_request', '请求体超出网关限制：检查附件大小或反代配置')
+    case 429: {
+      // 429 有两种：限速（等一下能好）和额度耗尽（等多久都不会好）。
+      // 混为一谈会让用户对着一个永远不会成功的错误反复重发。
+      return quotaExhausted(err, message)
+        ? build('insufficient_quota', '账户额度不足')
+        : build('rate_limited', '触发限速')
+    }
+    case 400:
+    case 422:
+      /*
+       * 不要按「消息里含 context / too long / max_tokens」判上下文超限：
+       * `max_tokens must be ≤ 8192` 是**输出**参数校验，判成上下文超限等于把一个
+       * 参数错误报成「上下文满了」，用户照着这条查不下去。
+       * 容量判定全部交给上面的分类器，这里只剩「确实是参数错了」。
+       *
+       * **默认归不可重发的那一档。** 4xx 说的是这一份请求被拒了，同一份字节再发
+       * 一次拿回同一个拒绝——不接受图片的模型收到图像块、`max_tokens` 越界，
+       * 每一次都命中。归成可重发的码时界面报的是「正在重连 N / M」，
+       * 那句话指不到真正的原因。
+       */
+      return build(
+        looksRetryableRejection(status, message) ? 'provider_unavailable' : 'invalid_request',
+        message,
+      )
+    case 500:
+    case 502:
+    case 503:
+    case 529:
+      return build('provider_unavailable', '服务端暂时不可用')
+    default:
+      break
+  }
+
+  const transport = classifyTransport(err, message)
+  if (transport) return build('network_error', transport.text, transport.timedOut)
+
+  return build('internal_error')
+}
+
+/**
+ * 400 / 422 里那一小撮「原样重发可能恢复」的拒绝。
+ *
+ * 中转站把后端的 5xx 转述成 400 是常见做法，状态码这一层分不出来，文案是唯一线索
+ * （判据优先级见文件头第 3 档）。命中的归可重发的码，其余按 4xx 的本义处理。
+ *
+ * `Request contains an invalid argument.` 是另一种中转站通用拒绝：没有参数名、字段位置
+ * 或任何可供用户修正的细节。现场两段失败历史按完全相同的装配结果重放都被同一中转站
+ * 接受，证明这句在这里不稳定地代表真正的参数错误。只精确匹配 400 的整句话，不把任何
+ * 带具体参数信息的 4xx 放进重发表。
+ *
+ * 词表照实际见过的措辞收，**宁可漏判**：漏判的代价是一次上游抖动要用户手动重发，
+ * 误判的代价是对着一个永远不会成功的请求空等五轮退避、并付五次长 prompt 的钱。
+ */
+function looksRetryableRejection(status: number, message: string): boolean {
+  const normalized = message.trim()
+  if (status === 400 && /^request contains an invalid argument\.?$/i.test(normalized)) return true
+  return /暂不可用|暂时不可用|稍后(?:再试|重试)|服务(?:繁忙|不可用)|系统繁忙|上游(?:负载|不可用)|无可用渠道|temporarily unavailable|service unavailable|try again later|overloaded|server is busy|no available channel/i.test(
+    normalized,
+  )
+}
+
+/**
+ * 传输层失败的四种形状。**顺序即优先级**：先认具体的，泛码（`CONNECTION`、
+ * `UND_ERR_`）兜在最后一支。
+ *
+ * **为什么必须分开，而不是一句「网络中断或超时」。** 三种失败的下一步动作完全不同：**连不上**要去改
+ * 接口地址或代理，**被断开**重发一次大概率就过去了，**超时**要先看是不是自己那 60 秒掐的。塞进同一
+ * 句话等于三件事一起说，用户读完不知道该干什么——这正是「连接在完成前断开」看不懂的原因。
+ *
+ * **判据按语义分，不按 errno 表分。** `ECONNREFUSED` 是没连上，`ECONNRESET`
+ * 是连上了被重置；两个码长得像，含义相反，落进同一支就等于没分类。
+ *
+ * **为什么不能只匹配 Node/undici 那串。** 运行时是 Bun，它自己的 fetch 报的是另一套话。2026-08 在一
+ * 台网络抖动的机器上对 DeepSeek 连打，三种真实失败一条都匹配不上 Node 那套：
+ * `The operation timed out.` / `The socket connection was closed unexpectedly.` /
+ * `unknown certificate verification error`。全部落进 `internal_error`——它不在 `loop.ts` 的重发表
+ * 里，后果不是文案难看，是**一次抖动直接终结整轮 run**。
+ *
+ * 所以每一支都带两条正则：`code` 上是整串（锚定），文案里是夹在句子中间的一个词
+ * （不锚定）。用同一条会漏掉 `getaddrinfo ENOTFOUND api.x.com` 这种把 errno 拼进
+ * 文案、不设 `code` 的库。
+ *
+ * **证书错误也算可重试。** 它有两种成因：握手撞上抖动（重试就好），和代理/自签名证书配错了（重试没
+ * 用）。判成可重试的代价是多打几次白工，判成不可重试的代价是一次抖动打断用户的任务。后者贵得多，
+ * 所以选前者——但文案要**同时点出**这两种可能，别让一个配错代理的人对着「连不上」长时间排查网络。
+ */
+const TRANSPORT_SHAPES: { code: RegExp; message: RegExp; text: string; timedOut?: boolean }[] = [
+  {
+    code: /CERT|SSL|TLS|SELF_SIGNED|LEAF_SIGNATURE/,
+    message: /certificate|ssl|tls handshake/i,
+    text: 'TLS 握手失败：可能是网络抖动，也可能是代理或自签名证书未被信任',
+  },
+  {
+    code: /^(ECONNRESET|ECONNABORTED|EPIPE|ERR_SOCKET_CLOSED|UND_ERR_SOCKET|CONNECTION(CLOSED|RESET|ABORTED))/,
+    message:
+      /socket connection was closed|socket hang up|premature close|http\/2 stream failed|connection (closed|reset|aborted)|\b(ECONNRESET|ECONNABORTED|EPIPE)\b/i,
+    text: '连接被断开',
+  },
+  {
+    code: /^(ETIMEDOUT|ERR_TIMEOUT|TIMEOUT|CONNECTIONTIMEOUT|UND_ERR_(HEADERS|BODY)_TIMEOUT)/,
+    message: /timed out|timeout|\bETIMEDOUT\b/i,
+    text: '请求超时',
+    timedOut: true,
+  },
+  {
+    code: /^(ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ENETDOWN|EAI_AGAIN|ERR_NETWORK|UND_ERR_|CONNECTION)/,
+    message:
+      /fetch failed|unable to connect|connection (refused|error)|network|\b(ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ENETDOWN|EAI_AGAIN)\b/i,
+    text: '连不上接口：检查接口地址与代理',
+  },
+]
+
+function classifyTransport(
+  err: unknown,
+  message: string,
+): { text: string; timedOut: boolean } | null {
+  const code = String((err as { code?: unknown })?.code ?? '').toUpperCase()
+  for (const shape of TRANSPORT_SHAPES) {
+    if (shape.code.test(code) || shape.message.test(message))
+      return { text: shape.text, timedOut: shape.timedOut ?? false }
+  }
+  return null
+}
+
+/**
+ * 容量拒绝的用户文案。
+ *
+ * 有 provider 自报的数字就报数字——「用了 213000，上限 200000」比
+ * 「上下文超出模型窗口」有用得多，用户能据此判断该删多少。
+ * 没有数字时不编，也不拿本地估算冒充 provider 的口径。
+ */
+function capacityMessage(c: CapacityRejection): string {
+  const { reportedInputTokens: used, reportedLimitTokens: limit } = c
+  if (used !== null && limit !== null) {
+    return `上下文超出模型窗口：${used.toLocaleString()} / ${limit.toLocaleString()} token`
+  }
+  if (limit !== null) return `上下文超出模型窗口（上限 ${limit.toLocaleString()} token）`
+  return '上下文超出模型窗口'
+}
+
+/**
+ * 工具调用少了名字。
+ *
+ * **不许静默丢弃。** 流式返回里工具名与参数分片到达，名字那一片没来时
+ * （中转站丢片、或它把非流式响应硬转成 SSE），丢掉这条调用的表现是
+ * 「模型说要调工具、本地当作它什么都没说」——run 记成正常完成、账本无痕，
+ * 而这正是「说做了却没做」最难查的那种形状。
+ *
+ * 也不许留着空名往下走：那条调用会随 assistant 消息原样回传给端点，
+ * 校验严格的端点对空名 400，因此一次可恢复的丢片变成整条会话余下轮次全部失败。
+ *
+ * 三条协议共用这一个出口，措辞只有一份。
+ */
+export function namelessToolCall(provider: ProviderKind, model: string): ProviderError {
+  return new ProviderError({
+    code: 'provider_unavailable',
+    message: '返回里有一条没有名字的工具调用，无法执行——通常是流式分片丢失',
+    provider,
+    detail: { model },
+  })
+}

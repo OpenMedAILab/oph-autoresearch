@@ -1,0 +1,472 @@
+/**
+ * 图标集。
+ *
+ * 自己画而不用图标库，为的是三条能统一的规则——套用现成库时这三条几乎必然被打破：
+ *
+ * 1. **统一 24 网格、1.5 描边、round 端点与拐角。** 「圆润」是通过
+ *    `stroke-linecap/linejoin: round` 落实的结构属性，不是靠给容器加圆角。
+ *    描边取 1.5：这套界面是细线语言（1px 描边、1px 分隔线），2.0 的图标摆在里面
+ *    重一档，而 13px 显示尺寸下那么粗的线在拐角处会糊成一团。
+ * 2. **描边不随尺寸缩放**（`vector-effect: non-scaling-stroke`），
+ *    16px 和 20px 下视觉粗细一致。
+ * 3. **颜色恒为 currentColor**，由父级文字色决定，不在图标里写死颜色。
+ */
+
+import type { JSX } from 'solid-js'
+
+interface IconProps {
+  size?: number
+  class?: string
+  style?: JSX.CSSProperties
+}
+
+function Svg(props: IconProps & { children: JSX.Element; label?: string }) {
+  return (
+    <svg
+      width={props.size ?? 16}
+      height={props.size ?? 16}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      vector-effect="non-scaling-stroke"
+      class={props.class}
+      style={props.style}
+      aria-hidden={props.label ? undefined : true}
+      aria-label={props.label}
+      role={props.label ? 'img' : undefined}
+    >
+      {props.children}
+    </svg>
+  )
+}
+
+/**
+ * 补全菜单的分类标记。
+ *
+ * 这组故意不用上面的细线语言：它们不是普通操作按钮，而是在一列相似结果里帮助
+ * 用户一眼分出技能、MCP 与插件的路标。小尺寸下用实心轮廓比脑形、插头等
+ * 细节繁多的线稿更稳，也不会把「技能」误读成「记忆」。
+ */
+function SolidSvg(props: IconProps & { children: JSX.Element; label?: string }) {
+  return (
+    <svg
+      width={props.size ?? 16}
+      height={props.size ?? 16}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      class={props.class}
+      style={props.style}
+      aria-hidden={props.label ? undefined : true}
+      aria-label={props.label}
+      role={props.label ? 'img' : undefined}
+    >
+      {props.children}
+    </svg>
+  )
+}
+
+/** 技能：能力闪光，不再复用脑形记忆图标。 */
+export const IconSkillSolid = (p: IconProps) => (
+  <SolidSvg {...p}>
+    <path d="M11.9 2.4c.8 4.8 2.8 6.9 7.7 7.7-4.9.8-6.9 3-7.7 8-.8-5-2.8-7.2-7.7-8 4.9-.8 6.9-2.9 7.7-7.7Z" />
+    <path d="M19.1 15.2c.3 2 1.2 2.9 3.1 3.2-1.9.3-2.8 1.2-3.1 3.2-.3-2-1.1-2.9-3.1-3.2 2-.3 2.8-1.2 3.1-3.2Z" />
+  </SolidSvg>
+)
+
+/** MCP：三个已连接的能力节点。 */
+export const IconMcpSolid = (p: IconProps) => (
+  <SolidSvg {...p}>
+    <path d="M10.5 6.3h3v8h-3zM6.8 9.4h10.4v3H6.8z" />
+    <circle cx="12" cy="5" r="3" />
+    <circle cx="5.5" cy="13.5" r="3" />
+    <circle cx="18.5" cy="13.5" r="3" />
+  </SolidSvg>
+)
+
+/** 插件：实心拼图片。 */
+export const IconPluginSolid = (p: IconProps) => (
+  <SolidSvg {...p}>
+    <path d="M4 4h6.1a2.4 2.4 0 1 0 3.8 0H20v6.1a2.4 2.4 0 1 1 0 3.8V20h-6.1a2.4 2.4 0 1 1-3.8 0H4v-6.1a2.4 2.4 0 1 0 0-3.8V4Z" />
+  </SolidSvg>
+)
+
+/**
+ * 新建会话。
+ *
+ * 「方框缺一角 + 一支笔」，不是「对话气泡加一个加号」。改掉的理由：
+ * 气泡是**读**的符号（一条已经存在的消息），加号叠上去表达的是「多一条消息」；
+ * 而这个按钮的语义是「开始写一篇新的」。它还要和旁边的 `⋯` 同为线性笔画——
+ * 气泡那个实心感的闭合轮廓在 14px 下明显更重。
+ */
+export const IconNewChat = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12.5 4.8H7.2A2.7 2.7 0 0 0 4.5 7.5v9.3a2.7 2.7 0 0 0 2.7 2.7h9.3a2.7 2.7 0 0 0 2.7-2.7v-5.3" />
+    <path d="M17.1 3.9a1.9 1.9 0 0 1 2.7 2.7l-7.4 7.4-3.4.7.7-3.4z" />
+  </Svg>
+)
+
+/* ── 窗口按钮 ──
+   刻意画得比其他图标细、比其他图标小：它们是系统级控件的替身，
+   照 Windows 的观感应当是 1px 细线，跟 UI 图标的 2.0 描边不是一套语言。 */
+export const IconWinMin = (p: IconProps) => (
+  <svg width={p.size ?? 10} height={p.size ?? 10} viewBox="0 0 10 10" aria-hidden="true">
+    <path d="M0 5h10" stroke="currentColor" stroke-width="1" />
+  </svg>
+)
+
+export const IconWinMax = (p: IconProps & { restore?: boolean }) => (
+  <svg
+    width={p.size ?? 10}
+    height={p.size ?? 10}
+    viewBox="0 0 10 10"
+    fill="none"
+    aria-hidden="true"
+  >
+    {p.restore ? (
+      <>
+        <rect x="0.5" y="2.5" width="7" height="7" stroke="currentColor" stroke-width="1" />
+        <path d="M2.5 2.5V0.5h7v7h-2" stroke="currentColor" stroke-width="1" />
+      </>
+    ) : (
+      <rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" stroke-width="1" />
+    )}
+  </svg>
+)
+
+export const IconWinClose = (p: IconProps) => (
+  <svg width={p.size ?? 10} height={p.size ?? 10} viewBox="0 0 10 10" aria-hidden="true">
+    <path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1" />
+  </svg>
+)
+
+export const IconMic = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="9" y="3" width="6" height="10" rx="3" />
+    <path d="M5.5 11a6.5 6.5 0 0 0 13 0" />
+    <path d="M12 17.5V21" />
+  </Svg>
+)
+
+export const IconActivity = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 12h3.5l2.5-7 4 14 2.5-7H21" />
+  </Svg>
+)
+
+export const IconBrain = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9.5 4.5a2.6 2.6 0 0 0-2.6 2.6 2.6 2.6 0 0 0-1.4 4.6 2.7 2.7 0 0 0 1.6 4.5A2.6 2.6 0 0 0 12 18V6.9a2.4 2.4 0 0 0-2.5-2.4z" />
+    <path d="M14.5 4.5a2.6 2.6 0 0 1 2.6 2.6 2.6 2.6 0 0 1 1.4 4.6 2.7 2.7 0 0 1-1.6 4.5A2.6 2.6 0 0 1 12 18" />
+  </Svg>
+)
+
+export const IconClock = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 7.5V12l3 1.8" />
+  </Svg>
+)
+
+/** 目标：靶心。别换成旗子——旗子在这套界面里已经是「标记」的意思。 */
+export const IconTarget = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8" />
+    <circle cx="12" cy="12" r="3.4" />
+  </Svg>
+)
+
+export const IconBranch = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="7" cy="5.5" r="2.2" />
+    <circle cx="7" cy="18.5" r="2.2" />
+    <circle cx="17" cy="9.5" r="2.2" />
+    <path d="M7 7.7v8.6" />
+    <path d="M17 11.7c0 3.2-2.4 4.6-5.2 5.1" />
+  </Svg>
+)
+
+export const IconGlobe = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8.2" />
+    <path d="M3.8 12h16.4" />
+    <path d="M12 3.8c2.1 2.3 3.2 5.2 3.2 8.2s-1.1 5.9-3.2 8.2c-2.1-2.3-3.2-5.2-3.2-8.2s1.1-5.9 3.2-8.2z" />
+  </Svg>
+)
+
+export const IconPackage = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 8.4v7.2a2 2 0 0 1-1.05 1.76l-6 3.2a2 2 0 0 1-1.9 0l-6-3.2A2 2 0 0 1 4 15.6V8.4a2 2 0 0 1 1.05-1.76l6-3.2a2 2 0 0 1 1.9 0l6 3.2A2 2 0 0 1 20 8.4z" />
+    <path d="M4.3 7.5 12 11.6l7.7-4.1M12 11.6V20.4" />
+  </Svg>
+)
+
+export const IconPlug = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 3.8v4.4M15 3.8v4.4" />
+    <path d="M6.6 8.2h10.8v3.6a5.4 5.4 0 0 1-10.8 0z" />
+    <path d="M12 17.2v3" />
+  </Svg>
+)
+
+export const IconFolder = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 7.6A2.6 2.6 0 0 1 6.6 5h2.5a2 2 0 0 1 1.5.7l1 1.2h5.8A2.6 2.6 0 0 1 20 9.5v6.9A2.6 2.6 0 0 1 17.4 19H6.6A2.6 2.6 0 0 1 4 16.4z" />
+  </Svg>
+)
+
+export const IconFile = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M13.4 3.8H7.6A2.6 2.6 0 0 0 5 6.4v11.2a2.6 2.6 0 0 0 2.6 2.6h8.8a2.6 2.6 0 0 0 2.6-2.6V9.2z" />
+    <path d="M13.4 3.8v3.8a1.6 1.6 0 0 0 1.6 1.6H19" />
+  </Svg>
+)
+
+/* 文件树工具条那四颗。加号一律画在右下角，和图形本体分开——叠在中间的话
+   14px 下加号的两笔会和文件夹的折角糊成一团。 */
+export const IconFilePlus = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M13.4 3.8H7.6A2.6 2.6 0 0 0 5 6.4v11.2a2.6 2.6 0 0 0 2.6 2.6h4" />
+    <path d="M13.4 3.8v3.8a1.6 1.6 0 0 0 1.6 1.6H19v3" />
+    <path d="M15.6 17.4h4.8M18 15v4.8" />
+  </Svg>
+)
+
+export const IconFolderPlus = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 7.6A2.6 2.6 0 0 1 6.6 5h2.5a2 2 0 0 1 1.5.7l1 1.2h5.8A2.6 2.6 0 0 1 20 9.5v2M4 9.5v6.9A2.6 2.6 0 0 0 6.6 19h5.4" />
+    <path d="M15.6 17.4h4.8M18 15v4.8" />
+  </Svg>
+)
+
+export const IconRefresh = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M19.6 11.2a7.6 7.6 0 1 0-2.3 5.6" />
+    <path d="M19.6 5.6v5.6h-5.2" />
+  </Svg>
+)
+
+/** 全部折叠：两条向内合的箭头。和 `IconExpand` 的对角箭头不是一回事——
+    那个说的是「这块面板放大 / 还原」，这个说的是「树收起来」。 */
+export const IconCollapseAll = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8 4.8l4 4 4-4" />
+    <path d="M8 19.2l4-4 4 4" />
+    <path d="M4.8 12h14.4" />
+  </Svg>
+)
+
+export const IconTerminal = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.2" y="4.6" width="17.6" height="14.8" rx="3.2" />
+    <path d="M7.6 9.6 10.4 12l-2.8 2.4M12.8 14.8h3.6" />
+  </Svg>
+)
+
+/** 无限画布：一个画框，四角向外挑出去，表示边界之外还有。 */
+export const IconCanvas = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="7.2" y="7.2" width="9.6" height="9.6" rx="1.6" />
+    <path d="M4 7.2V4h3.2M16.8 4H20v3.2M20 16.8V20h-3.2M7.2 20H4v-3.2" />
+  </Svg>
+)
+
+/** 下载：对称的向下箭头落到横线，避免 U 形托盘造成视觉重心偏低。 */
+export const IconDownload = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 4.5v10M8.2 10.8 12 14.6l3.8-3.8" />
+    <path d="M5 19.5h14" />
+  </Svg>
+)
+
+const CHEVRON: Record<'down' | 'up' | 'right' | 'left', string> = {
+  down: 'M5.6 9.5 12 16l6.4-6.5',
+  up: 'M5.6 14.5 12 8l6.4 6.5',
+  right: 'M9.5 5.6 16 12l-6.5 6.4',
+  left: 'M14.5 5.6 8 12l6.5 6.4',
+}
+export const IconChevron = (p: IconProps & { dir?: 'down' | 'up' | 'right' | 'left' }) => (
+  <Svg {...p}>
+    <path d={CHEVRON[p.dir ?? 'down']} />
+  </Svg>
+)
+
+export const IconSend = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4.4 12h15.2M13.2 5.6 19.6 12l-6.4 6.4" />
+  </Svg>
+)
+
+export const IconStop = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="6.4" y="6.4" width="11.2" height="11.2" rx="2.8" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+export const IconPlus = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 5.6v12.8M5.6 12h12.8" />
+  </Svg>
+)
+
+/** 溢出菜单。三点横排——竖排在这一栏里会和滚动条抢同一条视觉竖线。 */
+export const IconMore = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="18.5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+  </Svg>
+)
+
+/** 重命名：一支笔。不带方框——带框的是 `IconNewChat`，两者在同一栏里同时出现。 */
+export const IconPencil = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M16.8 3.9a1.9 1.9 0 0 1 2.7 2.7L9.4 16.7l-3.6.8.8-3.6z" />
+    <path d="M5 20.1h14" />
+  </Svg>
+)
+
+/** 置顶。图钉朝左上斜，和「固定在顶部」这个动作方向一致。 */
+export const IconPin = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9.5 4.5 19.5 14.5M14 4l6 6M8.4 10.1l-3 3a1 1 0 0 0 0 1.4l4.1 4.1a1 1 0 0 0 1.4 0l3-3" />
+    <path d="M5 19l3.2-3.2" />
+  </Svg>
+)
+
+/** 归档：一个盖子 + 一只箱子。不用向下箭头——那读起来是「下载」。 */
+export const IconArchive = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 5.6h16v3.2H4z" />
+    <path d="M5.4 8.8h13.2v8a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6z" />
+    <path d="M10.2 12.4h3.6" />
+  </Svg>
+)
+
+/** 删除：垃圾桶。与关闭用的 `IconX` 分开，避免把移除数据读成关闭浮层。 */
+export const IconTrash = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 6h16" />
+    <path d="M9 6V4h6v2" />
+    <path d="m18 6-1 14H7L6 6" />
+    <path d="M10 10v6M14 10v6" />
+  </Svg>
+)
+
+/** 在文件管理器里打开：文件夹 + 一支斜向外的箭头。 */
+export const IconFolderOpen = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 16.4V7.6A2.6 2.6 0 0 1 6.6 5h2.5a2 2 0 0 1 1.5.7l1 1.2h2.6" />
+    <path d="M4 16.4A2.6 2.6 0 0 0 6.6 19h10.8a2.6 2.6 0 0 0 2.6-2.6v-4.9" />
+    <path d="M14.6 9.4H20V4M20 4l-5.6 5.6" />
+  </Svg>
+)
+
+export const IconCheck = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5.2 12.6 9.6 17l9.2-10" />
+  </Svg>
+)
+
+export const IconX = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6.4 6.4l11.2 11.2M17.6 6.4 6.4 17.6" />
+  </Svg>
+)
+
+/** 文件阅读器工具：搜索与复制。 */
+export const IconSearch = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="10.6" cy="10.6" r="6.2" />
+    <path d="m15.3 15.3 4.3 4.3" />
+  </Svg>
+)
+
+export const IconCopy = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="8" y="8" width="11" height="11" rx="2" />
+    <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+  </Svg>
+)
+
+/** 保存文件。轮廓保持和编辑器工具栏里的搜索、复制同一笔画。 */
+export const IconSave = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 4h12l2 2v14H5z" />
+    <path d="M8 4v6h8V4M8 20v-6h8v6" />
+  </Svg>
+)
+
+export const IconShield = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3.6 5.6 6v6c0 4 2.6 7.2 6.4 8.4 3.8-1.2 6.4-4.4 6.4-8.4V6z" />
+    <path d="M9.4 12.2 11.4 14.2l3.4-3.8" />
+  </Svg>
+)
+
+export const IconEye = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M2.8 12S6.6 5.8 12 5.8 21.2 12 21.2 12 17.4 18.2 12 18.2 2.8 12 2.8 12z" />
+    <circle cx="12" cy="12" r="2.8" />
+  </Svg>
+)
+
+export const IconPanel = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4.4" width="18" height="15.2" rx="2.4" />
+    <path d="M14.6 4.4v15.2" />
+  </Svg>
+)
+
+/**
+ * 面板放大 / 还原。两支对角箭头：朝外是「占满」，朝内是「还原」。
+ *
+ * 不用方框类图标——那和顶栏的 `IconPanel`（开合面板）撞形，两个按钮并排时
+ * 会被读成同一件事的两个说法。
+ */
+export const IconExpand = (p: IconProps & { collapse?: boolean }) => (
+  <Svg {...p}>
+    {p.collapse ? (
+      <>
+        <path d="M14 10h5.5M14 10V4.5M14 10l6-6" />
+        <path d="M10 14H4.5M10 14v5.5M10 14l-6 6" />
+      </>
+    ) : (
+      <>
+        <path d="M14 4.5h5.5V10M19.5 4.5 13.5 10.5" />
+        <path d="M10 19.5H4.5V14M4.5 19.5l6-6" />
+      </>
+    )}
+  </Svg>
+)
+
+export const IconUsers = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="9" cy="8.2" r="3.2" />
+    <path d="M3.4 19.4c0-3 2.5-4.8 5.6-4.8s5.6 1.8 5.6 4.8" />
+    <path d="M16.2 5.4a3.2 3.2 0 0 1 0 5.9" />
+    <path d="M17.6 14.9c2.1.5 3.4 1.9 3.4 4.5" />
+  </Svg>
+)
+
+export const IconSettings = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="3.1" />
+    <path d="M19.2 14.6a1.6 1.6 0 0 0 .32 1.76l.06.06a1.9 1.9 0 1 1-2.7 2.7l-.06-.06a1.6 1.6 0 0 0-1.76-.32 1.6 1.6 0 0 0-.97 1.47v.17a1.9 1.9 0 1 1-3.8 0v-.09a1.6 1.6 0 0 0-1.05-1.47 1.6 1.6 0 0 0-1.76.32l-.06.06a1.9 1.9 0 1 1-2.7-2.7l.06-.06a1.6 1.6 0 0 0 .32-1.76 1.6 1.6 0 0 0-1.47-.97H3.4a1.9 1.9 0 1 1 0-3.8h.09a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.76l-.06-.06a1.9 1.9 0 1 1 2.7-2.7l.06.06a1.6 1.6 0 0 0 1.76.32h.08a1.6 1.6 0 0 0 .97-1.47V3.4a1.9 1.9 0 1 1 3.8 0v.09a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.76-.32l.06-.06a1.9 1.9 0 1 1 2.7 2.7l-.06.06a1.6 1.6 0 0 0-.32 1.76v.08a1.6 1.6 0 0 0 1.47.97h.17a1.9 1.9 0 1 1 0 3.8h-.09a1.6 1.6 0 0 0-1.47.97z" />
+  </Svg>
+)
+
+export const IconSpinner = (p: IconProps) => (
+  <Svg {...p} class={`icon-spin ${p.class ?? ''}`}>
+    <path d="M12 4.2v3.2" opacity="1" />
+    <path d="M12 16.6v3.2" opacity="0.35" />
+    <path d="M4.2 12h3.2" opacity="0.55" />
+    <path d="M16.6 12h3.2" opacity="0.85" />
+    <path d="m6.5 6.5 2.3 2.3" opacity="0.75" />
+    <path d="m15.2 15.2 2.3 2.3" opacity="0.45" />
+    <path d="m17.5 6.5-2.3 2.3" opacity="0.95" />
+    <path d="m8.8 15.2-2.3 2.3" opacity="0.3" />
+  </Svg>
+)

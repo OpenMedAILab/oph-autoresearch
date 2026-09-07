@@ -1,0 +1,11 @@
+{
+  "name": "@oph-autoresearch/core",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./protocol": "./src/protocol/index.ts",
+    "./domain": "./src/domain/index.ts"
+  }
+}

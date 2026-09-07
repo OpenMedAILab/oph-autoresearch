@@ -1,0 +1,207 @@
+/**
+ * 文件树、按名搜索、预览、新建 / 改名 / 删除。
+ * 右侧面板的几个标签页都从这里取数。
+ *
+ * 会写盘的是 create / rename / delete 三条，**它们共用同一套口径**：
+ * 入参不合法回 422 且不落盘、目标已存在回 409 不覆盖、路径越界翻成 422
+ * （那是入参问题，不该以 500 的面貌出现在界面上）。每条的特殊之处写在它自己头上。
+ */
+
+import { resolveInWorkspace } from '@oph-autoresearch/tools'
+import {
+  copyEntry,
+  createEntry,
+  deleteEntry,
+  EntryExistsError,
+  FileChangedError,
+  findByName,
+  listTree,
+  moveEntry,
+  preview,
+  renameEntry,
+  writeTextEntry,
+} from '../files.ts'
+import { type ApiHandler, json } from './types.ts'
+
+export const handleWorkspaceFsApi: ApiHandler = async (url, req, d) => {
+  const p = url.pathname
+  const q = url.searchParams
+
+  if (p === '/api/files/tree') {
+    const rel = q.get('path') ?? '.'
+    // 走同一套路径约束：HTTP 入口和工具入口不能有两套安全策略。
+    await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+    const depth = Math.min(6, Math.max(1, Number(q.get('depth') ?? 2)))
+    return json({ nodes: await listTree(d.workspaceRoot, rel === '.' ? '' : rel, depth) })
+  }
+
+  if (p === '/api/files/find') {
+    // 空查询由 `findByName` 判（它回空结果，不回整棵树）——这里不重复一遍。
+    return json(await findByName(d.workspaceRoot, q.get('q') ?? ''))
+  }
+
+  /*
+   * 新建文件 / 目录。**面板这一侧唯一的写入口**。
+   *
+   * 三条硬口径：不合法不落盘（422）、已存在不覆盖（409）、路径越界由
+   * `resolveInWorkspace` 挡。越界翻成 422 而不是让它抛成 500——这是入参问题，
+   * 用户要看到的是「这个路径不在项目里」，不是「服务器错误」。
+   */
+  if (p === '/api/files/create' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as { path?: string; kind?: string } | null
+    const rel = body?.path?.trim()
+    const kind = body?.kind
+    if (!rel || (kind !== 'file' && kind !== 'dir')) {
+      return json({ error: 'invalid', message: '要建的路径和类型都得给' }, 422)
+    }
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel)
+    } catch {
+      return json({ error: 'invalid', message: `${rel} 不在这个项目里` }, 422)
+    }
+    try {
+      return json({ node: await createEntry(d.workspaceRoot, rel, kind) })
+    } catch (err) {
+      if (err instanceof EntryExistsError)
+        return json({ error: 'exists', message: err.message }, 409)
+      throw err
+    }
+  }
+
+  /*
+   * 改名。名字只能是**一个名字**：带分隔符就是搬家，而这颗菜单项写的是「重命名」，
+   * 两件事混在一个接口里，用户在输入框里打个 `../x` 就把文件挪出了当前目录。
+   */
+  if (p === '/api/files/rename' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as { path?: string; name?: string } | null
+    const rel = body?.path?.trim()
+    const name = body?.name?.trim()
+    if (!rel || !name) return json({ error: 'invalid', message: '路径和新名字都得给' }, 422)
+    if (/[/\\]/.test(name) || name === '.' || name === '..') {
+      return json({ error: 'invalid', message: '名字里不能带路径分隔符' }, 422)
+    }
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+    } catch {
+      return json({ error: 'invalid', message: `${rel} 不在这个项目里` }, 422)
+    }
+    try {
+      return json({ node: await renameEntry(d.workspaceRoot, rel, name) })
+    } catch (err) {
+      if (err instanceof EntryExistsError)
+        return json({ error: 'exists', message: err.message }, 409)
+      throw err
+    }
+  }
+
+  /*
+   * 删除。目录连着里面一起删——**确认在界面那一侧**（`ConfirmDialog`），
+   * 这里不再问一遍。空路径直接拒：那指的是工作区根本身。
+   */
+  if (p === '/api/files/delete' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as { path?: string } | null
+    const rel = body?.path?.trim()
+    if (!rel) return json({ error: 'invalid', message: '要删的路径得给' }, 422)
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+    } catch {
+      return json({ error: 'invalid', message: `${rel} 不在这个项目里` }, 422)
+    }
+    await deleteEntry(d.workspaceRoot, rel)
+    return json({ ok: true })
+  }
+
+  /** 保存内置编辑器里的文本；内容版本不一致时拒绝覆盖外部修改。 */
+  if (p === '/api/files/write' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as {
+      path?: string
+      content?: string
+      expectedContentHash?: string
+    } | null
+    const rel = body?.path?.trim()
+    if (
+      !rel ||
+      typeof body?.content !== 'string' ||
+      typeof body.expectedContentHash !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(body.expectedContentHash)
+    ) {
+      return json(
+        { error: 'invalid', message: '需要文件路径、文本内容和打开时的内容版本，请重新打开文件' },
+        422,
+      )
+    }
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+      return json({
+        node: await writeTextEntry(d.workspaceRoot, rel, body.content, body.expectedContentHash),
+      })
+    } catch (err) {
+      if (err instanceof FileChangedError) {
+        return json({ error: 'changed', message: err.message }, 409)
+      }
+      if (err instanceof RangeError) return json({ error: 'too_large', message: err.message }, 413)
+      throw err
+    }
+  }
+
+  /** 复制到同层或指定目录；服务端生成不冲突的副本名，绝不覆盖。 */
+  if (p === '/api/files/copy' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as {
+      path?: string
+      destination?: string
+    } | null
+    const rel = body?.path?.trim()
+    const destination = body?.destination?.trim()
+    if (!rel) return json({ error: 'invalid', message: '要复制的路径得给' }, 422)
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+      if (destination !== undefined) {
+        await resolveInWorkspace(d.workspaceRoot, destination || '.', { mustExist: true })
+      }
+      return json({ node: await copyEntry(d.workspaceRoot, rel, destination || undefined) })
+    } catch (err) {
+      if (err instanceof EntryExistsError) {
+        return json({ error: 'exists', message: err.message }, 409)
+      }
+      return json(
+        { error: 'invalid', message: err instanceof Error ? err.message : String(err) },
+        422,
+      )
+    }
+  }
+
+  /** 移动只收目标文件夹；源名称保持不变，目标存在时不覆盖。 */
+  if (p === '/api/files/move' && req.method === 'POST') {
+    const body = (await req.json().catch(() => null)) as {
+      path?: string
+      destination?: string
+    } | null
+    const rel = body?.path?.trim()
+    const destination = body?.destination?.trim()
+    if (!rel || destination === undefined) {
+      return json({ error: 'invalid', message: '源路径和目标文件夹都得给' }, 422)
+    }
+    try {
+      await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+      await resolveInWorkspace(d.workspaceRoot, destination || '.', { mustExist: true })
+      return json({ node: await moveEntry(d.workspaceRoot, rel, destination || '.') })
+    } catch (err) {
+      if (err instanceof EntryExistsError) {
+        return json({ error: 'exists', message: err.message }, 409)
+      }
+      return json(
+        { error: 'invalid', message: err instanceof Error ? err.message : String(err) },
+        422,
+      )
+    }
+  }
+
+  if (p === '/api/files/preview') {
+    const rel = q.get('path')
+    if (!rel) return json({ error: 'path required' }, 400)
+    await resolveInWorkspace(d.workspaceRoot, rel, { mustExist: true })
+    return json(await preview(d.workspaceRoot, rel))
+  }
+
+  return null
+}

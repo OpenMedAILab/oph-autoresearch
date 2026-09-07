@@ -1,0 +1,467 @@
+import { describe, expect, test } from 'bun:test'
+import type { StepPayload } from '@oph-autoresearch/core'
+import { Store } from './db.ts'
+import {
+  appendStep,
+  createConversation,
+  createRun,
+  fileReadHash,
+  finishRun,
+  getConversation,
+  getRun,
+  listProviderRequests,
+  listSteps,
+  markProviderRequestSent,
+  markRunRunning,
+  markStepExecuting,
+  openProviderRequest,
+  recordFileRead,
+  recoverStaleRuns,
+  setConversationModel,
+  touchRun,
+  upsertWorkspace,
+} from './repos.ts'
+
+function fresh() {
+  const store = new Store({ path: ':memory:' })
+  const ws = upsertWorkspace(store, '/tmp/ws', 'ws')
+  const conv = createConversation(store, {
+    workspaceId: ws.id,
+    provider: 'p',
+    model: 'claude-opus-5',
+    title: 't',
+  })
+  return { store, ws, conv }
+}
+
+function newRun(store: Store, ws: { id: string }, conv: { id: string }) {
+  return createRun(store, {
+    conversationId: conv.id as never,
+    workspaceId: ws.id as never,
+    model: 'claude-opus-5',
+    clientRequestId: crypto.randomUUID(),
+    userMessageId: null,
+    messageIdUpperBound: null,
+    contextSnapshot: [],
+  })
+}
+
+describe('会话级模型切换', () => {
+  test('写入后 getConversation 读到新模型', () => {
+    const { store, conv } = fresh()
+    const updated = setConversationModel(store, conv.id, {
+      provider: 'mirror',
+      model: 'deepseek-v4-pro',
+    })
+    expect(updated?.model).toBe('deepseek-v4-pro')
+    expect(updated?.provider).toBe('mirror')
+    const back = getConversation(store, conv.id)
+    expect(back?.model).toBe('deepseek-v4-pro')
+    // 接口跟着一起换：只写模型的话，同名模型挂在两个接口下时会话归谁靠猜。
+    expect(back?.provider).toBe('mirror')
+    store.close()
+  })
+
+  test('会话不存在时返回 null，不静默成功', () => {
+    const { store } = fresh()
+    expect(
+      setConversationModel(store, 'conv_nope' as never, { provider: 'p', model: 'm' }),
+    ).toBeNull()
+    store.close()
+  })
+})
+
+describe('崩溃恢复', () => {
+  test('没进执行器的 run 判为可安全重来', () => {
+    const { store, ws, conv } = fresh()
+    const run = newRun(store, ws, conv)
+    markRunRunning(store, run.id)
+    // 有 step，但从没调用 markStepExecuting —— 确定没进执行器。
+    appendStep(store, {
+      runId: run.id,
+      seq: 1,
+      kind: 'tool_action',
+      toolName: 'read_file',
+      status: 'running',
+    })
+
+    const result = recoverStaleRuns(store)
+    expect(result.recovered).toBe(1)
+    expect(result.ambiguous).toBe(0)
+
+    const after = getRun(store, run.id)!
+    expect(after.status).toBe('interrupted')
+    /*
+     * **不是 `user_interrupt`。** 用户没点过停止，是服务进程退出了。
+     * 两件事共用一个停止原因的话，事后分不出来，而界面上只会说「已中断」——
+     * 用户看到的是一个自己没做过的动作。判据写在 `recoverStaleRuns` 顶上。
+     */
+    expect(after.stopReason).toBe('process_exit')
+    expect(after.interruption).toMatchObject({
+      source: 'orphan_recovery',
+      ownerPid: process.pid,
+      ambiguousToolExecution: false,
+    })
+    store.close()
+  })
+
+  test('桌面外壳观察到的退出码和 stderr 尾段跟着 run 落库', () => {
+    const { store, ws, conv } = fresh()
+    const run = newRun(store, ws, conv)
+    markRunRunning(store, run.id)
+
+    recoverStaleRuns(store, {
+      source: 'desktop_sidecar',
+      observedAt: 1_725_000_000_000,
+      exitKind: 'terminated',
+      exitCode: -1_073_741_819,
+      signal: null,
+      stderrTail: 'panic at packages/server/src/server.ts:173',
+    })
+
+    const after = getRun(store, run.id)!
+    expect(after.errorMessage).toContain('exit code -1073741819')
+    expect(after.interruption).toMatchObject({
+      source: 'desktop_sidecar',
+      observedAt: 1_725_000_000_000,
+      exitKind: 'terminated',
+      exitCode: -1_073_741_819,
+      stderrTail: 'panic at packages/server/src/server.ts:173',
+      ambiguousToolExecution: false,
+    })
+    store.close()
+  })
+
+  test('已发出但未收尾的 provider 请求随孤儿 run 落成 uncertain', () => {
+    const { store, ws, conv } = fresh()
+    const run = newRun(store, ws, conv)
+    markRunRunning(store, run.id)
+    const request = openProviderRequest(store, {
+      runId: run.id,
+      turnIndex: 0,
+      retryIndex: 0,
+      model: 'claude-opus-5',
+      measuredInputTokens: 123,
+      sentCategories: {} as never,
+      omittedCategories: {} as never,
+      payloadHash: 'payload',
+    })
+    markProviderRequestSent(store, request.id)
+
+    expect(recoverStaleRuns(store).recovered).toBe(1)
+    const [after] = listProviderRequests(store, run.id)
+    expect(after?.status).toBe('uncertain')
+    expect(after?.providerInputTokens).toBeNull()
+    expect(after?.providerOutputTokens).toBeNull()
+    expect(after?.providerCachedTokens).toBeNull()
+    expect(after?.providerCacheWriteTokens).toBeNull()
+    expect(after?.completedAt).not.toBeNull()
+    expect(after?.diagnostic?.retry.decision).toBe('process_exit')
+    store.close()
+  })
+
+  test('进了执行器却没落终态的 run 判为结果不可信', () => {
+    const { store, ws, conv } = fresh()
+    const run = newRun(store, ws, conv)
+    markRunRunning(store, run.id)
+    const step = appendStep(store, {
+      runId: run.id,
+      seq: 1,
+      kind: 'tool_action',
+      toolName: 'run_command',
+      status: 'running',
+    })
+    markStepExecuting(store, step.id)
+
+    const result = recoverStaleRuns(store)
+    expect(result.ambiguous).toBe(1)
+
+    const after = getRun(store, run.id)!
+    expect(after.stopReason).toBe('internal_guard')
+    // 两种情况的 stopReason 必须不同：统一了就分不出「进程崩了」和「用户点了停止」。
+    expect(after.stopReason).not.toBe('user_interrupt')
+    store.close()
+  })
+
+  test('卡在 running 的 step 一并落终态 —— 否则 UI 留一张永远转圈的卡', () => {
+    const { store, ws, conv } = fresh()
+    const run = newRun(store, ws, conv)
+    markRunRunning(store, run.id)
+    const step = appendStep(store, {
+      runId: run.id,
+      seq: 1,
+      kind: 'tool_action',
+      toolName: 'run_command',
+      status: 'running',
+    })
+    markStepExecuting(store, step.id)
+
+    recoverStaleRuns(store)
+
+    const settled = listSteps(store, run.id)[0]!
+    expect(settled.status).toBe('failure')
+    // executed 取保守值 true：无法判定时不能向模型断言「没有副作用」。
+    expect((settled.payload as { outcome: { executed: boolean } }).outcome.executed).toBe(true)
+    store.close()
+  })
+
+  test('落终态只写 outcome —— action 和 args 必须原样留着', () => {
+    const { store, ws, conv } = fresh()
+    const run = newRun(store, ws, conv)
+    markRunRunning(store, run.id)
+    const started = appendStep(store, {
+      runId: run.id,
+      seq: 1,
+      kind: 'tool_action',
+      toolName: 'run_command',
+      status: 'running',
+      payload: {
+        kind: 'tool_call',
+        args: { command: 'docker start sqhj-postgres' },
+        action: { kind: 'run', objectLabel: '命令', target: 'docker start sqhj-postgres' },
+      } as never,
+    })
+    markStepExecuting(store, started.id)
+    const notStarted = appendStep(store, {
+      runId: run.id,
+      seq: 2,
+      kind: 'tool_action',
+      toolName: 'read_file',
+      status: 'running',
+      payload: {
+        kind: 'tool_call',
+        args: { path: 'run.ps1' },
+        action: { kind: 'read', objectLabel: '文件', target: 'run.ps1' },
+      } as never,
+    })
+
+    recoverStaleRuns(store)
+
+    // 接 `StepPayload` 里 tool_result 那一支，不另编形状：这条测的正是收尾之后
+    // 那个 payload 长什么样，编一份的话写入侧改了字段名这里不会红。
+    const payloadOf = (id: string) =>
+      listSteps(store, run.id).find((x) => x.id === id)!.payload as Extract<
+        StepPayload,
+        { kind: 'tool_result' }
+      >
+
+    // action 一丢，这条 step 在会话流里就只剩一个没有主语的「失败」——
+    // 标题（动词 + 对象 + 目标）全部由它提供，前端回猜不出来。
+    for (const id of [started.id, notStarted.id]) {
+      const p = payloadOf(id)
+      expect(p.kind).toBe('tool_result')
+      expect(p.action).toBeDefined()
+      expect(p.args).toBeDefined()
+      expect(p.outcome.status).toBe('failure')
+    }
+
+    const one = payloadOf(started.id)
+    expect(one.action?.objectLabel).toBe('命令')
+    expect(one.args?.command).toBe('docker start sqhj-postgres')
+    // 两种情况的判据不能被这次合并抹平。
+    expect(one.outcome.executed).toBe(true)
+    const two = payloadOf(notStarted.id)
+    expect(two.outcome.executed).toBe(false)
+    expect(two.action?.objectLabel).toBe('文件')
+    store.close()
+  })
+
+  test('已终结的 run 不受影响', () => {
+    const { store, ws, conv } = fresh()
+    const done = newRun(store, ws, conv)
+    finishRun(store, done.id, { status: 'done', stopReason: 'completed' })
+
+    expect(recoverStaleRuns(store).recovered).toBe(0)
+    expect(getRun(store, done.id)?.stopReason).toBe('completed')
+    store.close()
+  })
+
+  test('终态 run 下遗留的 in_flight 请求也收敛为 uncertain', () => {
+    const { store, ws, conv } = fresh()
+    const run = newRun(store, ws, conv)
+    const request = openProviderRequest(store, {
+      runId: run.id,
+      turnIndex: 0,
+      retryIndex: 0,
+      model: 'claude-opus-5',
+      measuredInputTokens: 123,
+      sentCategories: {} as never,
+      omittedCategories: {} as never,
+      payloadHash: 'payload',
+    })
+    markProviderRequestSent(store, request.id)
+    finishRun(store, run.id, { status: 'interrupted', stopReason: 'process_exit' })
+
+    expect(recoverStaleRuns(store).recovered).toBe(0)
+    expect(listProviderRequests(store, run.id)[0]?.status).toBe('uncertain')
+    store.close()
+  })
+
+  test('干净启动时是零成本的 no-op', () => {
+    const { store } = fresh()
+    expect(recoverStaleRuns(store)).toEqual({ recovered: 0, ambiguous: 0, heldByOthers: 0 })
+    store.close()
+  })
+})
+
+/**
+ * **只回收没人在跑的那些。**
+ *
+ * 账本是共享的：两个工作区的 sidecar、开发态热重载、终端里的 `oph exec` 都写它。
+ * 无差别回收会把另一个进程正在跑的一轮判死。实测形状：那条 run 已经跑了
+ * 40 步，第 27 次请求发出后 257 毫秒被写成 interrupted，写入者是刚起来的进程。
+ *
+ * 四条判据两两互补，所以四条都要测：pid 会被复用（只看 pid 会漏），
+ * 崩溃后立刻重启时心跳还是新的（只看心跳会漏）。
+ */
+describe('run 归属', () => {
+  const setOwner = (store: Store, id: string, pid: number, beat: number) =>
+    store.db
+      .query('UPDATE runs SET owner_pid = ?, heartbeat_at = ? WHERE id = ?')
+      .run(pid, beat, id)
+
+  function running() {
+    const f = fresh()
+    const run = newRun(f.store, f.ws, f.conv)
+    markRunRunning(f.store, run.id)
+    return { ...f, run }
+  }
+
+  test('归属进程存活、心跳在推 → 跳过，这是别的进程正在跑的那一轮', () => {
+    const { store, run } = running()
+    // 父进程一定存活，且不是本进程——正是「另一个仍在跑的进程」的形状。
+    setOwner(store, run.id, process.ppid, Date.now())
+
+    const r = recoverStaleRuns(store)
+    expect(r.recovered).toBe(0)
+    expect(r.heldByOthers).toBe(1)
+    expect(getRun(store, run.id)?.status).toBe('running')
+    store.close()
+  })
+
+  test('归属进程存活但心跳已停 → 回收（pid 被复用的兜底）', () => {
+    const { store, run } = running()
+    setOwner(store, run.id, process.ppid, Date.now() - 10 * 60_000)
+
+    expect(recoverStaleRuns(store).recovered).toBe(1)
+    expect(getRun(store, run.id)?.status).toBe('interrupted')
+    store.close()
+  })
+
+  test('归属进程已经没了 → 回收，哪怕心跳是刚推的', async () => {
+    const { store, run } = running()
+    // 真起一个进程再等它退出：拿一个确定已退出的 pid，不靠猜一个大数字。
+    const dead = Bun.spawn([process.execPath, '-e', ''], { stdout: 'ignore', stderr: 'ignore' })
+    await dead.exited
+    setOwner(store, run.id, dead.pid, Date.now())
+
+    expect(recoverStaleRuns(store).recovered).toBe(1)
+    expect(getRun(store, run.id)?.status).toBe('interrupted')
+    store.close()
+  })
+
+  /**
+   * **这条是「不要引入新 bug」的那一条。**
+   *
+   * 崩溃后立刻重启，Windows 把同一个 pid 发给了新进程。此时 pid 存活（就是本进程）、
+   * 心跳才过去两秒——只按这两条判都会认定仍有进程在跑，那条 run 因此永远没人
+   * 回收，会话被 isBusy 永久锁死。所以「归属是本进程」必须单独成一条，且在心跳之前。
+   */
+  test('归属是本进程的 pid → 回收：本进程刚启动，不可能拥有任何 run', () => {
+    const { store, run } = running()
+    setOwner(store, run.id, process.pid, Date.now())
+
+    expect(recoverStaleRuns(store).recovered).toBe(1)
+    expect(getRun(store, run.id)?.status).toBe('interrupted')
+    store.close()
+  })
+
+  test('心跳只推 running 的行 —— 终态 run 不该看起来像还在跑', () => {
+    const { store, run } = running()
+    finishRun(store, run.id, { status: 'done', stopReason: 'completed' })
+    setOwner(store, run.id, process.ppid, 0)
+    touchRun(store, run.id)
+
+    const beat = store.db
+      .query<{ heartbeat_at: number | null }, [string]>(
+        'SELECT heartbeat_at FROM runs WHERE id = ?',
+      )
+      .get(run.id)?.heartbeat_at
+    expect(beat).toBe(0)
+    store.close()
+  })
+})
+
+describe('会话级读记录', () => {
+  test('记下、读回、覆盖只留最近一次', () => {
+    const { store, conv } = fresh()
+    expect(fileReadHash(store, conv.id, 'C:/ws/a.ts')).toBeNull()
+
+    recordFileRead(store, conv.id, 'C:/ws/a.ts', 'h1')
+    expect(fileReadHash(store, conv.id, 'C:/ws/a.ts')).toBe('h1')
+
+    recordFileRead(store, conv.id, 'C:/ws/a.ts', 'h2')
+    expect(fileReadHash(store, conv.id, 'C:/ws/a.ts')).toBe('h2')
+    store.close()
+  })
+
+  test('按会话隔离 —— 另一条会话读过不算你读过', () => {
+    const { store, ws, conv } = fresh()
+    const other = createConversation(store, { workspaceId: ws.id, provider: 'p', model: 'm' })
+    recordFileRead(store, conv.id, 'C:/ws/a.ts', 'h1')
+    expect(fileReadHash(store, other.id, 'C:/ws/a.ts')).toBeNull()
+    store.close()
+  })
+})
+
+describe('终态 run 底下的孤儿 step', () => {
+  /**
+   * **这条是回归测试，挡的是一个真实写错过的形状。**
+   *
+   * 孤儿扫描原本写在「有 stale run」的早退之后，因此最常见的情形——
+   * run 全是终态、底下留着 running step——那趟扫描一次都不会跑。
+   * 而这正是它要治的场景：`tool.started` 的 yield 处被生成器 `.return()`
+   * 掐断，step 已经 running 但没人收尾，随后 run 被标成 interrupted 终态。
+   *
+   * 后果不是「UI 上一张转圈的卡」：历史投影必须跳过含未终结调用的整个 batch，
+   * 一条孤儿会让同批次里**已经成功的写文件结果一起从历史里消失**。
+   */
+  test('没有任何 stale run 时，孤儿 step 照样被收尾', () => {
+    const store = new Store({ path: ':memory:' })
+    const ws = upsertWorkspace(store, 'C:/ws', 'ws')
+    const conv = createConversation(store, { workspaceId: ws.id, provider: 'p', model: 'm' })
+    const run = createRun(store, {
+      conversationId: conv.id,
+      workspaceId: ws.id,
+      model: 'm',
+      clientRequestId: 'c1',
+      userMessageId: null,
+      messageIdUpperBound: null,
+      contextSnapshot: [],
+    })
+    const orphan = appendStep(store, {
+      runId: run.id,
+      seq: 1,
+      kind: 'tool_action',
+      toolName: 'write_file',
+      toolCallId: 'A',
+      providerBatchId: 'b1',
+      callIndex: 0,
+      status: 'running',
+      payload: { kind: 'tool_call', args: { path: 'a.ts' } },
+    })
+    markStepExecuting(store, orphan.id)
+    // run 先落终态——这一步让它逃出「status IN ('running','queued')」那次扫描。
+    finishRun(store, run.id, { status: 'interrupted', stopReason: 'user_interrupt' })
+
+    const result = recoverStaleRuns(store)
+    // 一个 stale run 都没有。
+    expect(result.recovered).toBe(0)
+
+    const settled = listSteps(store, run.id)[0]
+    expect(settled?.status).toBe('failure')
+    // 已进执行器 → 保守标「可能已执行」，不能说没执行。
+    expect((settled?.payload as { outcome?: { executed?: boolean } })?.outcome?.executed).toBe(true)
+    store.close()
+  })
+})

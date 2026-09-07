@@ -1,0 +1,12 @@
+{
+  "name": "@oph-autoresearch/store",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@oph-autoresearch/core": "workspace:*"
+  }
+}

@@ -1,0 +1,451 @@
+/* 授权、手机接入。
+ *
+ * 由 `../app.css` 按固定顺序引入——**顺序即层叠**，不要单独 import 这个文件。 */
+
+/*
+ * 点空白关闭用的遮罩。
+ *
+ * 它是**对话框的兄弟节点**：套成父节点的话，要么是 div 加 onClick（键盘够不着），
+ * 要么是 button 里塞交互内容（无效 HTML，而且得靠 stopPropagation 兜）。
+ * 兄弟结构下两个问题一起消失，代价只是多一层 pass-through 的 CSS。
+ */
+.backdrop-close {
+  position: fixed;
+  inset: 0;
+  z-index: 79;
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  cursor: default;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+/* 遮罩层只负责居中，点击穿透到底下的关闭按钮；对话框自己重新接住点击。 */
+.sheet-backdrop.pass-through {
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+.sheet-backdrop.pass-through > * {
+  pointer-events: auto;
+}
+
+/* ── 授权 ── */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.36);
+  display: grid;
+  place-items: center;
+  padding: var(--s-4);
+}
+
+.sheet {
+  width: min(520px, 100%);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.sheet-tool {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.sheet-preview {
+  margin: 0;
+  padding: var(--s-4);
+  max-height: 40vh;
+  overflow: auto;
+  background: var(--bg-inset);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sheet-actions {
+  display: flex;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+}
+
+.btn {
+  padding: 7px var(--s-4);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-raised);
+  font-size: var(--fs-base);
+  transition: background var(--t-fast) var(--ease);
+}
+.btn:hover {
+  background: var(--bg-hover);
+}
+.btn.ghost {
+  border-color: transparent;
+  color: var(--text-secondary);
+  margin-right: auto;
+}
+/* 前景色走 `--text-inverted`，**不写死 #fff**：强调色是墨色，暗色主题下它是近白，
+   白底白字就没了。 */
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-inverted);
+}
+.btn.primary:hover {
+  background: var(--accent-hover);
+}
+
+/* ── 手机接入 ── */
+.pair-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-3);
+}
+.pair-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  align-self: stretch;
+  font-size: var(--fs-base);
+  cursor: pointer;
+}
+.pair-qr {
+  padding: var(--s-3);
+  border-radius: var(--r-md);
+  /* 二维码必须白底黑码：反色的码大量扫码器识别不了。 */
+  background: #fff;
+  line-height: 0;
+}
+.pair-addrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+  justify-content: center;
+}
+.pair-addr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px var(--s-2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.pair-addr.active {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--accent-soft);
+}
+.pair-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+/* ── 确认弹窗 ──
+   破坏性动作的确认是「打断」，所以它夺焦点、盖遮罩，而不是在列表里就地展开。
+   之前那版塞在侧栏那一行里：232px 宽的栏放不下一句带边界声明的话，
+   折三行、挤开下面的项目、盖在列表上，看起来像列表自己坏了。
+   比 `.sheet` 窄一档——它只有一句话和两个按钮，520px 会显得空。 */
+.confirm-dialog {
+  width: min(400px, 100%);
+  padding: var(--s-4);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
+}
+.confirm-title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+/* 边界声明不折叠、不降对比度（B7）：它不是解释，是这次操作的后果本身。 */
+.confirm-message {
+  margin: var(--s-2) 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin-top: var(--s-4);
+}
+/* 取消不该 `align-self: flex-start`——它在这一行里要和确认按钮同高。 */
+.confirm-actions > .btn-ghost {
+  align-self: auto;
+}
+.btn-primary.danger {
+  background: var(--danger);
+}
+
+.file-move-dialog {
+  width: min(430px, 100%);
+}
+.file-move-field {
+  display: grid;
+  gap: 6px;
+  margin-top: var(--s-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+.file-move-field input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  font-family: var(--font-code);
+  font-size: var(--fs-sm);
+}
+.file-move-field input:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.file-move-help,
+.file-move-error {
+  margin: 7px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.file-move-error {
+  color: var(--danger);
+}
+
+/* ── 新建 work ──
+   比确认框宽一档：它有两个字段和一块可能很长的路径。 */
+.new-project {
+  width: min(440px, 100%);
+  padding: var(--s-4);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
+}
+.np-field {
+  display: block;
+  margin-top: var(--s-4);
+}
+.np-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.np-input {
+  width: 100%;
+  padding: 7px var(--s-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-xs);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-md);
+}
+.np-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* 没选文件夹时是一块虚线区：它是一个待填的位置，不是一条已经成立的信息。 */
+/*
+ * **两种状态必须一样高。**
+ *
+ * 选了文件夹之后这一块从「虚线空框」变成「一行路径」，高度一变，整个弹窗
+ * 就跟着长高或缩短——弹窗在用户眼皮底下改尺寸，按钮位置跟着跳，
+ * 上一秒瞄准的「创建项目」下一秒不在那儿了。
+ *
+ * 固定高度而不是让内容撑：`min-height` 取空态那一档，选中态在里面垂直居中。
+ * 路径长了在框内换行并滚动，**不把外面撑开**。
+ */
+.np-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  box-sizing: border-box;
+  min-height: 88px;
+  max-height: 88px;
+  overflow-y: auto;
+  padding: var(--s-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.np-folder.empty {
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  border-style: dashed;
+}
+.np-pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--s-3);
+  border-radius: var(--r-xs);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.np-pick:hover {
+  background: var(--bg-hover);
+}
+/* 边界声明不降对比度也不折叠（B7）：它说的是「留空会发生什么」。 */
+.np-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+/* 路径不截断——它正是这一行存在的理由。 */
+.np-path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+.np-clear {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.np-clear:hover {
+  background: var(--bg-hover);
+}
+.np-error {
+  margin: var(--s-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--danger);
+}
+
+/* ── 悬停提示 ── */
+/*
+ * 自带一条完整规则，不与菜单、面板共用选择器（改一处不会牵到另一处）。
+ *
+ * 反白实心、无描边：这一层要的是「浮在界面之上的一小块注解」，
+ * 描边加投影会让它读成又一个卡片，和菜单撞在一起。
+ * 位置由 `Tooltip.tsx` 写进 transform，这里不设 top/left 之外的定位。
+ */
+.tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 95;
+  max-width: 300px;
+  padding: 5px var(--s-2);
+  border-radius: var(--r-sm);
+  background: var(--text-primary);
+  color: var(--bg-app);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.tooltip.show {
+  opacity: 1;
+}
+
+.np-browser {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+.np-directory-list {
+  display: grid;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+}
+.np-directory-list .np-pick {
+  justify-content: flex-start;
+  text-align: left;
+}
+.new-project {
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.cli-model-row {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+.cli-model-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cli-model-title > span {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+.cli-model-path {
+  overflow-wrap: anywhere;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.cli-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.cli-model-row .remote-history-empty {
+  padding: 0;
+  margin: 0;
+  text-align: left;
+}
+.cli-model-actions input,
+.cli-model-actions select {
+  flex: 1;
+  min-width: 200px;
+  width: auto;
+}
+
+.model-cli-note {
+  padding: 0 10px 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.ssh-cli-host {
+  padding: 12px 0;
+}
+.ssh-cli-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

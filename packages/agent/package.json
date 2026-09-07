@@ -1,0 +1,14 @@
+{
+  "name": "@oph-autoresearch/agent",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@oph-autoresearch/ai": "workspace:*",
+    "@oph-autoresearch/core": "workspace:*",
+    "@oph-autoresearch/store": "workspace:*"
+  }
+}

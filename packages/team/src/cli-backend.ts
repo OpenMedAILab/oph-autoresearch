@@ -1,0 +1,206 @@
+/**
+ * 外部 CLI 的执行器：替换参数、起进程、解析输出。
+ *
+ * 调什么、怎么调由 `cli-detect.ts` 的厂商表给（那里也写着表会过期的代价），
+ * 这里只负责执行。
+ *
+ * **凭证：透传但要剥掉**本仓自己的**。** 这里与 `run_command` 不同：被调度的 CLI **需要它自己的 key
+ * 才能执行** （codex 要 OPENAI_API_KEY，claude 要 ANTHROPIC_API_KEY），所以不能像 `run_command` 那
+ * 样按名字一律剥掉。
+ *
+ * 但 oph-autoresearch 自己配置里那些 key 它一把都用不上——按**值**剥掉即可：
+ * 用户在 `~/.oph-autoresearch/config.json` 里配的 DeepSeek key 没有任何理由出现在
+ * codex 的进程里。这条剥的是「多余的凭证」，不影响后端正常工作。
+ *
+ * 另外，能被调起的只有厂商表里那几家、且用户在设置页允许的那几家，属于知情同意——
+ * 与 MCP server 同一档。所以这里不加裁决，只做凭证收敛。
+ */
+
+import { collectProcess, scrubEnv } from '@oph-autoresearch/tools'
+import type { CliAgent } from './types.ts'
+
+const DEFAULT_TIMEOUT = 10 * 60 * 1000
+
+/**
+ * 追加在任务后面的输出格式约定。
+ *
+ * **交付物正文必须在前、回执作尾节**：`extract` 取的是最后一个非空目标字段，
+ * 回执写在前面时，查询型任务的产出会变成一句状态汇报，而不是它的答案。
+ *
+ * 不照格式输出只是降级，不是失败：成败以退出码为准；回执信息不足时续接会话追问
+ * （`runCli` 的 `resume`），该会话保留上一轮上下文。
+ */
+const REPORT_CONTRACT = `
+
+## 输出格式
+
+先输出交付物正文（任务要求的答案、结论或改动说明），再以下列小节收尾。
+
+### 回执
+- 变更文件：逐条列出路径及该文件的改动要点；无变更时写「无」
+- 实现方式：一至两句
+- 未完成项：无则写「无」
+`
+
+export interface CliRunResult {
+  ok: boolean
+  output: string
+  exitCode: number
+  timedOut: boolean
+  stderr: string
+  /**
+   * 该 CLI 这条会话的 id，用于续接（`runCli` 的 `resume`）。
+   *
+   * 只有厂商表里写了 `sessionField` 的那几家有；其余的这个键缺席，
+   * 调用方只能新建会话。
+   */
+  session?: string
+}
+
+export async function runCli(
+  agent: CliAgent,
+  input: {
+    prompt: string
+    workspaceRoot: string
+    signal: AbortSignal
+    /**
+     * 续接该 CLI 的既有会话。会话保留上一轮上下文，可直接就其产出追问；
+     * 新建会话则会把任务重新执行一遍。
+     *
+     * **只有厂商表里给了 `resumeArgs` 的那几家支持，调用方先判再传。**
+     */
+    resume?: string
+    /**
+     * oph-autoresearch 自己的凭证。按值剥掉——后端用不上，也就没有理由拿到。
+     * 不传等于「没有已知凭证」，不等于「不用剥」。
+     */
+    secrets?: { values: string[] }
+    /**
+     * 边跑边给一块。**不给这个回调就等于跑完才有输出**——外部 CLI 是本机另一个进程，
+     * 它写了什么在结束之前一个字都看不到。
+     */
+    onChunk?: (text: string) => void
+    /** A caller-scoped bridge; never inherit ambient controller credentials. */
+    env?: Record<string, string>
+  },
+): Promise<CliRunResult> {
+  const template = input.resume ? (agent.resumeArgs ?? agent.args) : agent.args
+  const args = template.map((a) =>
+    a
+      .replaceAll('{prompt}', input.prompt + REPORT_CONTRACT)
+      .replaceAll('{session}', input.resume ?? ''),
+  )
+  const timeout = agent.timeoutMs ?? DEFAULT_TIMEOUT
+
+  // 一律跑在工作区根下：派活给外部 CLI 是「在这个项目里干一件事」，
+  // 它自己的工作目录不该由这里的配置面再开一个旋钮。
+  const proc = Bun.spawn([agent.command, ...args], {
+    cwd: input.workspaceRoot,
+    // 关掉 stdin：被调度的 CLI 若想交互提问，这里没有人能回答，
+    // 开着只会让它挂到超时。
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: {
+      // 只按**值**剥。名字模式那条会把后端自己要用的
+      // ANTHROPIC_API_KEY / OPENAI_API_KEY 一起剥掉，后端直接无法执行，
+      // 所以下面把整份环境放进 allow。
+      ...scrubEnv(
+        process.env,
+        { values: input.secrets?.values ?? [] },
+        {
+          // 名字模式匹配同样会误伤后端需要的 key，这里靠值匹配就够。
+          allow: Object.keys(process.env),
+        },
+      ),
+      CI: '1',
+      NO_COLOR: '1',
+      TERM: 'dumb',
+      ...(input.env ?? {}),
+    },
+  })
+
+  // 等待与收尾走同一个收口：完成判据是进程退出而不是管道 EOF，超时与中断都走**树杀**。
+  // 被调度的 CLI 自己也在跑一个 agent，必然派生子进程；只杀它一个的话那些仍在运行，
+  // 因此用户点了停止、这里却还在等一个永远不会到的 EOF。
+  const got = await collectProcess(proc, {
+    timeoutMs: timeout,
+    signal: input.signal,
+    // `onText` 的返回值是「真正记进结果的那一段」，所以必须原样回传：
+    // 它是脱敏器的挂点，不是给旁观者用的。这里只额外复制一份出去。
+    ...(input.onChunk
+      ? {
+          onText: (_channel: 'stdout' | 'stderr', text: string) => {
+            input.onChunk?.(text)
+            return text
+          },
+        }
+      : {}),
+  })
+
+  const session = agent.sessionField ? field(got.stdout, agent, agent.sessionField) : ''
+
+  return {
+    ok: got.exitCode === 0 && !got.timedOut,
+    output: extract(got.stdout, agent),
+    exitCode: got.exitCode,
+    timedOut: got.timedOut,
+    // stderr 只留尾部：CLI 的进度条能刷出几万行，全留会把上下文撑爆。
+    stderr: got.stderr.length > 4000 ? got.stderr.slice(-4000) : got.stderr,
+    ...(session ? { session } : {}),
+  }
+}
+
+/**
+ * 按点分路径从 stdout 里取一个字符串。三种输出各有各的取法：
+ *
+ * - `text`：没有结构可取，回空串（调用方自己回退到整段）。
+ * - `jsonl`：逐行 JSON，取**最后一个**非空值——agent 类 CLI 的流里最终答案总在末尾，
+ *   取第一个会拿到开跑那条状态行。
+ * - `json`：整段 stdout 是**一个**对象（grok 那种，而且是缩进过的多行），
+ *   只能整段解析；逐行解析对它一行都取不到。
+ *
+ * 取路径而不是键名，是因为各家埋的深浅不同：claude 的答案与会话 id 都在顶层，
+ * codex 的答案在 `item.text`。
+ */
+function field(stdout: string, agent: Pick<CliAgent, 'output'>, path: string): string {
+  const keys = path.split('.')
+  const walk = (root: unknown): string => {
+    let v = root
+    for (const key of keys) {
+      v = v && typeof v === 'object' ? (v as Record<string, unknown>)[key] : undefined
+    }
+    return typeof v === 'string' && v.trim() ? v : ''
+  }
+  if (agent.output === 'text') return ''
+  if (agent.output === 'json') {
+    try {
+      return walk(JSON.parse(stdout))
+    } catch {
+      return ''
+    }
+  }
+  let last = ''
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      const got = walk(JSON.parse(trimmed))
+      if (got) last = got
+    } catch {
+      // 不是 JSON 的行直接跳过：很多 CLI 会往 stdout 混入非结构化的横幅。
+    }
+  }
+  return last
+}
+
+/**
+ * 从 stdout 提取结果。
+ *
+ * 取不到时回退到整段 stdout——返回空字符串在调用方看来是任务成功但没产出，
+ * 比给出原始输出更糟。
+ */
+export function extract(stdout: string, agent: Pick<CliAgent, 'output' | 'resultField'>): string {
+  if (agent.output === 'text') return stdout.trim()
+  return field(stdout, agent, agent.resultField ?? 'result') || stdout.trim()
+}

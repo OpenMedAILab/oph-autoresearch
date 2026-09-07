@@ -1,0 +1,133 @@
+import { createSignal, onMount, Show } from 'solid-js'
+import { panelTabUrl, setPanelTabUrl } from '../lib/store/index.ts'
+import { IconRefresh } from './Icons.tsx'
+
+/**
+ * 浏览器预览页：一条地址栏加一个 iframe。用来看本机起的服务（dev server、
+ * 自己写的页面），所以地址由用户给——**不猜端口**，猜出来的地址打不开比空着更费解。
+ *
+ * **只做「看」，不做浏览器的壳。** 没有前进 / 后退，也不回读当前地址：iframe 里是另一个源，
+ * `contentWindow.history` 与 `location` 既读不到也调不动（同源策略）。做出来的按钮点了什么也不会发
+ * 生（B5）。因此地址栏显示的是**请求打开的那个地址**——在页面里点链接跳走之后它不跟着变。
+ *
+ * **`sandbox` 不是可选的。** 不带它的话，被预览的页面一句 `top.location = ...` 就能把整个应用窗口导
+ * 航走，那时除了重启没有出路。sandbox 默认禁掉顶层导航；`allow-scripts` + `allow-same-origin` 只是
+ * 让被预览的页面**保持它自己的源**（用得上 localStorage、调得动自己的接口），拿不到宿主这一侧的任
+ * 何数据。**不要加 `allow-popups`**：新窗口会开在同一个 WebView 里，正好绕过上面那条。
+ *
+ * 桌面端另需 CSP 放行（`tauri.conf.json` 的 `frame-src`），少了它 iframe 直接空白，
+ * 而且只在打包后的构建里空白——`tauri dev` 的页面由 vite 提供，不走那份 CSP。
+ *
+ * **`allow` 与 `sandbox` 管的不是一件事。** `autoplay` 权限策略的默认允许列表是 `self`，跨源 iframe
+ * 拿不到——不给它，被预览页面里的 `<audio>` / `<video>` 带声播放会被拒（Web Audio 有用户手势时不
+ * 受此限）。
+ *
+ * **地址栏只接受 http(s)**：`file:` 在 iframe 里被内核直接拒（`Not allowed to load
+ * local resource`），CSP 放行也没用；本地 html 只能起个静态服务器再填它的地址。
+ */
+
+/** 补协议：用户习惯只打 `localhost:3000`。预览的是本机服务，所以补 `http://`。 */
+function normalize(raw: string): string {
+  const s = raw.trim()
+  if (!s) return ''
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `http://${s}`
+}
+
+export default function BrowserPanel(props: { id: string }) {
+  // 地址记在页签记录上，不记在组件里：收起面板这个组件就没了（见 `PanelTab.url`）。
+  const url = () => panelTabUrl(props.id)
+  const [draft, setDraft] = createSignal(url())
+  /**
+   * 按过几次刷新。**同一个地址要重新加载只能把 iframe 整个换掉**：跨源的 iframe
+   * 调不动 `location.reload()`，而把 `src` 重设成同一个字符串不会触发加载。
+   */
+  const [reloads, setReloads] = createSignal(0)
+
+  /** keyed 的键。地址或刷新次数一变就是一个新对象 → iframe 重建 → 真的重新加载。 */
+  const frame = () => (url() ? { src: url(), nth: reloads() } : null)
+
+  const go = () => {
+    const next = normalize(draft())
+    setDraft(next)
+    if (!next) return
+    /*
+     * 别的 scheme 拒在这里，不要交给 iframe。
+     *
+     * 交给它的话地址照样填进去、iframe 照样建出来，然后内核把加载直接拒掉：
+     * 用户面前是一块没有任何解释的空白（实测 `file:` 只在控制台留一句
+     * `Not allowed to load local resource`，`ftp:` 连那句都没有）。
+     * 用输入框自己的校验气泡说一句，不为它另起一块错误区。
+     */
+    if (!/^https?:\/\//i.test(next)) {
+      input.setCustomValidity('只能打开 http / https 地址')
+      input.reportValidity()
+      return
+    }
+    // 同一个地址再按回车 = 刷新。不做的话这次回车没有任何反馈。
+    if (next === url()) {
+      setReloads((n) => n + 1)
+      return
+    }
+    setPanelTabUrl(props.id, next)
+  }
+
+  let input!: HTMLInputElement
+  onMount(() => {
+    // 新开一页就是要打地址，焦点直接给它。已经有地址的（收起再展开、正文里点开的）不抢焦点。
+    if (!url()) input.focus()
+  })
+
+  return (
+    <div class="web-panel">
+      {/* 用 form 而不是在 input 上接 Enter：提交语义由表单自带，手机虚拟键盘上那颗
+          「前往」也跟着能用。 */}
+      <form
+        class="web-bar"
+        onSubmit={(e) => {
+          e.preventDefault()
+          go()
+        }}
+      >
+        <input
+          class="web-url"
+          ref={input}
+          // **不能用 `type="url"`**：那会开浏览器自带的校验，`localhost:3000`
+          // 不带协议直接被判不合法，表单提交被静默拦下，按回车没有任何反应。
+          type="text"
+          spellcheck={false}
+          placeholder="localhost:3000"
+          value={draft()}
+          // **改一个字就要把校验清掉。** 留着非空的 customValidity，原生校验会
+          // 直接拦下提交、`onSubmit` 一次都不再跑——用户改对了地址也按不动。
+          onInput={(e) => {
+            setDraft(e.currentTarget.value)
+            e.currentTarget.setCustomValidity('')
+          }}
+        />
+        {/* 没有地址时禁用，而不是不渲染：按钮出现与消失会让地址栏输入框跟着变宽变窄。 */}
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="刷新"
+          data-tip="刷新"
+          disabled={!url()}
+          onClick={() => setReloads((n) => n + 1)}
+        >
+          <IconRefresh size={14} />
+        </button>
+      </form>
+
+      <Show when={frame()} keyed>
+        {(f) => (
+          <iframe
+            class="web-frame"
+            src={f.src}
+            title="预览"
+            sandbox="allow-scripts allow-same-origin allow-forms"
+            allow="autoplay; fullscreen"
+          />
+        )}
+      </Show>
+    </div>
+  )
+}

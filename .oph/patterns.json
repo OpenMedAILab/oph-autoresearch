@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "patterns": [
+    {
+      "id": "candidate-challenge-synthesis",
+      "name": "候选—反证—综合",
+      "stages": ["问题建模", "方案冻结"],
+      "topology": [
+        "parallel_candidates",
+        "independent_challenge",
+        "synthesis",
+        "tool_verification",
+        "checkpoint"
+      ],
+      "defaultConcurrency": 3
+    },
+    {
+      "id": "distributed-audit",
+      "name": "分布式数据审计",
+      "stages": ["数据审计"],
+      "topology": ["partitioned_readonly_audits", "leakage_challenge", "synthesis", "checkpoint"],
+      "defaultConcurrency": 4
+    },
+    {
+      "id": "experiment-dag",
+      "name": "远程实验 DAG",
+      "stages": ["远程实验"],
+      "topology": ["isolated_experiment_tracks", "stress_tests", "receipt_audit", "checkpoint"],
+      "defaultConcurrency": 2
+    },
+    {
+      "id": "self-verification",
+      "name": "独立自验证",
+      "stages": ["独立复核"],
+      "topology": [
+        "fresh_context_review",
+        "recalculation",
+        "falsification",
+        "evidence_map",
+        "checkpoint"
+      ],
+      "defaultConcurrency": 3
+    },
+    {
+      "id": "document-review",
+      "name": "证据约束文档审查",
+      "stages": ["研究输出"],
+      "topology": [
+        "draft",
+        "citation_check",
+        "statistics_check",
+        "reproducibility_check",
+        "synthesis",
+        "checkpoint"
+      ],
+      "defaultConcurrency": 3
+    }
+  ]
+}

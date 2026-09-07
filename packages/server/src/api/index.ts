@@ -1,0 +1,119 @@
+import { handleCliPreparationsApi } from './cli-preparations.ts'
+import { handleResearchAssistantApi } from './research-assistant.ts'
+/**
+ * HTTP API 的派发器。
+ *
+ * 拆开之前这些全在 `server.ts` 的一个 439 行函数里，而那个文件同时还装着
+ * 握手、指令分发、run 生命周期、team 编排、压缩和静态托管。同目录的
+ * `files.ts` / `git.ts` / `runs.ts` / `pairing.ts` / `bus.ts` 早就是一域一文件，
+ * **拆分模式一直在旁边，只是这一块没跟上**。
+ *
+ * 顺序有意义：**先匹配的先赢**。当前各域路径前缀互不重叠，所以顺序目前
+ * 只影响性能不影响语义；但如果哪天加了会重叠的路由，这里就是决定谁优先的地方，
+ * 而不是让两个模块各自判一遍再看谁先返回。
+ */
+
+import type { Store } from '@oph-autoresearch/store'
+import { getWorkspace, mostRecentWorkspace } from '@oph-autoresearch/store'
+import { handleAttachmentsApi } from './attachments.ts'
+import { handleConfigApi } from './config.ts'
+import { handleResearchControlApi } from './controller-bridge.ts'
+import { handleConversationsApi } from './conversations.ts'
+import { handleExtrasApi } from './extras.ts'
+import { handleFormalExecutionApi } from './formal-execution.ts'
+import { handleGitApi } from './git.ts'
+import { handleHostApi } from './host.ts'
+import { handleMcpApi } from './mcp.ts'
+import { handleMemoryApi } from './memory.ts'
+import { handlePairingApi } from './pairing.ts'
+import { handlePluginsApi } from './plugins.ts'
+import { handleProbeApi } from './probe.ts'
+import { handleProviderModelsApi } from './provider-models.ts'
+import { handleResearchApi } from './research.ts'
+import { handleResearchDocumentsApi } from './research-documents.ts'
+import { handleSchedulesApi } from './schedules.ts'
+import { handleSshApi } from './ssh.ts'
+import { handleTeamApi } from './team.ts'
+import type { ApiDeps, ApiHandler, ApiRequestDeps } from './types.ts'
+import { json } from './types.ts'
+import { handleUsageApi } from './usage.ts'
+import { handleWorkspaceApi } from './workspace.ts'
+import { handleWorkspaceFsApi } from './workspace-fs.ts'
+
+export type { ApiDeps } from './types.ts'
+export { json } from './types.ts'
+
+/**
+ * 这一次请求问的是哪个项目。
+ *
+ * `?ws=<workspaceId>` 显式指定；不带就落到**最近打开的那个**
+ * （`listWorkspaces` 已按 `last_opened_at DESC` 排序）。回落是给 CLI 和
+ * 手输 URL 用的——界面永远显式带上，因为它同时开着好几个项目。
+ *
+ * 指了一个不存在的 id 返回 `null`，由派发器回 404：静默回落到别的项目，
+ * 等于在用户选定 A 的位置上读写 B。
+ */
+function resolveWorkspace(store: Store, url: URL): { id: string; root: string } | null {
+  const id = url.searchParams.get('ws')
+  if (id) {
+    const w = getWorkspace(store, id as never)
+    return w ? { id: w.id, root: w.rootPath } : null
+  }
+  const recent = mostRecentWorkspace(store)
+  return recent ? { id: recent.id, root: recent.rootPath } : null
+}
+
+const HANDLERS: ApiHandler[] = [
+  handlePairingApi,
+  handleWorkspaceApi,
+  handleConfigApi,
+  handleProviderModelsApi,
+  handleProbeApi,
+  handleSchedulesApi,
+  handleSshApi,
+  handleMemoryApi,
+  handleMcpApi,
+  handleExtrasApi,
+  handleHostApi,
+  handleAttachmentsApi,
+  handlePluginsApi,
+  handleTeamApi,
+  handleUsageApi,
+  handleResearchControlApi,
+  handleResearchAssistantApi,
+  handleResearchDocumentsApi,
+  handleCliPreparationsApi,
+  handleFormalExecutionApi,
+  handleResearchApi,
+  handleConversationsApi,
+  handleWorkspaceFsApi,
+  handleGitApi,
+]
+
+/** 返回 `null` = 没有任何一域认领这条路径，交给调用方去走静态托管或 404。 */
+export async function handleApi(url: URL, req: Request, d: ApiDeps): Promise<Response | null> {
+  const ws = resolveWorkspace(d.store, url)
+  if (!ws) {
+    // 指名道姓要一个不存在的项目：404。静默换一个等于在用户选定 A 的位置上读写 B。
+    if (url.searchParams.get('ws')) return json({ error: '这个项目不存在' }, 404)
+    // 空状态只允许项目创建、目录浏览和不依赖项目的系统配置。
+    // 项目相关接口继续拒绝，避免空路径被解释为进程当前目录。
+    const globalDeps = { ...d, workspaceRoot: '', workspaceId: '' }
+    for (const handler of [handleConfigApi, handleHostApi, handleSshApi]) {
+      const response = await handler(url, req, globalDeps)
+      if (response) return response
+    }
+    if (url.pathname === '/api/workspace' && req.method === 'GET') return json(null)
+    if (url.pathname === '/api/conversations' && req.method === 'GET')
+      return json({ conversations: [] })
+    if (!['/api/workspaces', '/api/workspace-folders'].includes(url.pathname))
+      return json({ error: '还没有任何项目' }, 404)
+    return handleWorkspaceApi(url, req, { ...d, workspaceRoot: '', workspaceId: '' })
+  }
+  const rd: ApiRequestDeps = { ...d, workspaceRoot: ws.root, workspaceId: ws.id }
+  for (const handle of HANDLERS) {
+    const res = await handle(url, req, rd)
+    if (res) return res
+  }
+  return null
+}

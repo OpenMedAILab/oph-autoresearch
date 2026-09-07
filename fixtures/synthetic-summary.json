@@ -1,0 +1,8 @@
+{
+  "schema": "synthetic-summary-v1",
+  "input": {
+    "modality": "synthetic-retinal-intensity",
+    "values": [12, 18, 25, 31, 44, 52, 60, 73]
+  },
+  "inputHash": "sha256:43e5f2a62bb17464cf45a9f8f0f00ed73922843690f24262fa3ae031ef4b1e49"
+}

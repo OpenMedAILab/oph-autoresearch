@@ -1,0 +1,19 @@
+{
+  "name": "@oph-autoresearch/runtime",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@oph-autoresearch/agent": "workspace:*",
+    "@oph-autoresearch/ai": "workspace:*",
+    "@oph-autoresearch/core": "workspace:*",
+    "@oph-autoresearch/plugins": "workspace:*",
+    "@oph-autoresearch/store": "workspace:*",
+    "@oph-autoresearch/team": "workspace:*",
+    "@oph-autoresearch/tools": "workspace:*",
+    "@oph-autoresearch/mcp": "workspace:*"
+  }
+}

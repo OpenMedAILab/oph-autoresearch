@@ -1,0 +1,23 @@
+{
+  "name": "@oph-autoresearch/cli",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "oph": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "bun build ./src/index.ts --compile --minify --outfile ../../dist/oph"
+  },
+  "dependencies": {
+    "@oph-autoresearch/core": "workspace:*",
+    "@oph-autoresearch/runtime": "workspace:*",
+    "@oph-autoresearch/server": "workspace:*",
+    "@oph-autoresearch/store": "workspace:*",
+    "@oph-autoresearch/tools": "workspace:*",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.6"
+  }
+}

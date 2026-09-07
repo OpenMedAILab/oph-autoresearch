@@ -1,0 +1,15 @@
+{
+  "name": "@oph-autoresearch/desktop",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "bun run --cwd ../.. dev",
+    "build": "bun run --cwd ../.. tauri:build",
+    "sidecar": "bun run ../../scripts/build-sidecar.ts"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}

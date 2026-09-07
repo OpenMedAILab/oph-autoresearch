@@ -1,0 +1,14 @@
+{
+  "name": "@oph-autoresearch/ai",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@oph-autoresearch/core": "workspace:*",
+    "openai": "^6.9.0"
+  }
+}

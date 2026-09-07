@@ -1,0 +1,507 @@
+/**
+ * shell 工具。
+ *
+ * 这是权限模型里最危险的一个工具：一条命令能做的事没有上界。设计取舍是
+ * **不假装能靠字符串检查把它变安全**——命令注入的黑名单从来挡不住构造。
+ * 真正的防线是：
+ *
+ * 1. 每次调用都过权限闸（`auto` 模式下由规则与分类器裁决，不弹窗）。
+ * 2. cwd 强制锁在允许的根目录内（工作区 + 显式配置的额外目录）。
+ * 3. **凭证不进这个进程**，输出里出现的凭证明文也要屏蔽掉，见下。
+ * 4. 硬性超时 + 输出上限，防止把内存和上下文撑爆。
+ * 5. 不经 shell 解释符做「安全化」处理——原样交给裁决过的那条命令。
+ * 6. **有内核沙箱的平台上再套一层**（`sandbox.ts`）：这一层不看命令长什么样，
+ *    它补的正是前五条挡不住的那个缺口——「没想到的写法」。
+ *
+ * **第 3 条单独算一条防线：绝不能是 `env: { ...process.env }`**——那等于让模型自己编的命令继承整份
+ * 环境，包括 `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY`。而模型的输出是不可信输入：它读到的网页、依
+ * 赖的 README、`AGENTS.md` 里一句提示注入就够了。
+ *
+ * 光靠 OS 级沙箱不够：沙箱**有平台就有，没有就没有**，原生 Windows 上目前一层
+ * 都没有（`sandbox.ts` 会如实这么报）。剥环境变量则在每个平台上都成立，
+ * 所以它不是沙箱的替代品，是它的下位保底：拿不到明文，泄露就不会跨出这台机器。
+ *
+ * 剥的同时输出侧也要屏蔽：只堵输入侧的话，一句 `cat .env` 照样把 key
+ * 送进上下文再发给 provider。屏蔽发生在**落盘与回传之前**——
+ * 先落盘再屏蔽的话，磁盘上那份仍是明文。
+ *
+ * agent 用的是管道（不是 PTY）：交互式终端面板走 Tauri 的 portable-pty，
+ * 那是给人用的，与这里无关。
+ */
+
+import { isIP } from 'node:net'
+import {
+  chargeBatchBudget,
+  deliveredTokens,
+  type ToolContext,
+  type ToolSpec,
+} from '@oph-autoresearch/agent'
+import type { IntermediateResourceRef } from '@oph-autoresearch/core'
+import { classifyAddress } from './net-safety.ts'
+import { PROTECTED_DIRS, resolveInWorkspace, rootsOf } from './paths.ts'
+import {
+  type CommandShell,
+  collectProcess,
+  killTree,
+  type SandboxPolicy,
+  spawnGuarded,
+} from './sandbox.ts'
+import { createStreamRedactor, scrubEnv } from './secrets.ts'
+import { deliver } from './sink.ts'
+
+const DEFAULT_TIMEOUT_MS = 120_000
+const MAX_TIMEOUT_MS = 600_000
+/** 无输出的长命令也要给界面活性证据，避免正常构建看起来像进程卡死。 */
+const COMMAND_HEARTBEAT_MS = 15_000
+
+/**
+ * 命令退出了，但它留下的后代进程还握着输出管道。
+ *
+ * 必须说出来：模型据此才知道后台留了个进程（起服务的脚本就是这个形状），
+ * 以及那个进程之后的输出**不会**再进这次结果——要看只能去它自己的日志。
+ * 不说的话，这件事在回话里完全不可见，而它是这类命令唯一要紧的事实。
+ */
+const BACKGROUND_HELD =
+  '。注意：命令已退出，但它留下的后台进程仍在运行并持有输出管道——' +
+  '本次结果只含命令自身的输出，那个进程此后的输出不在其中。'
+
+/**
+ * 这条调用实际会在多少毫秒后被强制终止。
+ *
+ * **导出是因为裁决层要用同一个数。** 超时到点是无条件树杀，而完成判据是进程退出、
+ * 不是管道 EOF（见 `collectProcess`），所以「这条命令会不会一直挂着」在这个工具里
+ * 有个确定答案——
+ * 裁决层看不到这个数的话只能按命令字面判，因此把带 3 秒超时的
+ * `python -m http.server` 按「不会自己退出的服务器」拒掉。
+ *
+ * 两处各算一遍必然漂移，而漂移的表现是**裁决时说的那个数和真正生效的不是同一个**
+ * ——那比不告诉它更糟。
+ */
+export function resolveCommandTimeout(timeoutMs: unknown): number {
+  return Math.min(MAX_TIMEOUT_MS, Math.max(1000, Number(timeoutMs ?? DEFAULT_TIMEOUT_MS)))
+}
+
+/**
+ * 兼容部分 OpenAI 协议模型把可选字段的空值序列化成字符串。
+ * 这些值与字段缺席同义，不应让模型因为一个无意义的探测地址反复重试。
+ */
+export function normalizeProbeUrl(raw: unknown): string {
+  const value = typeof raw === 'string' ? raw.trim() : ''
+  return /^(null|undefined)$/i.test(value) ? '' : value
+}
+
+/**
+ * `run_command` 的规格。**语法提示由传进来的 shell 说了算，而且排在描述第一句。**
+ *
+ * 做成工厂而不是常量，是因为「跑哪个 shell」现在是一种能力状态（`commandShell()`
+ * 三选一或者返回 null）：没有 shell 就不该造出这个 spec，注册处直接跳过它。
+ * 参数是 shell 对象本身而不是让这里再取一次——再取一次就是两本账，
+ * 而漂移的表现是「说明里写的 shell 和真正执行的不是同一个」。
+ *
+ * **为什么语法在第一句，而且 bash 也不例外。** `run_command` 这个名字不携带语法，模型的默认输出是
+ * bash，所以语法信息只剩描述一个来源——**埋在第三句等于没说**（前两句先讲了「执行一条 shell 命
+ * 令」「用于构建、测试、包管理」，读到那里模型已经按默认语法生成了）。
+ *
+ * 不写成「非 bash 才前置」：那是一条按语法分叉的排版规则，而分叉的表现是某一档
+ * 忘了前置，且只在那台机器上才看得见。一份排版，三档共用。
+ */
+export function makeShellTool(shell: CommandShell): ToolSpec {
+  return {
+    name: 'run_command',
+    description:
+      `${shell.hint}` +
+      // 这一句**放在这里而不是三档 hint 里**：它与是哪个 shell 无关，
+      // 三档各写一遍必然漂移。bash 直接跑 `.ps1`、PowerShell 直接跑 `.sh`、
+      // 两者直接跑 `.py`，失败形状都是命令找不到。
+      '执行其他解释器的脚本需显式调用对应解释器。' +
+      '在工作区里执行一条命令并返回 stdout/stderr 与退出码。' +
+      '用于构建、测试、包管理、git 等操作。命令会流式回传输出。' +
+      '需要读文件用 read_file，需要找文件用 glob/grep——它们更快也更省上下文，不要用 cat/find/grep 代替。' +
+      // 限长本来就由本工具做，这一句是为了掐掉模型自己接 `| tail` 的理由——
+      // 那类命令要等输入 EOF，而后台进程扣着管道时 EOF 永不到达：
+      // 顶层 shell 也跟着不退出，整条命令挂到超时，且一个字节都拿不到。
+      '输出会自动限长，超出的部分落盘并在结果里给出 resource id（用 read_resource 取回），' +
+      '所以不要为限长在末尾追加 `| tail` / `| head`：这类命令需读到 EOF 才输出，' +
+      '而命令派生的后台进程会持续持有管道，EOF 不到达则命令挂起至超时，且没有任何输出返回。',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: '要执行的完整命令' },
+        cwd: { type: 'string', description: '工作目录（工作区相对路径），默认工作区根' },
+        timeout_ms: { type: 'integer', description: `超时毫秒，默认 ${DEFAULT_TIMEOUT_MS}` },
+        probe_url: {
+          type: 'string',
+          description:
+            '要验证的本机地址（只接受 localhost / 127.x / ::1，端口任意）。' +
+            '给了它就变成「起服务 → 等它就绪 → 抓一次响应 → 关掉」：' +
+            '命令不必自己退出，探测到即停。用来验证 dev server、静态服务器起得来、页面能打开。',
+        },
+      },
+      required: ['command'],
+      additionalProperties: false,
+    },
+    actionKind: 'run',
+    objectLabel: '命令',
+    category: 'code',
+    facet: '执行',
+    summary: '在工作区里跑一条命令',
+    targetExtractor: (a) => (typeof a.command === 'string' ? a.command : null),
+    permissionEffect: 'execute',
+    // 永不并行：命令之间的顺序几乎总是携带意图（先装依赖再构建）。
+    parallelSafe: false,
+    async fn(args, ctx) {
+      const command = String(args.command ?? '').trim()
+      if (!command) return { status: 'failure', executed: false, message: '命令为空' }
+
+      const cwd = await resolveInWorkspace(rootsOf(ctx), String(args.cwd ?? '.'), {
+        mustExist: true,
+      })
+      const timeout = resolveCommandTimeout(args.timeout_ms)
+
+      /*
+       * 探测地址**只准回环**，而且拿不准就当没给。
+       *
+       * 这是本仓第二条能发起出站请求的路径，第一条 `web_fetch` 刻意挡掉了
+       * 本机（`net-safety.ts` 开头那段：127.0.0.1 后面可能是 oph 自己的 API）。
+       * 这里方向相反、边界也相反：**只有回环允许**，别的一律拒。
+       * 放宽一点点，它就成了绕开那道 SSRF 闸的第二条出网通道。
+       */
+      const probeRaw = normalizeProbeUrl(args.probe_url)
+      let probeUrl: URL | null = null
+      if (probeRaw) {
+        const checked = loopbackTarget(probeRaw)
+        if (!checked.ok)
+          return {
+            status: 'failure',
+            executed: false,
+            message: checked.why,
+            errorKind: 'bad_request',
+          }
+        probeUrl = checked.url
+      }
+
+      // 缺 secrets 时按空集合处理——那是「没有已知凭证」，不是「不用剥」。
+      const secrets = ctx.secrets ?? { values: [] }
+
+      /*
+       * 沙箱策略与路径层用**同一份根目录清单**。
+       *
+       * 两边分别算的话，一条 `additionalDirectories` 只接了路径层的后果是：
+       * 工具参数放行了、内核拒绝了，而模型收到的是一条 EACCES——
+       * 模型会把它当成文件权限问题，然后开始 chmod。反过来只接沙箱层，
+       * 现象是参数在工具层被拒，而内核那边本来是允许的。
+       * 两种都表现为「配了但不管用」，且错误信息互不相干。
+       */
+      const policy: SandboxPolicy = {
+        workspaceRoot: ctx.workspaceRoot,
+        ...(ctx.additionalDirectories?.length ? { writableRoots: ctx.additionalDirectories } : {}),
+        readOnlySubdirs: PROTECTED_DIRS,
+        ...(ctx.denyNetwork ? { denyNetwork: true } : {}),
+      }
+
+      const { proc, sandbox } = await spawnGuarded({
+        command,
+        cwd,
+        policy,
+        // NON_INTERACTIVE_ENV 放在剥离**之后**：它由本文件注入，
+        // 里面没有凭证，也不该被名字规则误伤（比如将来加个带 TOKEN 的变量）。
+        env: {
+          ...scrubEnv(process.env, secrets, { allow: ctx.envAllowList ?? DEFAULT_ENV_ALLOW }),
+          ...NON_INTERACTIVE_ENV,
+        },
+      })
+
+      // 每条流一个脱敏器：它们各自带跨片缓冲，共用一个会把两条流的尾巴串起来。
+      const redactors = {
+        stdout: createStreamRedactor(secrets),
+        stderr: createStreamRedactor(secrets),
+      }
+      // 回传发生在脱敏**之后**：先发再脱等于把明文送出去了再补救。
+      const emit = (channel: 'stdout' | 'stderr', text: string): string => {
+        if (text) ctx.emit(channel, text)
+        return text
+      }
+
+      // 等待与收尾的规则收在 `collectProcess` 里：完成判据是进程退出而不是管道 EOF，
+      // 超时与中断都走树杀。这里只管字节怎么变成结果。
+      const collecting = collectProcess(proc, {
+        timeoutMs: timeout,
+        signal: ctx.signal,
+        onText: (channel, text) => emit(channel, redactors[channel].push(text)),
+        // 不 flush 会静默吞掉输出末尾——那比泄露更难发现，因为没人会去数字节。
+        onEnd: (channel) => emit(channel, redactors[channel].flush()),
+      })
+      const startedAt = Date.now()
+      // progress 通道只给实时界面，不进入最终工具结果；回车符让连续心跳覆盖同一行。
+      ctx.emit('progress', '命令已启动，等待输出…\r')
+      const heartbeat = setInterval(() => {
+        const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000))
+        ctx.emit('progress', `命令仍在执行 · ${seconds}s\r`)
+      }, COMMAND_HEARTBEAT_MS)
+      heartbeat.unref?.()
+
+      try {
+        if (probeUrl !== null) {
+          const probe = await probeThenKill(probeUrl, proc, timeout, ctx.signal)
+          const got = await collecting
+          const delivered = deliverStreams(ctx, command, got.stdout, got.stderr)
+          return {
+            status: probe.ok ? 'success' : 'failure',
+            message: probe.message + (got.backgroundHeld ? BACKGROUND_HELD : ''),
+            data: { ...probe.data, ...delivered.data },
+            ...(delivered.resources.length ? { resources: delivered.resources } : {}),
+            ...(probe.ok ? {} : { errorKind: 'probe_failed' as const }),
+          }
+        }
+
+        const got = await collecting
+        const delivered = deliverStreams(ctx, command, got.stdout, got.stderr)
+
+        if (got.timedOut) {
+          return {
+            status: 'failure',
+            message: `命令超时（${timeout}ms）已终止${got.backgroundHeld ? BACKGROUND_HELD : ''}`,
+            data: { ...delivered.data, timedOut: true },
+            ...(delivered.resources.length ? { resources: delivered.resources } : {}),
+            errorKind: 'timeout',
+          }
+        }
+
+        return {
+          // 非零退出码是**事实**不是异常：模型需要看到失败输出才能修。
+          status: got.exitCode === 0 ? 'success' : 'failure',
+          message:
+            (got.exitCode === 0
+              ? '命令执行成功'
+              : `命令退出码 ${got.exitCode}${sandboxHint(sandbox.active, got.stderr)}`) +
+            (got.backgroundHeld ? BACKGROUND_HELD : ''),
+          data: { exitCode: got.exitCode, ...delivered.data },
+          ...(delivered.resources.length ? { resources: delivered.resources } : {}),
+        }
+      } finally {
+        clearInterval(heartbeat)
+      }
+    },
+  }
+}
+
+/**
+ * 沙箱造成的失败要说人话。
+ *
+ * 内核拒绝写入的报错是 `Read-only file system` / `EROFS` / `Permission denied`——
+ * 模型看到这些会去 `chmod`、去 `sudo`、去换一个同样在工作区外的路径，
+ * 一连试好几轮，而这些尝试**每一次都会被同一道边界拦下**。
+ *
+ * 这就是「沙箱是否生效」这个事实唯一真正的消费者：不加这一句的话，
+ * 边界确实生效了，但代价是一轮无意义的重试。只在**失败**且**沙箱确实生效**时加，
+ * 否则等于给每条成功命令的结果里塞一段与它无关的话。
+ */
+function sandboxHint(active: boolean, stderr: string): string {
+  if (!active) return ''
+  if (!/read-only file system|EROFS|permission denied|EACCES/i.test(stderr)) return ''
+  return (
+    '。注意：shell 命令跑在内核沙箱里——工作区（及显式配置的额外目录）之外只读，' +
+    '凭证目录不可见。这不是文件权限问题，chmod / sudo 无法解除。' +
+    '需要写工作区外的路径，请说明用途让用户把该目录加进 additionalDirectories。'
+  )
+}
+
+/**
+ * 默认放行的环境变量名。
+ *
+ * `SSH_AUTH_SOCK` 命中「名字像凭证」（含 `AUTH`）会被剥掉，而剥掉它
+ * **`git push` 直接失败**——那是个太常见的操作，一坏用户就会去把整套关掉。
+ *
+ * 放行它在威胁模型上也站得住：它是一个**套接字路径**，不是可外泄的明文。
+ * 把它打印出来发给别人没有任何用处，风险是本机滥用——而本机滥用的前提是
+ * 命令能跑起来，那件事归裁决层管，不归脱敏层管。
+ *
+ * 脱敏层要防的是**跨出这台机器的泄露**，按这个口径 `SSH_AUTH_SOCK` 不在其内。
+ */
+export const DEFAULT_ENV_ALLOW = ['SSH_AUTH_SOCK']
+
+/** 让常见 CLI 不要输出进度条、不要开分页器、不要问问题。 */
+const NON_INTERACTIVE_ENV: Record<string, string> = {
+  CI: '1',
+  GIT_PAGER: 'cat',
+  PAGER: 'cat',
+  GIT_TERMINAL_PROMPT: '0',
+  NO_COLOR: '1',
+  TERM: 'dumb',
+  npm_config_yes: 'true',
+  DEBIAN_FRONTEND: 'noninteractive',
+  /*
+   * python 的 stdout 编码器。
+   *
+   * 不设的话 Windows 上它按系统代码页编码（实测本机出 GBK），而模型写的脚本里
+   * 一个 `✓` 就会抛 `UnicodeEncodeError` 把整条命令打挂——不是输出难看，是那一步
+   * 的产出全没了。**这条只管 python 自己往 stdout 写什么，不碰 argv 语义。**
+   *
+   * 不要额外加 `LC_ALL=C.UTF-8`：那改的是 MSYS 把 argv 转给原生程序时用的字符集，
+   * 设成 UTF-8 会让 `cmd /c type 中文.txt` 这类调用拿到原生程序读不懂的字节。
+   */
+  PYTHONIOENCODING: 'utf-8',
+}
+
+/**
+ * 把两条流交给投递闸。
+ *
+ * **不能是一个纯 `clamp()`**（超长就把中间丢掉）：命令输出不可重放，
+ * 那条 `npm test` 这一次的失败详情丢了就是丢了，模型只能凭首尾猜，
+ * 或者让用户再跑一遍。
+ *
+ * 超预算的部分落进正文库，模型拿到 resource id 后可以用 `read_resource`
+ * 把中间那段读回来。stdout 和 stderr 分别落盘：把它们拼起来会丢掉
+ * 「这行是错误还是正常输出」这个信息，而那正是排查时最要紧的区分。
+ */
+function deliverStreams(
+  ctx: ToolContext,
+  command: string,
+  out: string,
+  err: string,
+): { data: Record<string, unknown>; resources: IntermediateResourceRef[] } {
+  const encoder = new TextEncoder()
+  const resources: IntermediateResourceRef[] = []
+  const data: Record<string, unknown> = {}
+
+  for (const [channel, text] of [
+    ['stdout', out],
+    ['stderr', err],
+  ] as const) {
+    if (!text) {
+      data[channel] = ''
+      continue
+    }
+    const landed = deliver(ctx.sink, {
+      toolName: 'run_command',
+      sourceType: `shell:${channel}`,
+      body: encoder.encode(text),
+      mimeType: 'text/plain',
+      query: command,
+    })
+
+    // 摘录记进本批预算：`deliver` 已压到 8 KB 内，但一波多次执行仍是一笔。
+    chargeBatchBudget(ctx, deliveredTokens(landed.text, ctx.density))
+    data[channel] = landed.text
+    // 覆盖事实必须进 data：模型读 message 和 data，读不到 coverage 就不知道自己看的是几分之几。
+    if (landed.coverage.truncated) data[`${channel}Coverage`] = landed.coverage
+    if (landed.resourceId) {
+      resources.push({
+        resourceId: landed.resourceId as never,
+        status: landed.status,
+        contentHash: null,
+        sizeBytes: landed.coverage.totalBytes ?? 0,
+        mimeType: 'text/plain',
+        coverage: landed.coverage,
+      })
+    }
+  }
+
+  return { data, resources }
+}
+
+/**
+ * 只接受本机回环地址。
+ *
+ * **主机名一律不做 DNS 解析。** 解析等于把「这个名字指向哪」交给外部——
+ * `dev.example.com` 今天解析到 127.0.0.1、明天解析到公网，而放行与否在解析
+ * 那一刻才定，等于没有边界。所以只认字面量：`localhost`（含子域）与回环 IP。
+ *
+ * IP 的判定复用 `classifyAddress`，不自己写匹配：`::ffff:127.0.0.1` 和
+ * `::ffff:7f00:1` 是同一个地址，**按写法枚举永远漏一种**（同一条结论写在那个
+ * 函数的注释里）。
+ */
+function loopbackTarget(raw: string): { ok: true; url: URL } | { ok: false; why: string } {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return { ok: false, why: `probe_url 不是合法 URL：${raw}` }
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { ok: false, why: `probe_url 只支持 http/https，收到 ${url.protocol}` }
+  }
+  // URL 会把 IPv6 主机包在方括号里，判定前先剥掉。
+  const host = url.hostname.replace(/^\[|\]$/g, '')
+  const named = host === 'localhost' || host.endsWith('.localhost')
+  const loop = isIP(host) !== 0 && classifyAddress(host)?.reason === 'loopback'
+  if (!named && !loop) {
+    return {
+      ok: false,
+      why:
+        `probe_url 只接受本机回环地址（localhost / 127.x / ::1），收到 ${host}。` +
+        '要访问外部地址用 web_fetch——那条路有独立的 SSRF 检查。',
+    }
+  }
+  return { ok: true, url }
+}
+
+/** 两次探测之间的间隔。短到用户感觉不出，长到不至于把刚起来的服务打满。 */
+const PROBE_INTERVAL_MS = 200
+
+/**
+ * 轮询到服务就绪，抓一次响应，然后**无条件树杀**。
+ *
+ * **为什么这件事必须是原子的。** `run_command` 是同步的：起一个不会自己退出的服务器，就是阻塞到超
+ * 时。而「起服务 → 看看页面能不能打开」是编码 agent 的日常动作，之前在本仓根本做不到——不是被权
+ * 限拦的，是形状上就没有出路（实测：用户开了完全访问照样只能等到 `output_truncated`）。
+ *
+ * 不做「后台跑 + 另一个工具读输出」：那需要一张跨调用存活的进程表，而 Session
+ * 是**每条消息一个**（见 `server/src/run-control.ts`），进程表挂上去活不过这条
+ * 消息，挂到别处就是新增一套与 run 并列的生命周期——A2 默认否决的第一条。
+ *
+ * 所以收成一次调用内的原子动作：进程生死不跨出这里，没有 id、没有进程表、
+ * 没有 dispose 依赖。代价是验不了「改代码→热重载→再看一眼」那种交互式调试，
+ * 这条边界如实写在工具描述里。
+ *
+ * **失败也要把进程输出带回去。** 探测失败时最有用的信息通常在服务器自己的 stderr 里（端口被占、模块
+ * 缺失）。调用方拿到 `ok:false` 之后仍然会把 out/err 拼进结果，所以这里只回判定。
+ */
+async function probeThenKill(
+  url: URL,
+  proc: { pid: number; kill(): void },
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<{ ok: boolean; message: string; data: Record<string, unknown> }> {
+  const deadline = Date.now() + timeoutMs
+  let attempts = 0
+  let lastError = ''
+  try {
+    while (Date.now() < deadline && !signal.aborted) {
+      attempts += 1
+      try {
+        // 单次请求也要有上限，否则一个不回包的端口能把整个预算耗光。
+        const res = await fetch(url, { signal: AbortSignal.timeout(2000), redirect: 'manual' })
+        const body = await res.text().catch(() => '')
+        return {
+          // **状态码不参与成败判定**：4xx/5xx 说明服务确实起来了并且回了话，
+          // 那正是要给模型看的事实。判失败只在「连不上」。
+          ok: true,
+          message: `服务已就绪：${url.href} 回 ${res.status}（等了 ${attempts * PROBE_INTERVAL_MS}ms 左右），已抓取响应并关闭进程`,
+          data: {
+            probe: { url: url.href, status: res.status, body: clipBody(body) },
+          },
+        }
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e)
+      }
+      await Bun.sleep(PROBE_INTERVAL_MS)
+    }
+    return {
+      ok: false,
+      message:
+        `${timeoutMs}ms 内没能连上 ${url.href}（最后一次：${lastError || '无响应'}）。` +
+        '进程的输出在下面——端口被占、依赖缺失这类原因通常写在里面。',
+      data: { probe: { url: url.href, status: null, attempts } },
+    }
+  } finally {
+    // 无论成败都杀干净：这个工具的承诺是「进程不跨出这次调用」。
+    killTree(proc)
+  }
+}
+
+/** 探测响应只留个头。要全文让模型自己 web_fetch——那条路有分页与落盘。 */
+function clipBody(body: string): string {
+  const LIMIT = 2000
+  return body.length <= LIMIT ? body : `${body.slice(0, LIMIT)}…（还有 ${body.length - LIMIT} 字）`
+}

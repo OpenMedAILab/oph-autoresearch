@@ -1,0 +1,56 @@
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const ROOT = join(import.meta.dir, '..')
+
+describe('桌面发布清单', () => {
+  test('安装包携带项目与第三方许可证', () => {
+    const config = JSON.parse(
+      readFileSync(join(ROOT, 'apps', 'desktop', 'src-tauri', 'tauri.conf.json'), 'utf8'),
+    ) as {
+      bundle: {
+        license?: string
+        licenseFile?: string
+        resources?: Record<string, string>
+      }
+    }
+
+    expect(config.bundle.license).toBe('MIT AND Apache-2.0')
+    expect(config.bundle.licenseFile).toBe('../../../LICENSE')
+    expect(config.bundle.resources).toEqual({
+      '../../../LICENSE': 'licenses/LICENSE',
+      '../../../LICENSES/Apache-2.0.txt': 'licenses/Apache-2.0.txt',
+      '../../../NOTICE': 'licenses/NOTICE',
+      '../../../THIRD_PARTY_NOTICES.md': 'licenses/THIRD_PARTY_NOTICES.md',
+    })
+  })
+
+  test('Windows 发布在 Rust 门禁前准备 sidecar', () => {
+    const workflow = readFileSync(
+      new URL('../.github/workflows/release-windows.yml', import.meta.url),
+      'utf8',
+    )
+    const sidecar = workflow.indexOf('- name: Build sidecar')
+    const gate = workflow.indexOf('- name: Run release gate')
+
+    expect(sidecar).toBeGreaterThan(-1)
+    expect(gate).toBeGreaterThan(sidecar)
+  })
+
+  test('Windows 发布必须携带当前版本的更新说明', () => {
+    const version = readFileSync(join(ROOT, 'VERSION'), 'utf8').trim()
+    const notes = readFileSync(
+      new URL(`../.github/release-notes/v${version}.md`, import.meta.url),
+      'utf8',
+    )
+    const workflow = readFileSync(
+      new URL('../.github/workflows/release-windows.yml', import.meta.url),
+      'utf8',
+    )
+
+    expect(notes).toContain('## 本次更新')
+    expect(workflow).toContain('.github/release-notes/v$version.md')
+    expect(workflow).toContain('releaseBody: $' + '{{ steps.release_notes.outputs.body }}')
+  })
+})
