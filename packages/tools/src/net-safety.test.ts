@@ -1,5 +1,51 @@
 import { describe, expect, test } from 'bun:test'
-import { checkUrl, classifyAddress } from './net-safety.ts'
+import { checkUrl, classifyAddress, resolvePublicHost } from './net-safety.ts'
+
+describe('fake-IP DNS compatibility preserves public-address pinning', () => {
+  const system = async () => ({ address: '198.18.0.19' })
+  test('resolves through a fixed TLS resolver and returns a public address', async () => {
+    const doh = (async (url: string | URL | Request, opts?: RequestInit) => {
+      expect(String(url)).toBe('https://1.1.1.1/dns-query?name=example.org&type=A')
+      expect(opts?.redirect).toBe('error')
+      expect((opts as { tls: { servername: string } }).tls.servername).toBe('cloudflare-dns.com')
+      return Response.json({ Status: 0, Answer: [{ type: 1, data: '93.184.216.34' }] })
+    }) as typeof fetch
+    expect(
+      await checkUrl('https://example.org', {}, (host) => resolvePublicHost(host, system, doh)),
+    ).toMatchObject({ allowed: true, resolved: '93.184.216.34' })
+  })
+  test('private, metadata and fake IP answers still fail closed', async () => {
+    for (const address of ['127.0.0.1', '169.254.169.254', '10.0.0.1', '198.18.0.20']) {
+      const doh = (async () =>
+        Response.json({
+          Status: 0,
+          Answer: [
+            { type: 1, data: '93.184.216.34' },
+            { type: 1, data: address },
+          ],
+        })) as unknown as typeof fetch
+      expect(
+        (await checkUrl('https://example.org', {}, (host) => resolvePublicHost(host, system, doh)))
+          .allowed,
+      ).toBe(false)
+    }
+  })
+  test('literal reserved addresses and ordinary public DNS never invoke fallback', async () => {
+    let calls = 0
+    const doh = (async () => {
+      calls++
+      throw new Error('must not be called')
+    }) as unknown as typeof fetch
+    expect(
+      await resolvePublicHost('example.org', async () => ({ address: '93.184.216.34' }), doh),
+    ).toEqual({ address: '93.184.216.34' })
+    expect(
+      (await checkUrl('https://198.18.0.19', {}, (host) => resolvePublicHost(host, system, doh)))
+        .allowed,
+    ).toBe(false)
+    expect(calls).toBe(0)
+  })
+})
 
 describe('地址分类', () => {
   test('公网地址放行', () => {

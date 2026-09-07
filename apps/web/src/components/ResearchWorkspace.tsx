@@ -77,8 +77,8 @@ const RESEARCH_CHAIN: readonly StageDefinition[] = [
     artifact: 'study_protocol.md · experiment_spec.yaml',
   },
   {
-    name: '远程实验',
-    detail: '在 SSH 工作区执行基线训练、消融实验、误差分析与运行监控。',
+    name: '实验准备与执行',
+    detail: '整理实验交接包，再按已授权范围在 SSH 工作区执行和核验实验。准备完成不代表运行成功。',
     agent: 'experiment-engineer',
     role: '实验工程师',
     pattern: '远程实验 DAG',
@@ -126,7 +126,7 @@ function createResearchFlow() {
     const byStage = RESEARCH_CHAIN.map(() => [] as StageActivity[])
     for (const current of workflows()) {
       for (const node of workflowActivityNodes(current)) {
-        const stageIndex = stageIndexFor(node.agent, node.task)
+        const stageIndex = stageIndexFor(node.agent, node.id)
         if (stageIndex < 0) continue
         const stage = RESEARCH_CHAIN[stageIndex]!
         const live = current.nodes?.find((entry) => entry.nodeId === node.id)
@@ -149,7 +149,7 @@ function createResearchFlow() {
     for (const item of directTasks()) {
       const agent = stringValue(item.args?.agent)
       const task = stringValue(item.args?.task)
-      const stageIndex = stageIndexFor(agent, task)
+      const stageIndex = stageIndexFor(agent)
       if (stageIndex < 0) continue
       const stage = RESEARCH_CHAIN[stageIndex]!
       const live = item.nodes?.[0]
@@ -267,7 +267,7 @@ export function WorkflowOverview() {
 
       <div class="workflow-compact-foot">
         <IconShield size={13} />
-        聊天执行视图（未核验）；科研账本在中央详情中查看
+        聊天角色执行记录；实验回执与科研产物以方案卡为准
       </div>
     </div>
   )
@@ -447,21 +447,27 @@ function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function stageIndexFor(agent: string, task: string): number {
+function stageIndexFor(agent: string, nodeId?: string): number {
+  // These exact node/role pairs belong to the peerreview preset. The same roles
+  // also participate in discovery and results review, so role alone is ambiguous.
+  if (
+    (nodeId === 'contribution' && agent === 'clinical-challenger') ||
+    (nodeId === 'methods' && agent === 'methodology-critic') ||
+    (nodeId === 'evidence' && agent === 'manuscript-reviewer')
+  )
+    return 5
   const exact = RESEARCH_CHAIN.findIndex((stage) => stage.agent === agent)
   if (exact >= 0) return exact
-  if (agent === 'clinical-challenger') return 0
-  if (agent === 'reproducibility-auditor') return 4
-  const source = `${agent} ${task}`.toLowerCase()
-  const hints = [
-    ['question', 'literature', 'evidence', '问题', '文献', '证据检索'],
-    ['data', 'audit', 'dataset', '数据', '队列', '标签'],
-    ['protocol', 'statistic', '方案', '统计', '指标'],
-    ['experiment', 'engineer', 'train', '实验', '训练', '消融'],
-    ['review', 'verify', '复核', '核验', '敏感性'],
-    ['writer', 'report', 'paper', '写作', '报告', '论文'],
-  ]
-  return hints.findIndex((words) => words.some((word) => source.includes(word)))
+  const roles: Record<string, number> = {
+    'clinical-challenger': 0,
+    'venue-analyst': 0,
+    'experiment-preparer': 3,
+    'reproducibility-auditor': 4,
+    'methodology-critic': 4,
+    'manuscript-reviewer': 5,
+  }
+  // A task can quote every phase; its prose is not an execution-stage declaration.
+  return roles[agent] ?? -1
 }
 
 function settledPhase(item: TranscriptItem): string {
@@ -492,7 +498,7 @@ function checkpointStage(item?: TranscriptItem): number {
     -1,
     ...checkpoint.needs.map((id) => {
       const node = projection.nodes.find((candidate) => candidate.id === id)
-      return node && node.kind !== 'checkpoint' ? stageIndexFor(node.agent, node.task) : -1
+      return node && node.kind !== 'checkpoint' ? stageIndexFor(node.agent, node.id) : -1
     }),
   )
 }

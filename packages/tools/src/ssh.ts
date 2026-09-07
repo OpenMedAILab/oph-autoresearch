@@ -1077,6 +1077,24 @@ export const sshReadTool: ToolSpec = {
   },
 }
 
+export function resolveSshRunOptions(profile: SshProfile, args: Record<string, unknown>) {
+  const timeoutMs = args.timeout_ms ?? 600_000
+  if (
+    typeof timeoutMs !== 'number' ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1_000 ||
+    timeoutMs > 3_600_000
+  )
+    throw new Error('timeout_ms 必须为 1000 到 3600000 之间的整数毫秒')
+  if (args.cwd != null && typeof args.cwd !== 'string') throw new Error('cwd 必须为字符串')
+  const cwd = resolveSshPath(profile, args.cwd as string | undefined)
+  const unsupported = Object.keys(args).filter(
+    (key) => !['profile', 'command', 'cwd', 'timeout_ms'].includes(key) && args[key] != null,
+  )
+  if (unsupported.length) throw new Error(`SSH 命令不支持参数：${unsupported.join(', ')}`)
+  return { timeoutMs, cwd }
+}
+
 export const sshRunTool: ToolSpec = {
   name: 'ssh_run_command',
   description:
@@ -1086,6 +1104,14 @@ export const sshRunTool: ToolSpec = {
     properties: {
       profile: { type: 'string', description: 'SSH 连接标识' },
       command: { type: 'string', description: '交给远程登录 shell 的命令' },
+      cwd: { type: 'string', description: '允许根目录内的远程工作目录；省略时使用绑定根目录' },
+      timeout_ms: {
+        type: 'integer',
+        minimum: 1000,
+        maximum: 3600000,
+        description:
+          '等待 SSH 返回的总时限（毫秒），默认600000。超时不证明远端任务已停止；先查询进程与回执，勿盲目重投。长任务应落盘日志和回执后分次查询。',
+      },
     },
     required: ['profile', 'command'],
     additionalProperties: false,
@@ -1109,12 +1135,22 @@ export const sshRunTool: ToolSpec = {
         message: `${profile.name} 是只读连接，已拒绝远程命令。`,
       }
     }
-    const command = String(args.command).trim()
+    let options: ReturnType<typeof resolveSshRunOptions>
+    try {
+      options = resolveSshRunOptions(profile, args)
+    } catch (error) {
+      return {
+        status: 'failure',
+        executed: false,
+        message: error instanceof Error ? error.message : 'SSH 参数无效',
+      }
+    }
+    const command = String(args.command ?? '').trim()
     if (!command) return { status: 'failure', executed: false, message: 'command 不能为空' }
-    const guarded = `cd ${quote(profile.root)} && ${command}`
+    const guarded = `cd ${quote(options.cwd)} && ${command}`
     const result = await sshExec(profile, guarded, {
       signal: ctx.signal,
-      timeoutMs: 10 * 60_000,
+      timeoutMs: options.timeoutMs,
       onChunk: (text) => ctx.emit('stdout', text),
     })
     return {
@@ -1122,8 +1158,23 @@ export const sshRunTool: ToolSpec = {
       message:
         result.exitCode === 0 && !result.timedOut
           ? `远程命令完成（${profile.name}）`
-          : `远程命令失败（${profile.name}）：${sshError(result)}`,
-      data: { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
+          : result.timedOut
+            ? `SSH 等待超时（${profile.name}）；远端任务状态未知，请先查询进程及落盘回执，不要重复提交。`
+            : `远程命令失败（${profile.name}）：${sshError(result)}`,
+      data: {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        timeoutMs: options.timeoutMs,
+        cwd: options.cwd,
+        remoteState:
+          result.timedOut || result.exitCode === 255
+            ? 'unknown'
+            : result.exitCode === 0
+              ? 'completed'
+              : 'failed',
+      },
     }
   },
 }

@@ -244,6 +244,30 @@ describe('逐模型的历史思考协议', () => {
     { role: 'user', content: '继续' },
   ]
 
+  test('DeepSeek 保留纯文本推理并给缺失推理的历史补空字段', async () => {
+    const body = await send(
+      'deepseek-v4-flash',
+      'max',
+      [],
+      [
+        ...history,
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'x', arguments: {} }] },
+        { role: 'tool', toolCallId: 'c1', content: '完成' },
+        { role: 'assistant', content: [{ type: 'text', text: '已完成' }] },
+        { role: 'user', content: '继续' },
+      ],
+    )
+    const messages = body.messages as Record<string, unknown>[]
+    expect(messages[1]?.reasoning_content).toBe('完整思考')
+    expect(messages[3]?.reasoning_content).toBe('')
+    expect(messages[4]?.reasoning_content).toBeUndefined()
+    expect(messages[5]?.reasoning_content).toBe('')
+    expect(body.thinking).toEqual({ type: 'enabled' })
+    expect(body.reasoning_effort).toBe('max')
+    expect(body.enable_thinking).toBeUndefined()
+    expect(body.preserve_thinking).toBeUndefined()
+  })
+
   test('Qwen3.8 始终声明保留思考，并发官方档位', async () => {
     const bare = await send('qwen3.8-flash')
     expect(bare.preserve_thinking).toBe(true)

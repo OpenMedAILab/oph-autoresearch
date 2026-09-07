@@ -87,6 +87,37 @@ export interface SafetyOptions {
 /** Internal dependency for deterministic DNS failure and rebinding tests. */
 type ResolveHost = (host: string) => Promise<{ address: string }>
 
+/** TUN fake-IP DNS answers are never connected to. Resolve them through a pinned public resolver instead. */
+export async function resolvePublicHost(
+  host: string,
+  system: ResolveHost = lookup,
+  doh: typeof fetch = fetch,
+): Promise<{ address: string }> {
+  const initial = await system(host)
+  if (!/^198\.(18|19)\./.test(initial.address)) return initial
+  const response = await doh(`https://1.1.1.1/dns-query?name=${encodeURIComponent(host)}&type=A`, {
+    headers: { accept: 'application/dns-json', host: 'cloudflare-dns.com' },
+    tls: { servername: 'cloudflare-dns.com' },
+    redirect: 'error',
+    signal: AbortSignal.timeout(2500),
+  } as RequestInit)
+  if (!response.ok) throw new Error('Public DNS resolver unavailable')
+  const value = JSON.parse(new TextDecoder().decode(await readBounded(response, 64 * 1024))) as {
+    Status?: number
+    Answer?: { type: number; data: string }[]
+  }
+  const addresses =
+    value.Answer?.filter((answer) => answer.type === 1).map((answer) => answer.data) ?? []
+  // Reject the whole answer if any A record is non-public, including another fake IP.
+  if (
+    value.Status !== 0 ||
+    !addresses.length ||
+    addresses.some((address) => classifyAddress(address))
+  )
+    throw new Error('Public DNS returned no exclusively public addresses')
+  return { address: addresses[0]! }
+}
+
 async function resolveWithTimeout(
   host: string,
   timeoutMs: number,
@@ -114,7 +145,7 @@ async function resolveWithTimeout(
 export async function checkUrl(
   raw: string,
   opts: SafetyOptions = {},
-  resolveHost: ResolveHost = lookup,
+  resolveHost: ResolveHost = resolvePublicHost,
 ): Promise<SafetyVerdict> {
   let url: URL
   try {

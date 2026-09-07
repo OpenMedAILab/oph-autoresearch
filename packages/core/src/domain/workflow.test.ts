@@ -291,6 +291,42 @@ describe('workflow 投影', () => {
     expect(workflowGroupId({ stepId: 'current', args: { workflowId: 'anchor' } })).toBe('anchor')
   })
 
+  test('首轮字符串 null 不得遮蔽真实回执，检查点仍可审查', () => {
+    const record: WorkflowCallRecord = {
+      stepId: 'wf',
+      args: {
+        workflowId: 'null',
+        goal: '实验前复核',
+        nodes: [
+          { id: 'reviewer', task: '复核方案' },
+          { id: 'cp', kind: 'checkpoint', label: '批准', needs: ['reviewer'] },
+        ],
+      },
+      status: 'success',
+      outcome: outcome({
+        workflowId: 'wf',
+        phase: 'waiting_review',
+        checkpointId: 'cp',
+        receipts: [
+          {
+            nodeId: 'reviewer',
+            agent: 'ad-hoc',
+            label: '复核',
+            status: 'done',
+            output: '通过',
+            durationMs: 1,
+          },
+        ],
+      }),
+    }
+    expect(workflowGroupId(record)).toBe('wf')
+    const folded = foldWorkflow([record], 'wf')
+    expect(folded.ok).toBe(true)
+    if (!folded.ok) return
+    expect(folded.projection.phase).toBe('waiting_review')
+    expect(folded.projection.results.reviewer?.output).toBe('通过')
+  })
+
   test('revise 刚开始就让选中节点和本批下游失效，不显示旧回执', () => {
     const records: WorkflowCallRecord[] = [
       {
