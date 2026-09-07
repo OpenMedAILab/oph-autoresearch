@@ -13,7 +13,7 @@ const stageNames: Record<string, string> = {
   question: '研究问题',
   literature: '文献依据',
   dataset_audit: '数据检查',
-  protocol_freeze: '方案冻结',
+  protocol_freeze: '计划保存',
   smoke: '基础检查',
   experiment: '实验',
   evaluation: '结果核验',
@@ -49,7 +49,8 @@ function stageDescription(stage: PatternState['stages'][number]) {
   if (stage.stageId === 'question') return stage.evidence
   if (stage.stageId === 'literature') return '当前仅记录公开文献元数据，尚不代表全文主张已核验。'
   if (stage.stageId === 'dataset_audit') return '使用固定合成样例；实际数据检查以执行产物为准。'
-  if (stage.stageId === 'protocol_freeze') return '方案版本与依赖保存在研究账本中。'
+  if (stage.stageId === 'protocol_freeze')
+    return '固定样例计划已保存；真实研究方案是否冻结以“账本进度与下一步”中的依据和审批状态为准。'
   if (stage.stageId === 'independent_review')
     return '独立模型复核与人工批准分别记录，调用完成不代表证据支持。'
   if (stage.stageId === 'release') return '发布需要当前证据支持以及独立人工签署。'
@@ -113,7 +114,7 @@ export function ResearchPatternPanel(props: {
         }),
       })
       key = crypto.randomUUID()
-    }, '固定研究方案及任务已保存；执行需另行审批。')
+    }, '固定样例计划及任务已保存；这不表示真实研究方案已经冻结，执行仍需另行审批。')
   const advance = () =>
     props.act(async () => {
       await client.api(endpoint().replace('/pattern?', '/pattern/advance?'), {
@@ -126,7 +127,7 @@ export function ResearchPatternPanel(props: {
     }, '已提交一个获批步骤，请以核验后的产物为准。')
   return (
     <section aria-label="固定研究方案">
-      <h5>固定研究方案</h5>
+      <h5>固定样例计划</h5>
       <Show when={!props.campaign.pattern || state()?.nextAction === 'replan-required'}>
         <label for={`pattern-data-${props.campaign.id}`}>合成数据类型</label>
         <select

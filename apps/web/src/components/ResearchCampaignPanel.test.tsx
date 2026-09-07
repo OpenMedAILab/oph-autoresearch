@@ -363,6 +363,115 @@ test('fixed template choices and unknown-state reconciliation use explicit API p
   )
 })
 
+test('a saved fixed plan hides legacy template dispatch and shows the ledger-bound next action', async () => {
+  const store = await import('../lib/store/index.ts')
+  store.setWorkspace({ id: 'ws-fixed-plan', root: 'D:/synthetic', name: 'synthetic' })
+  store.setState('activeConversation', 'cv-fixed-plan')
+  const mocked = spyOn(store.client, 'api').mockImplementation((async (path: string) => {
+    if (path.includes('/preflight?')) {
+      return {
+        checkedAt: 1,
+        formalConfigurationReady: false,
+        checks: [
+          { key: 'approval', label: '独立审批渠道', status: 'blocked', detail: '尚未配置' },
+          {
+            key: 'ssh',
+            label: 'SSH 现场状态',
+            status: 'unknown',
+            detail: '缓存登录状态不可作为准入依据',
+          },
+        ],
+        note: '正式执行需完成全部检查。',
+      }
+    }
+    if (path.includes('/next_actions?')) return { projection: { nodes: [] } }
+    if (path.includes('/pattern?')) {
+      return {
+        state: {
+          nextAction: 'approved-fixed-execution',
+          taskRevisionId: 'task-fixed',
+          dispatchKey: 'dispatch-fixed',
+          stages: [],
+          candidateAssessments: [],
+        },
+      }
+    }
+    return {
+      notifications: [],
+      documents: [],
+      campaigns: [
+        {
+          id: 'rc-fixed-plan',
+          workspaceId: 'ws-fixed-plan',
+          goal: 'fixed plan',
+          stage: 'protocol',
+          status: 'active',
+          version: 2,
+          artifactVersions: [],
+          approvals: [],
+          attempts: [],
+          pattern: { contractHash: 'sha256:fixed', plan: {}, taskRevisionIds: ['task-fixed'] },
+        },
+      ],
+    }
+  }) as typeof store.client.api)
+  restore = () => mocked.mockRestore()
+  const { render } = await import('solid-js/web')
+  const { ResearchCampaignPanel } = await import('./ResearchCampaignPanel.tsx')
+  const host = document.createElement('div')
+  document.body.append(host)
+  dispose = render(() => <ResearchCampaignPanel />, host)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(host.textContent).toContain('固定样例计划')
+  expect(host.textContent).toContain('固定样例计划已保存')
+  expect(host.textContent).toContain('请使用下方计划的下一步继续')
+  expect(host.textContent).not.toContain('运行：合成特征评估')
+  expect(host.textContent).toContain('缺少：独立审批渠道 · 尚未配置')
+  expect(host.textContent).toContain('待核对：SSH 现场状态')
+})
+
+test('a slow preflight from an old conversation cannot replace the current project readiness', async () => {
+  const store = await import('../lib/store/index.ts')
+  store.setWorkspace({ id: 'ws-readiness', root: 'D:/synthetic', name: 'synthetic' })
+  store.setState('activeConversation', 'cv-old')
+  let resolveOld!: (value: unknown) => void
+  const oldPreflight = new Promise((resolve) => {
+    resolveOld = resolve
+  })
+  const mocked = spyOn(store.client, 'api').mockImplementation((async (path: string) => {
+    if (path.includes('/preflight?')) {
+      if (path.includes('ws-readiness')) return oldPreflight
+      return {
+        checkedAt: 2,
+        formalConfigurationReady: false,
+        checks: [{ key: 'new', label: '当前项目检查', status: 'unknown', detail: '等待现场核对' }],
+        note: 'current',
+      }
+    }
+    return { campaigns: [], notifications: [], documents: [] }
+  }) as typeof store.client.api)
+  restore = () => mocked.mockRestore()
+  const { render } = await import('solid-js/web')
+  const { ResearchCampaignPanel } = await import('./ResearchCampaignPanel.tsx')
+  const host = document.createElement('div')
+  document.body.append(host)
+  dispose = render(() => <ResearchCampaignPanel />, host)
+  await Bun.sleep(0)
+  store.setWorkspace({ id: 'ws-current', root: 'D:/current', name: 'current' })
+  store.setState('activeConversation', 'cv-current')
+  await Bun.sleep(10)
+  expect(host.textContent).toContain('当前项目检查')
+  resolveOld({
+    checkedAt: 1,
+    formalConfigurationReady: false,
+    checks: [{ key: 'old', label: '旧项目检查', status: 'blocked', detail: '过期结果' }],
+    note: 'old',
+  })
+  await Bun.sleep(10)
+  expect(host.textContent).not.toContain('旧项目检查')
+  expect(host.textContent).toContain('当前项目检查')
+})
+
 test('notification delivery refreshes without a research ledger version change', async () => {
   const store = await import('../lib/store/index.ts')
   let delivered = false

@@ -10,7 +10,10 @@ import {
 } from '@oph-autoresearch/store'
 import type { ApiRequestDeps } from '../api/types.ts'
 import { EventBus } from '../bus.ts'
-import { createNativeResearchControlBridge } from './native-research-control.ts'
+import {
+  createNativeResearchControlBridge,
+  createResearchControlPort,
+} from './native-research-control.ts'
 
 test('native CLI receives only a scoped bridge and cannot approve or cross campaigns', async () => {
   const store = new Store({ path: ':memory:' })
@@ -87,6 +90,101 @@ console.log(JSON.stringify([await call('status', process.env.CAMPAIGN), await ca
       expect(response.status).toBe(410)
     } finally {
       expired.close()
+    }
+  } finally {
+    abort.abort()
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('native bridge and API port share selection, list, and immutable allowlist semantics', async () => {
+  const store = new Store({ path: ':memory:' })
+  const abort = new AbortController()
+  const root = await mkdtemp(join(tmpdir(), 'oph-native-control-parity-'))
+  try {
+    const workspace = upsertWorkspace(store, root, 'native parity')
+    const otherWorkspace = upsertWorkspace(store, `${root}-other`, 'other workspace')
+    const conversation = createConversation(store, {
+      workspaceId: workspace.id,
+      provider: 'cli:codex',
+      model: 'default',
+    })
+    const otherConversation = createConversation(store, {
+      workspaceId: otherWorkspace.id,
+      provider: 'cli:codex',
+      model: 'default',
+    })
+    const create = (workspaceId: string, parentConversationId: string, key: string) =>
+      createResearchCampaign(store, {
+        workspaceId,
+        parentConversationId,
+        goal: key,
+        policy: {},
+        inputs: {},
+        budget: { currency: 'USD', limit: 0 },
+        idempotencyKey: key,
+      })
+    const first = create(workspace.id, conversation.id, 'first')
+    const second = create(workspace.id, conversation.id, 'second')
+    const foreign = create(otherWorkspace.id, otherConversation.id, 'foreign')
+    if (!first.ok || !second.ok || !foreign.ok) throw new Error('campaign fixture failed')
+    const deps = {
+      store,
+      workspaceId: workspace.id,
+      workspaceRoot: root,
+      bus: new EventBus(),
+    } as unknown as ApiRequestDeps
+    const port = createResearchControlPort(deps, [
+      first.campaign.id,
+      second.campaign.id,
+      foreign.campaign.id,
+    ])
+    const bridge = createNativeResearchControlBridge(
+      deps,
+      [first.campaign.id, second.campaign.id, foreign.campaign.id],
+      abort.signal,
+    )
+    const native = async (body: Record<string, unknown>) => {
+      const response = await fetch(`${bridge.endpoint}/api/research/control`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bridge.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return { status: response.status, data: await response.json() }
+    }
+    try {
+      const apiList = await port.execute({ operation: 'list', campaignId: '' })
+      const nativeList = await native({ operation: 'list' })
+      expect(nativeList.status).toBe(apiList.status)
+      expect(nativeList.data).toEqual(apiList.data)
+      expect(
+        (nativeList.data as { campaigns: { campaignId: string }[] }).campaigns
+          .map((c) => c.campaignId)
+          .sort(),
+      ).toEqual([first.campaign.id, second.campaign.id].sort())
+
+      // Several eligible campaigns never pick one implicitly; cross-workspace IDs are not discoverable.
+      expect((await port.execute({ operation: 'status', campaignId: '' })).status).toBe(409)
+      expect((await native({ operation: 'status' })).status).toBe(409)
+      expect(
+        (await port.execute({ operation: 'status', campaignId: foreign.campaign.id })).status,
+      ).toBe(403)
+      expect((await native({ operation: 'status', campaignId: foreign.campaign.id })).status).toBe(
+        403,
+      )
+      expect((await native({ operation: 'approve', campaignId: first.campaign.id })).status).toBe(
+        400,
+      )
+
+      const singleton = createResearchControlPort(deps, [first.campaign.id])
+      const none = createResearchControlPort(deps, [])
+      expect((await singleton.execute({ operation: 'status', campaignId: '' })).status).toBe(200)
+      expect((await none.execute({ operation: 'status', campaignId: '' })).data).toMatchObject({
+        error: 'campaign_unavailable',
+      })
+    } finally {
+      bridge.close()
     }
   } finally {
     abort.abort()

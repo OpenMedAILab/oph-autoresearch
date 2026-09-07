@@ -9,10 +9,16 @@ import {
   type Store,
   scientificContextHash,
 } from '@oph-autoresearch/store'
+import {
+  isKnowledgeKind,
+  type KnowledgeKind,
+  knowledgeKey,
+  validateKnowledge,
+} from './research-knowledge.ts'
 import { parseModelReview } from './review-contract.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
 
-export type ResearchDocumentKind = 'study' | 'manuscript' | 'skillcandidate'
+export type ResearchDocumentKind = 'study' | 'manuscript' | 'skillcandidate' | KnowledgeKind
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const HASH = /^sha256:[a-f0-9]{64}$/
 const MAX_BYTES = 256 * 1024
@@ -74,11 +80,13 @@ function stringList(value: unknown, field: string, maximum = 64): string[] {
 function latestDocument(
   campaign: ResearchCampaign,
   kind: ResearchDocumentKind,
+  key?: string,
 ): ArtifactVersion | undefined {
   return campaign.artifactVersions
     .filter(
       (artifact) =>
-        artifact.artifactId === `document-${kind}` && artifact.kind === `research-document-${kind}`,
+        artifact.artifactId === documentArtifactId(kind, key) &&
+        artifact.kind === `research-document-${kind}`,
     )
     .toSorted((left, right) => right.version - left.version)[0]
 }
@@ -86,8 +94,9 @@ function requirePreviousVersion(
   campaign: ResearchCampaign,
   kind: ResearchDocumentKind,
   value: unknown,
+  key?: string,
 ) {
-  const latest = latestDocument(campaign, kind)
+  const latest = latestDocument(campaign, kind, key)
   if (latest ? value !== latest.contentHash : value !== null) fail('invalid previousVersion', 409)
 }
 
@@ -210,7 +219,15 @@ function validateStudy(campaign: ResearchCampaign, document: DocumentInput) {
   json(document.splitPlan, 'study splitPlan', true)
   text(document.codeVersion, 'study codeVersion', MAX_SHORT_TEXT)
   const citations = stringList(document.evidenceCitations, 'study evidenceCitations')
-  if (citations.some((id) => !campaign.literatureCitations?.some((citation) => citation.id === id)))
+  if (
+    citations.some(
+      (id) =>
+        !campaign.literatureCitations?.some((citation) => citation.id === id) &&
+        !campaign.artifactVersions.some(
+          (a) => a.kind === 'research-document-evidence' && a.contentHash === id,
+        ),
+    )
+  )
     fail('unknown evidence citation', 409)
   stringList(document.counterEvidence, 'study counterEvidence')
   stringList(document.endpoints, 'study endpoints')
@@ -287,6 +304,27 @@ function validateDocument(
   kind: ResearchDocumentKind,
   document: DocumentInput,
 ) {
+  if (isKnowledgeKind(kind)) {
+    try {
+      validateKnowledge(kind, document)
+    } catch (error) {
+      fail(error instanceof Error ? error.message : 'invalid knowledge')
+    }
+    requirePreviousVersion(campaign, kind, document.previousVersion, knowledgeKey(document))
+    if (
+      kind === 'handoff' &&
+      (!campaign.studySelection ||
+        document.studyHash !== campaign.studySelection.contentHash ||
+        latestDocument(campaign, 'study')?.contentHash !== document.studyHash)
+    )
+      fail('handoff requires the currently confirmed study', 409)
+    if (
+      kind === 'peerreview' &&
+      latestDocument(campaign, 'manuscript')?.contentHash !== document.manuscriptHash
+    )
+      fail('peer review requires the current manuscript', 409)
+    return
+  }
   if (kind === 'study') return validateStudy(campaign, document)
   if (kind === 'manuscript') return validateManuscript(campaign, document)
   return validateSkillCandidate(campaign, document)
@@ -296,13 +334,26 @@ function documentDependenciesCurrent(
   kind: ResearchDocumentKind,
   document: DocumentInput,
 ) {
+  if (isKnowledgeKind(kind)) {
+    if (kind === 'handoff')
+      return (
+        document.studyHash === campaign.studySelection?.contentHash &&
+        document.studyHash === latestDocument(campaign, 'study')?.contentHash
+      )
+    if (kind === 'peerreview')
+      return document.manuscriptHash === latestDocument(campaign, 'manuscript')?.contentHash
+    return true
+  }
   if (kind === 'study')
     return (
       Array.isArray(document.evidenceCitations) &&
       document.evidenceCitations.every(
         (id) =>
           typeof id === 'string' &&
-          campaign.literatureCitations?.some((citation) => citation.id === id),
+          (campaign.literatureCitations?.some((citation) => citation.id === id) ||
+            campaign.artifactVersions.some(
+              (a) => a.kind === 'research-document-evidence' && a.contentHash === id,
+            )),
       )
     )
   if (kind === 'skillcandidate')
@@ -389,10 +440,13 @@ async function writeImmutableFile(
   }
   return pathToFileURL(path).href
 }
-function commandFor(kind: ResearchDocumentKind, hash: string, uri: string) {
+function documentArtifactId(kind: ResearchDocumentKind, key?: string) {
+  return `document-${kind}${key ? `-${key}` : ''}`
+}
+function commandFor(kind: ResearchDocumentKind, hash: string, uri: string, key?: string) {
   return {
     kind: 'recordArtifact' as const,
-    artifactId: `document-${kind}`,
+    artifactId: documentArtifactId(kind, key),
     artifactKind: `research-document-${kind}`,
     contentHash: hash,
     uri,
@@ -417,10 +471,38 @@ export async function writeResearchDocument(input: {
 }) {
   if (!ID.test(input.campaignId) || !ID.test(input.idempotencyKey))
     fail('invalid document identity')
-  if (!['study', 'manuscript', 'skillcandidate'].includes(input.kind)) fail('invalid document kind')
+  if (
+    !['study', 'manuscript', 'skillcandidate'].includes(input.kind) &&
+    !isKnowledgeKind(input.kind)
+  )
+    fail('invalid document kind')
   const campaign = getResearchCampaign(input.store, input.campaignId)
   if (!campaign) fail('campaign not found', 404)
   if (!isObject(input.document)) fail('invalid document')
+  const key = isKnowledgeKind(input.kind) ? knowledgeKey(input.document) : undefined
+  if (input.kind === 'study') {
+    const sources = await readResearchDocuments(input.store, input.workspaceRoot, campaign.id)
+    for (const ref of Array.isArray(input.document.evidenceCitations)
+      ? input.document.evidenceCitations
+      : []) {
+      if (
+        typeof ref === 'string' &&
+        HASH.test(ref) &&
+        !sources.some(
+          (source) => source.kind === 'evidence' && source.contentHash === ref && source.verified,
+        )
+      )
+        fail('evidence source content is unavailable', 409)
+    }
+  }
+  if (isKnowledgeKind(input.kind))
+    await validateKnowledgeReferences(
+      input.store,
+      input.workspaceRoot,
+      campaign,
+      input.kind,
+      input.document,
+    )
   const bytes = Buffer.from(`${canonicalJson({ kind: input.kind, document: input.document })}\n`)
   if (bytes.length > MAX_BYTES) fail('document exceeds size limit')
   const contentHash = sha256(bytes),
@@ -438,7 +520,7 @@ export async function writeResearchDocument(input: {
   const mutation = {
     expectedVersion: input.expectedVersion,
     idempotencyKey: input.idempotencyKey,
-    command: commandFor(input.kind, contentHash, uri),
+    command: commandFor(input.kind, contentHash, uri, key),
   }
   if (existingIdempotency(input.store, input.campaignId, input.idempotencyKey)) {
     const replay = mutateResearchCampaign(input.store, input.campaignId, mutation)
@@ -457,7 +539,7 @@ export async function writeResearchDocument(input: {
     ),
     changed = mutateResearchCampaign(input.store, input.campaignId, {
       ...mutation,
-      command: commandFor(input.kind, contentHash, immutableUri),
+      command: commandFor(input.kind, contentHash, immutableUri, key),
     })
   if (!changed.ok) fail(changed.message, changed.code.includes('stale') ? 409 : 400)
   return { campaign: changed.campaign, contentHash, uri: immutableUri, replayed: false }
@@ -468,7 +550,8 @@ async function verifiedContent(
   artifact: ArtifactVersion,
 ) {
   const kind = artifact.kind.replace('research-document-', '') as ResearchDocumentKind
-  if (!['study', 'manuscript', 'skillcandidate'].includes(kind)) return null
+  if (!['study', 'manuscript', 'skillcandidate'].includes(kind) && !isKnowledgeKind(kind))
+    return null
   const root = await realpath(resolve(workspaceRoot)),
     expected = join(
       root,
@@ -503,25 +586,47 @@ export async function readResearchDocuments(
   const artifacts = campaign.artifactVersions.filter((artifact) =>
     artifact.kind.startsWith('research-document-'),
   )
-  return Promise.all(
-    artifacts.map(async (artifact) => {
-      const kind = artifact.kind.replace('research-document-', '') as ResearchDocumentKind,
-        content = await verifiedContent(workspaceRoot, campaign, artifact)
-      return {
-        id: artifact.id,
-        kind,
-        version: artifact.version,
-        contentHash: artifact.contentHash,
-        createdAt: artifact.createdAt,
-        stale:
-          latestDocument(campaign, kind)?.id !== artifact.id ||
-          !content ||
-          !documentDependenciesCurrent(campaign, kind, content),
-        verified: content !== null,
-        ...(content ? { document: content } : {}),
-      }
-    }),
+  const contents = await Promise.all(
+    artifacts.map((artifact) => verifiedContent(workspaceRoot, campaign, artifact)),
   )
+  return artifacts.map((artifact, index) => {
+    const kind = artifact.kind.replace('research-document-', '') as ResearchDocumentKind,
+      content = contents[index]
+    const sourceContentMissing =
+      kind === 'study' &&
+      Array.isArray(content?.evidenceCitations) &&
+      content.evidenceCitations.some(
+        (ref) =>
+          typeof ref === 'string' &&
+          HASH.test(ref) &&
+          !artifacts.some(
+            (source, i) =>
+              source.kind === 'research-document-evidence' &&
+              source.contentHash === ref &&
+              contents[i],
+          ),
+      )
+    return {
+      id: artifact.id,
+      kind,
+      key: content?.key,
+      uri: artifact.uri,
+      version: artifact.version,
+      contentHash: artifact.contentHash,
+      createdAt: artifact.createdAt,
+      stale:
+        latestDocument(
+          campaign,
+          kind,
+          isKnowledgeKind(kind) && content ? knowledgeKey(content) : undefined,
+        )?.id !== artifact.id ||
+        !content ||
+        sourceContentMissing ||
+        !documentDependenciesCurrent(campaign, kind, content),
+      verified: content !== null,
+      ...(content ? { document: content } : {}),
+    }
+  })
 }
 export function listResearchDocuments(store: Store, campaignId: string) {
   const campaign = getResearchCampaign(store, campaignId)
@@ -529,4 +634,53 @@ export function listResearchDocuments(store: Store, campaignId: string) {
   return campaign.artifactVersions.filter((artifact) =>
     artifact.kind.startsWith('research-document-'),
   )
+}
+
+async function validateKnowledgeReferences(
+  store: Store,
+  root: string,
+  campaign: ResearchCampaign,
+  kind: KnowledgeKind,
+  document: DocumentInput,
+) {
+  const all = (await readResearchDocuments(store, root, campaign.id)).filter(
+    (item) => item.verified,
+  )
+  const current = all.filter((item) => !item.stale)
+  if (kind === 'venue') {
+    const evidence = (key: unknown) =>
+      current.find((item) => item.kind === 'evidence' && item.document?.key === key)?.document
+    for (const exemplar of Array.isArray(document.exemplars) ? document.exemplars : []) {
+      if (!isObject(exemplar) || !evidence(exemplar.evidenceKey))
+        fail('unknown exemplar evidence', 409)
+    }
+    for (const inference of Array.isArray(document.writingInferences)
+      ? document.writingInferences
+      : []) {
+      if (!isObject(inference) || !Array.isArray(inference.evidenceKeys))
+        fail('invalid inference evidence')
+      for (const key of inference.evidenceKeys) {
+        const item = evidence(key)
+        if (!item || !['partial-full-text', 'full-text'].includes(String(item.readingDepth)))
+          fail('writing analysis needs located full-text evidence', 409)
+      }
+    }
+  }
+  if (
+    kind === 'reviewcase' &&
+    all.some(
+      (item) =>
+        item.kind === 'reviewcase' &&
+        item.document?.paperGroup === document.paperGroup &&
+        item.document?.split !== document.split,
+    )
+  )
+    fail('all versions of one paper must remain in the same split', 409)
+  if (
+    kind === 'peerreview' &&
+    !current.some(
+      (item) => item.kind === 'manuscript' && item.contentHash === document.manuscriptHash,
+    )
+  )
+    fail('manuscript evidence is stale or unavailable', 409)
 }

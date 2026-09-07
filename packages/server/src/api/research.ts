@@ -25,6 +25,7 @@ import {
   applyResearchPattern,
   researchPatternStatus,
 } from '../research/pattern-execution.ts'
+import { researchReadiness } from '../research/readiness.ts'
 import { readResearchDocuments } from '../research/research-documents.ts'
 import { projectResearchFlow } from '../research/research-flow.ts'
 import { executeEvidenceReview, quoteEvidenceReview } from '../research/review-execution.ts'
@@ -59,6 +60,10 @@ function respond(result: ResearchWriteResult): Response {
 
 /** Bearer access permits proposals. It does not attest a human reviewer. */
 export const handleResearchApi: ApiHandler = async (url, req, d) => {
+  if (url.pathname === '/api/research/preflight')
+    return req.method === 'GET'
+      ? json(await researchReadiness(d))
+      : new Response('', { status: 405 })
   const match =
     /^\/api\/research\/campaigns(?:\/([^/]+)(?:\/(events|notifications|progress|next_actions|controller(?:\/(?:quote|start))?|costs(?:\/(?:evidence|quote|settle))?|proposals|approve|revoke|release|labelsets|literature|pattern(?:\/(?:preview|advance))?|review(?:\/quote)?|synthetic(?:\/(?:cancel|status|receipt|reconcile))?))?)?$/.exec(
       url.pathname,

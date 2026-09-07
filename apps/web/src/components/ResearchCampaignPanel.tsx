@@ -143,12 +143,29 @@ const backendLabels = {
   'localhost-daemon': '本机守护进程',
   'ssh-daemon': 'SSH 远端守护进程',
 }
+interface ResearchPreflight {
+  checkedAt: number
+  formalConfigurationReady: boolean
+  checks: Array<{
+    key: string
+    label: string
+    status: 'ready' | 'blocked' | 'unknown'
+    detail: string
+  }>
+  note: string
+}
+interface ResearchPreflightStatus {
+  scope: string
+  value: ResearchPreflight | undefined
+  failed: boolean
+}
 
 function isCodePreparation(campaign: ResearchCampaign, attemptId: string) {
   return (campaign.cliPreparations ?? []).some((preparation) => preparation.attemptId === attemptId)
 }
 function campaignProgress(campaign: ResearchCampaign) {
   if (campaign.status === 'completed') return '研究输出已发布'
+  if (campaign.pattern) return '固定样例计划已保存'
   const experiments = (campaign.attempts ?? []).filter(
     (attempt) => !isCodePreparation(campaign, attempt.id),
   )
@@ -172,6 +189,7 @@ export function ResearchCampaignPanel() {
     Array<{ id: string; backendPolicyHash: string | null; trackingPolicyHash: string | null }>
   >([])
   const [executionDevice, setExecutionDevice] = createSignal('')
+  const [preflight, setPreflight] = createSignal<ResearchPreflightStatus>()
   const scope = createMemo(() => {
     const workspaceId = workspace()?.id
     const conversationId = state.activeConversation
@@ -187,22 +205,40 @@ export function ResearchCampaignPanel() {
         }
       : undefined
   })
+  let readSequence = 0
   const [campaigns, { refetch }] = createResource(source, async (selected) => {
-    const result = await client.api<{
-      campaigns: ResearchCampaign[]
-      approvalUrl?: string | null
-      templates?: Array<{ id: string; inputHash: string; codeHash: string }>
-      executionBackends?: Array<{
-        id: string
-        backendPolicyHash: string | null
-        trackingPolicyHash: string | null
-      }>
-    }>(
-      `/api/research/campaigns?ws=${encodeURIComponent(selected.workspaceId)}&conversationId=${encodeURIComponent(selected.conversationId)}`,
-    )
-    setApprovalChannel(result.approvalUrl ?? null)
-    setTemplateCatalog(result.templates ?? [])
-    setExecutionBackends(result.executionBackends ?? [])
+    const requestSequence = ++readSequence
+    const selectedScope = `${selected.workspaceId}:${selected.conversationId}`
+    const [result, readiness] = await Promise.all([
+      client.api<{
+        campaigns: ResearchCampaign[]
+        approvalUrl?: string | null
+        templates?: Array<{ id: string; inputHash: string; codeHash: string }>
+        executionBackends?: Array<{
+          id: string
+          backendPolicyHash: string | null
+          trackingPolicyHash: string | null
+        }>
+      }>(
+        `/api/research/campaigns?ws=${encodeURIComponent(selected.workspaceId)}&conversationId=${encodeURIComponent(selected.conversationId)}`,
+      ),
+      client
+        .api<ResearchPreflight>(
+          `/api/research/preflight?ws=${encodeURIComponent(selected.workspaceId)}`,
+        )
+        .then((value) => ({ value, failed: false }))
+        .catch(() => ({ value: undefined, failed: true })),
+    ])
+    if (scopeKey() === selectedScope && requestSequence === readSequence) {
+      setPreflight({
+        scope: selectedScope,
+        value: readiness.value?.checks ? readiness.value : undefined,
+        failed: readiness.failed,
+      })
+      setApprovalChannel(result.approvalUrl ?? null)
+      setTemplateCatalog(result.templates ?? [])
+      setExecutionBackends(result.executionBackends ?? [])
+    }
     return result.campaigns
   })
   const [goal, setGoal] = createSignal('')
@@ -225,7 +261,15 @@ export function ResearchCampaignPanel() {
   const pending = new Map<string, string>()
   const busy = () => operation()?.scope === scopeKey()
   const message = () => (notice()?.scope === scopeKey() ? notice()?.text : '')
-  createEffect(on(scopeKey, () => setGoal('')))
+  createEffect(
+    on(scopeKey, () => {
+      setGoal('')
+      setPreflight(undefined)
+      setApprovalChannel(null)
+      setTemplateCatalog([])
+      setExecutionBackends([])
+    }),
+  )
   async function act(work: () => Promise<void>, success: string) {
     const current = { scope: scopeKey(), id: crypto.randomUUID() }
     setOperation(current)
@@ -571,6 +615,47 @@ export function ResearchCampaignPanel() {
           </button>
         </form>
         <output aria-live="polite">{message()}</output>
+        <Show when={preflight()}>
+          {(status) => {
+            const readiness = () => status().value
+            const blocked = () =>
+              readiness()?.checks.filter((check) => check.status === 'blocked') ?? []
+            const unknown = () =>
+              readiness()?.checks.filter((check) => check.status === 'unknown') ?? []
+            return (
+              <section aria-label="正式执行准备状态">
+                <h4>正式执行准备状态</h4>
+                <Show
+                  when={!status().failed && readiness()}
+                  fallback={<p role="alert">正式执行准备状态暂时无法读取；执行条件仍待核对。</p>}
+                >
+                  <p>
+                    {readiness()!.formalConfigurationReady
+                      ? '正式执行配置已就绪；每个任务仍需独立审批。'
+                      : '正式执行尚未就绪。普通 SSH 文件操作不代表正式执行已准入。'}
+                  </p>
+                  <For each={blocked()}>
+                    {(check) => (
+                      <p>
+                        缺少：{check.label} · {check.detail}
+                      </p>
+                    )}
+                  </For>
+                  <For each={unknown()}>
+                    {(check) => (
+                      <p>
+                        待核对：{check.label} · {check.detail}
+                      </p>
+                    )}
+                  </For>
+                  <Show when={blocked().length === 0 && unknown().length === 0}>
+                    <p>{readiness()!.note}</p>
+                  </Show>
+                </Show>
+              </section>
+            )
+          }}
+        </Show>
         <Show when={campaigns.error}>
           <p role="alert">账本读取失败，请刷新重试。</p>
         </Show>
@@ -584,26 +669,31 @@ export function ResearchCampaignPanel() {
               <p>
                 {campaignProgress(campaign)} · 账本版本 {campaign.version}
               </p>
-              <fieldset>
-                <legend>可复现实验（仅合成数据）</legend>
-                <For each={templates}>
-                  {(template) => (
-                    <button
-                      type="button"
-                      disabled={
-                        busy() ||
-                        (campaign.attempts ?? []).some((attempt) => attempt.status === 'running')
-                      }
-                      onClick={() => void runTemplate(campaign, template.id)}
-                    >
-                      {approvalChannel() || template.id === 'supervised-phantom-v2'
-                        ? '审批后运行：'
-                        : '运行：'}
-                      {template.label}
-                    </button>
-                  )}
-                </For>
-              </fieldset>
+              <Show
+                when={!campaign.pattern}
+                fallback={<p>已保存固定样例计划，请使用下方计划的下一步继续。</p>}
+              >
+                <fieldset>
+                  <legend>可复现实验（仅合成数据）</legend>
+                  <For each={templates}>
+                    {(template) => (
+                      <button
+                        type="button"
+                        disabled={
+                          busy() ||
+                          (campaign.attempts ?? []).some((attempt) => attempt.status === 'running')
+                        }
+                        onClick={() => void runTemplate(campaign, template.id)}
+                      >
+                        {approvalChannel() || template.id === 'supervised-phantom-v2'
+                          ? '审批后运行：'
+                          : '运行：'}
+                        {template.label}
+                      </button>
+                    )}
+                  </For>
+                </fieldset>
+              </Show>
               <ResearchFlowPanel campaign={campaign} busy={busy()} act={act} />
               <ResearchControllerPanel
                 campaign={campaign}

@@ -12,6 +12,7 @@ import {
   mutateResearchCampaign,
   type Store,
 } from '@oph-autoresearch/store'
+import { pendingStudyHandoff } from './research-assistant.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
 
 type Decision = 'start' | 'remote' | 'human' | 'change' | 'unknown' | 'finish' | 'idle'
@@ -92,11 +93,13 @@ export function createBoundedScheduler(input: {
   store: Store
   isBusy: (id: ConversationId) => boolean
   startRun: (id: ConversationId, prompt: string) => void
+  startStudyHandoff?: (id: ConversationId, prompt: string) => void
   changed: () => void
   intervalMs?: number
   onError?: (error: unknown) => void
 }) {
   let closed = false
+  const handedOff = new Set<string>()
   function tick() {
     if (closed) return
     for (const workspace of listWorkspaces(input.store))
@@ -104,6 +107,16 @@ export function createBoundedScheduler(input: {
         if (input.isBusy(original.parentConversationId as ConversationId)) continue
         const campaign = getResearchCampaign(input.store, original.id)
         if (!campaign) continue
+        const handoff = input.startStudyHandoff ? pendingStudyHandoff(input.store, campaign) : null
+        if (handoff && !handedOff.has(handoff)) {
+          try {
+            input.startStudyHandoff!(campaign.parentConversationId as ConversationId, handoff)
+            handedOff.add(handoff)
+          } catch (error) {
+            input.onError?.(error)
+          }
+          continue
+        }
         const decision = boundedControllerDecision(campaign)
         const control = campaign.progressControl
         const reservation = campaign.controllerReservations?.find(

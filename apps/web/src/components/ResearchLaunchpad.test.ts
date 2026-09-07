@@ -14,10 +14,10 @@ const ready: ResearchLaunchInput = {
 }
 
 describe('眼科科研启动参数', () => {
-  test('研究方向、SSH 别名和远程路径齐全才可启动', () => {
+  test('研究主题可直接启动调研，目录从现有项目继承', () => {
     expect(isResearchInputReady(ready)).toBe(true)
-    expect(isResearchInputReady({ ...ready, sshAlias: ' ' })).toBe(false)
-    expect(isResearchInputReady({ ...ready, remotePath: '' })).toBe(false)
+    expect(isResearchInputReady({ ...ready, sshAlias: ' ' })).toBe(true)
+    expect(isResearchInputReady({ ...ready, remotePath: '' })).toBe(true)
   })
 
   test('任务指令带齐研究输入和远程数据边界', () => {

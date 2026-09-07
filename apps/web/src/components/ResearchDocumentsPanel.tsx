@@ -3,7 +3,15 @@ import { createResource, createSignal, For, Show } from 'solid-js'
 import { client } from '../lib/store/index.ts'
 
 type DocumentVersion = {
-  kind: 'study' | 'manuscript' | 'skillcandidate'
+  kind:
+    | 'study'
+    | 'manuscript'
+    | 'skillcandidate'
+    | 'evidence'
+    | 'venue'
+    | 'reviewcase'
+    | 'handoff'
+    | 'peerreview'
   version: number
   contentHash: string
   stale: boolean
@@ -11,7 +19,16 @@ type DocumentVersion = {
   createdAt: number
   document?: { question?: string; text?: string; counterEvidence?: string[]; endpoints?: string[] }
 }
-const names = { study: '研究方案', manuscript: '证据稿件', skillcandidate: '技能候选' }
+const names = {
+  evidence: '文献证据',
+  venue: '刊会档案',
+  reviewcase: '审稿案例',
+  handoff: '实验交接',
+  peerreview: '稿件审阅',
+  study: '研究方案',
+  manuscript: '证据稿件',
+  skillcandidate: '技能候选',
+}
 const fields = [
   ['question', '可检验的研究问题'],
   ['population', '研究人群或数据范围'],

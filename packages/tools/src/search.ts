@@ -109,6 +109,11 @@ export const globTool: ToolSpec = {
     properties: {
       pattern: { type: 'string', description: 'glob 模式，如 **/*.ts' },
       path: { type: 'string', description: '搜索起点（工作区相对），默认工作区根' },
+      include_hidden: {
+        type: 'boolean',
+        description:
+          '包含隐藏文件和目录。默认 false；模式或 path 明确写出隐藏段（如 .oph/** 或 path=.oph）时也会包含该范围。',
+      },
     },
     required: ['pattern'],
     additionalProperties: false,
@@ -122,13 +127,22 @@ export const globTool: ToolSpec = {
   permissionEffect: 'read',
   parallelSafe: true,
   async fn(args, ctx) {
-    const root = await resolveInWorkspace(rootsOf(ctx), String(args.path ?? '.'), {
+    const requestedPath = String(args.path ?? '.')
+    const pattern = String(args.pattern)
+    const root = await resolveInWorkspace(rootsOf(ctx), requestedPath, {
       mustExist: true,
     })
-    const glob = new Bun.Glob(String(args.pattern))
+    // Bun.Glob 的 dot:false 会连显式的 `.oph/**` 一起吞掉。那会让一个
+    // 已被 read_file 证实存在的文件，在 glob 里变成「0 个匹配」，模型很容易
+    // 误判为文件不存在。默认仍排除隐藏项，只有调用方明确指向它们才打开 dot。
+    const hidden =
+      args.include_hidden === true ||
+      hasExplicitHiddenSegment(pattern) ||
+      hasExplicitHiddenSegment(requestedPath)
+    const glob = new Bun.Glob(pattern)
     const hits: { path: string; mtime: number }[] = []
 
-    for await (const rel of glob.scan({ cwd: root, onlyFiles: true, dot: false })) {
+    for await (const rel of glob.scan({ cwd: root, onlyFiles: true, dot: hidden })) {
       if (rel.split(/[\\/]/).some((seg) => IGNORED_DIRS.has(seg))) continue
       const abs = join(root, rel)
       const info = await stat(abs).catch(() => null)
@@ -143,8 +157,14 @@ export const globTool: ToolSpec = {
 
     return {
       status: 'success',
-      message: `匹配 ${files.length} 个文件${truncated ? '（已截断）' : ''}`,
-      data: { files, truncated },
+      message:
+        `匹配 ${files.length} 个文件${truncated ? '（已截断）' : ''}` +
+        (!hidden ? '；默认未搜索隐藏文件，需显式写出隐藏路径或传 include_hidden=true' : ''),
+      data: {
+        files,
+        truncated,
+        hidden: hidden ? 'included' : 'excluded_by_default',
+      },
     }
   },
 }
@@ -333,6 +353,16 @@ async function runRipgrep(
 }
 
 const toPosix = (p: string) => p.split(sep).join('/')
+
+/**
+ * 只有路径的某一段明确以 `.` 开头才算要求隐藏项；`**` 这类泛匹配不能意外
+ * 扩大默认搜索面。兼容 Windows 传来的反斜杠，`.` 本身只是工作区根，不算隐藏段。
+ */
+function hasExplicitHiddenSegment(value: string): boolean {
+  return value
+    .split(/[\\/]+/)
+    .some((segment) => segment.length > 1 && segment !== '..' && segment.startsWith('.'))
+}
 
 /**
  * `路径:行号:内容` 里的路径重挂到工作区根上，只动路径段，不碰内容里的冒号。

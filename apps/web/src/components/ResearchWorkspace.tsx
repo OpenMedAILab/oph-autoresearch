@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from 'solid-js'
+import { createMemo, createSignal, For, Show } from 'solid-js'
 import { collapseWorkflowItems } from '../lib/render-items.ts'
 import type { TranscriptItem, WorkflowNodeState } from '../lib/store/index.ts'
 import {
@@ -47,8 +47,8 @@ interface ActivityNode {
 
 const RESEARCH_CHAIN: readonly StageDefinition[] = [
   {
-    name: '问题建模',
-    detail: '明确临床问题、研究终点、证据缺口与可证伪假设。',
+    name: '文献与刊会调研',
+    detail: '并行检索文献、分析投稿刊会与范文，比较可行课题。',
     agent: 'research-questioner',
     role: '研究问题与证据检索员',
     pattern: '候选—反证—综合',
@@ -97,7 +97,7 @@ const RESEARCH_CHAIN: readonly StageDefinition[] = [
     artifact: 'research/claim_evidence_map.yaml',
   },
   {
-    name: '研究输出',
+    name: '论文写作与审稿',
     detail: '整理图表、方法描述、模型卡、研究报告与可复现归档。',
     agent: 'evidence-writer',
     role: '证据写作与报告员',
@@ -275,6 +275,7 @@ export function WorkflowOverview() {
 
 /** 从右侧执行链进入的中央阶段详情。 */
 export function ResearchStageDetail() {
+  const [advanced, setAdvanced] = createSignal(false)
   const flow = createResearchFlow()
   const index = () => Math.min(RESEARCH_CHAIN.length - 1, Math.max(0, selectedResearchStage()))
   const stage = () => RESEARCH_CHAIN[index()]!
@@ -299,7 +300,12 @@ export function ResearchStageDetail() {
         </span>
       </header>
 
-      <ResearchCampaignPanel />
+      <button type="button" onClick={() => setAdvanced(!advanced())}>
+        {advanced() ? '收起执行与账本详情' : '展开执行与账本详情'}
+      </button>
+      <Show when={advanced()}>
+        <ResearchCampaignPanel />
+      </Show>
       <p>以下为聊天执行记录，不代表科研产物已核验或人工批准。</p>
       <section class="research-stage-card" aria-label={`${stage().name}阶段详情`}>
         <div class="research-stage-meta">

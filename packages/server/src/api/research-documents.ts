@@ -5,6 +5,7 @@ import {
   readResearchDocuments,
   writeResearchDocument,
 } from '../research/research-documents.ts'
+import { isKnowledgeKind } from '../research/research-knowledge.ts'
 import { publishResearchEvents } from '../research-events.ts'
 import { type ApiHandler, json } from './types.ts'
 
@@ -26,7 +27,8 @@ function exactBody(value: unknown): value is {
     Number.isSafeInteger(body.expectedVersion) &&
     body.expectedVersion > 0 &&
     typeof body.idempotencyKey === 'string' &&
-    ['study', 'manuscript', 'skillcandidate'].includes(String(body.kind)) &&
+    (['study', 'manuscript', 'skillcandidate'].includes(String(body.kind)) ||
+      isKnowledgeKind(String(body.kind))) &&
     !!body.document &&
     typeof body.document === 'object' &&
     !Array.isArray(body.document)

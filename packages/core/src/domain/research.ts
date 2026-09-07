@@ -421,6 +421,15 @@ export interface ResearchCampaign {
   policy: ResearchJsonObject
   inputs: ResearchJsonObject
   budget: ResearchBudget
+  studySelection?: {
+    documentId: string
+    contentHash: string
+    documentVersion: number
+    selectedAt: number
+    requestId: string
+    localRoot: string
+    serverBindingHash: string | null
+  }
   artifactVersions: ArtifactVersion[]
   approvals: HumanApproval[]
   taskRevisions: ResearchTaskRevision[]
@@ -495,6 +504,14 @@ export type ResearchCommand =
       contractHash: string
       plan: ResearchJsonObject
       tasks: Extract<ResearchCommand, { kind: 'declareSyntheticTask' }>[]
+    }
+  | {
+      kind: 'selectStudy'
+      documentId: string
+      contentHash: string
+      requestId: string
+      localRoot: string
+      serverBindingHash: string | null
     }
   | { kind: 'setPolicy'; policy: ResearchJsonObject }
   | { kind: 'setInputs'; inputs: ResearchJsonObject }

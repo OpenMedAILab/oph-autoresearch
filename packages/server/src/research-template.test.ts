@@ -23,14 +23,16 @@ describe('眼科科研工作区模板', () => {
     const root = await tempWorkspace()
     const result = ensureResearchWorkspace(root)
 
-    expect(result.created).toHaveLength(13)
+    expect(result.created).toHaveLength(15)
     expect(result.updated).toEqual([])
     expect((await scanSkills(root)).map((skill) => skill.name).sort()).toEqual([
+      'oph-manuscript-review',
       'oph-question-design',
       'oph-research-pipeline',
       'oph-research-reporting',
       'oph-results-review',
       'oph-study-protocol',
+      'oph-venue-analysis',
       'ssh-data-audit',
       'ssh-experiment-runner',
     ])
@@ -48,6 +50,9 @@ describe('眼科科研工作区模板', () => {
       'clinical-challenger',
       'methodology-critic',
       'reproducibility-auditor',
+      'venue-analyst',
+      'experiment-preparer',
+      'manuscript-reviewer',
     ])
     expect(
       team.roles.every((role) => role.provider === undefined && role.model === undefined),
@@ -84,13 +89,13 @@ describe('眼科科研工作区模板', () => {
     const result = ensureResearchWorkspace(root)
 
     expect(result.created).toEqual([])
-    expect(result.existing).toHaveLength(13)
+    expect(result.existing).toHaveLength(15)
     expect(result.updated).toEqual(['.oph/team.json'])
     const migrated = JSON.parse(await readFile(teamPath, 'utf8'))
     expect(migrated.name).toBe('我的科研团队')
     expect(migrated.custom).toBe(true)
-    expect(migrated.templateVersion).toBe(3)
-    expect(migrated.roles).toHaveLength(11)
+    expect(migrated.templateVersion).toBe(4)
+    expect(migrated.roles).toHaveLength(14)
     expect(migrated.roles[0]).toMatchObject({
       id: 'coordinator',
       name: '自定义协调员',

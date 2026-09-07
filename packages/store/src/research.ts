@@ -2995,6 +2995,38 @@ function nextCampaign(
       }
       break
     }
+    case 'selectStudy': {
+      const study = campaign.artifactVersions
+        .filter((item) => item.artifactId === 'document-study')
+        .toSorted((a, b) => b.version - a.version)[0]
+      if (
+        !study ||
+        study.id !== command.documentId ||
+        study.contentHash !== command.contentHash ||
+        textError(command.requestId, 'requestId') ||
+        textError(command.localRoot, 'localRoot')
+      )
+        return invalid('stale_study', '研究方案已变化，请查看当前版本后确认')
+      if (
+        campaign.studySelection?.contentHash === study.contentHash &&
+        campaign.studySelection.localRoot === command.localRoot &&
+        campaign.studySelection.serverBindingHash === command.serverBindingHash
+      )
+        return invalid('study_already_selected', '当前方案已确认')
+      next = {
+        ...campaign,
+        studySelection: {
+          documentId: study.id,
+          contentHash: study.contentHash,
+          documentVersion: study.version,
+          selectedAt: now,
+          requestId: command.requestId,
+          localRoot: command.localRoot,
+          serverBindingHash: command.serverBindingHash,
+        },
+      }
+      break
+    }
     case 'recordArtifact': {
       const error =
         textError(command.artifactId, 'artifactId') ??

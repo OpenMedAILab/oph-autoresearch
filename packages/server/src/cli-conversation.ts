@@ -18,6 +18,7 @@ import {
 } from '@oph-autoresearch/store'
 import { findCli, runCli } from '@oph-autoresearch/team'
 import { cliCatalogSnapshot } from './cli-catalog.ts'
+import { RESEARCH_ASSISTANT_INSTRUCTION } from './research/research-assistant.ts'
 import { resolveWorkspaceServerBinding } from './workspace-binding.ts'
 
 export const CLI_PROVIDER_PREFIX = 'cli:'
@@ -31,6 +32,7 @@ export interface NativeResearchControlBridge {
   endpoint: string
   token: string
   campaignIds: readonly string[]
+  conversationId?: string
 }
 
 export class CliConversationSession {
@@ -123,12 +125,12 @@ export class CliConversationSession {
         : [process.execPath]
       const controlCommand = controlClientArgv.map((arg) => JSON.stringify(arg)).join(' ')
       const controlInstruction = control
-        ? `\n受控研究操作只能通过 \`${controlCommand} research\` 调用本轮注入的本地桥。它只允许 campaign ${control.campaignIds.join(', ') || '（无可用 campaign）'} 的 prepare/propose/submit/status/events/cancel/reconcile/receipt/request_review；它不能审批、签名或发布。每次变更都必须带 ledger 要求的 expectedVersion 和 idempotencyKey。\n`
+        ? `\n开始研究时先运行 research context 读取项目资料；正式实验前才运行 research preflight，使用 research list 发现本会话最新提案；单个提案可省略 --campaign，多个提案按目标选择，不向用户索取或展示内部 ID。CLI 登录与 SSH 可用不能代替正式执行准入。受控研究操作只能通过 \`${controlCommand} research\` 调用本轮注入的本地桥。服务端将能力限定在当前会话：可用 prepare 从主题创建研究，context 读取资料，knowledge/search 检索项目刊会知识，workflow/preset 获取流程，documents/read 与 record_document/write 管理资料；正式实验沿用 propose/submit/status/events/cancel/reconcile/receipt/request_review。它不能确认人类方案、审批、签名或发布。每次变更都必须带 ledger 要求的 expectedVersion 和 idempotencyKey。\n`
         : ''
       const bindingContext = boundServer
         ? `本机项目工作目录：${ws.rootPath}；绑定的服务器工作目录：${boundServer.binding.remoteRoot}。本机保存对话、方案和产物索引，服务器目录用于代码与实验；目录绑定不代表自动文件同步。`
         : '此历史项目尚未绑定服务器工作目录，请先在项目侧栏完成绑定再安排远程实验。'
-      const input = `${bindingContext}\n远程执行端能力清单（仅状态，不是实验执行授权）：${JSON.stringify(remoteCapabilities)}。本机负责规划与审核；远程 CLI 用于受控实验，不是主控模型。${controlInstruction}
+      const input = `${RESEARCH_ASSISTANT_INSTRUCTION}\n原生 CLI 使用下面的 research 桥命令读取预设；若自身不支持子代理，请明确该限制，不把返回预设声称已派发。\n${bindingContext}\n远程执行端能力清单（仅状态，不是实验执行授权）：${JSON.stringify(remoteCapabilities)}。本机负责规划与审核；远程 CLI 用于受控实验，不是主控模型。${controlInstruction}
 你正在项目 ${this.opts.workspaceRoot} 中处理研究对话。以下历史仅作为上下文，回答最后一条用户消息。\n${history.join('\n\n')}\n\nuser: ${prompt}`
       if (Buffer.byteLength(input) > 96_000)
         throw new Error(
@@ -160,6 +162,7 @@ export class CliConversationSession {
                 OPH_RESEARCH_CONTROL_ENDPOINT: control.endpoint,
                 OPH_RESEARCH_CONTROL_TOKEN: control.token,
                 OPH_RESEARCH_CONTROL_CAMPAIGNS: control.campaignIds.join(','),
+                OPH_RESEARCH_CONTROL_CONVERSATION: control.conversationId ?? '',
                 OPH_RESEARCH_CONTROL_CLIENT_ARGV: JSON.stringify(controlClientArgv),
               },
             }

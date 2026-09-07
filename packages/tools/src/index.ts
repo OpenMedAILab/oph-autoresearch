@@ -210,3 +210,5 @@ export function registerBuiltinTools(
 }
 
 export { prepareSshCommand, setSshCliCapabilities } from './ssh.ts'
+
+export { htmlToText } from './web.ts'

@@ -11,6 +11,7 @@ import {
 } from 'solid-js'
 import { Composer } from './components/Composer.tsx'
 import RemoteSshBrowser from './components/RemoteSshBrowser.tsx'
+import { ResearchAssistantCard } from './components/ResearchAssistantCard.tsx'
 import { ResearchStageDetail } from './components/ResearchWorkspace.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
 import { Tooltip } from './components/Tooltip.tsx'
@@ -329,6 +330,7 @@ export function App() {
             </div>
           </Match>
           <Match when={centerView() === 'chat'}>
+            <ResearchAssistantCard />
             <Show when={!panelMaximized()}>
               <Transcript />
             </Show>
@@ -352,14 +354,20 @@ export function App() {
             </Show>
           </Match>
           <Match when={centerView() === 'ssh'}>
-            <div class="workspace-view ssh-workspace-view">
-              <RemoteSshBrowser />
-            </div>
+            <span hidden />
           </Match>
           <Match when={centerView() === 'research'}>
             <ResearchStageDetail />
           </Match>
         </Switch>
+        <Show when={workspace()}>
+          <div
+            class="workspace-view ssh-workspace-view"
+            style={{ display: centerView() === 'ssh' ? undefined : 'none' }}
+          >
+            <RemoteSshBrowser />
+          </div>
+        </Show>
       </main>
 
       {/*

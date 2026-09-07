@@ -88,6 +88,8 @@ export function quoteBoundedController(
 }
 
 const READ_ONLY = new Set([
+  'list',
+  'preflight',
   'status',
   'events',
   'next_actions',
@@ -228,6 +230,7 @@ export function createBoundedController(input: {
   }
   const port: ResearchControlPort = {
     async execute(request) {
+      request = { ...request, campaignId: request.campaignId.trim() || campaign.id }
       if (request.campaignId !== campaign.id)
         return { ok: false, status: 403, data: { error: '本次推进仅限已批准的研究项目' } }
       if (!READ_ONLY.has(request.operation)) {

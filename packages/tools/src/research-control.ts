@@ -2,6 +2,14 @@ import type { ToolContext, ToolSpec } from '@oph-autoresearch/agent'
 import type { ResearchControlOperation } from '@oph-autoresearch/core'
 
 const OPERATIONS: ResearchControlOperation[] = [
+  'list',
+  'knowledge/search',
+  'context',
+  'workflow/preset',
+  'literature/import',
+  'evidence/fetch',
+
+  'preflight',
   'prepare',
   'propose',
   'submit',
@@ -25,15 +33,15 @@ const OPERATIONS: ResearchControlOperation[] = [
 export const researchControlTool: ToolSpec = {
   name: 'research_control',
   description:
-    '在当前会话已授权的 research campaign 上准备、提案、提交、查询、取消、对账、读取回执、请求模型审查或读取/记录不可变研究文档。每次写入必须带 expectedVersion 和 idempotencyKey。此工具不能审批、签名、撤销审批或发布。',
+    '通过聊天推进研究。context 获取已有项目、资料和文档字段；prepare 用 body {goal,idempotencyKey} 在当前会话创建研究。workflow/preset 的 body.phase 为 discovery/preparation/writing/peerreview，返回参数后实际调用 workflow。evidence/fetch 保存公开正文；literature/import 登记 DOI/PMID；record_document/write 保存文献、刊会、study、handoff、审稿案例及稿件版本。preflight 仅检查正式执行准备，不阻止调研。campaign_id 可省略，单个研究自动选择。不能确认人类方案、审批、签名或发布。',
   parameters: {
     type: 'object',
     properties: {
       operation: { type: 'string', enum: OPERATIONS },
-      campaign_id: { type: 'string' },
-      body: { type: 'object', additionalProperties: true },
+      campaign_id: { type: ['string', 'null'] },
+      body: { type: ['object', 'null'], additionalProperties: true },
     },
-    required: ['operation', 'campaign_id'],
+    required: ['operation'],
     additionalProperties: false,
   },
   actionKind: 'run',
@@ -50,18 +58,17 @@ export const researchControlTool: ToolSpec = {
     if (
       typeof args.operation !== 'string' ||
       !OPERATIONS.includes(args.operation as ResearchControlOperation) ||
-      typeof args.campaign_id !== 'string' ||
-      !args.campaign_id.trim()
+      (args.campaign_id != null && typeof args.campaign_id !== 'string')
     )
       return { status: 'failure', message: 'operation 或 campaign_id 无效' }
     if (
-      args.body !== undefined &&
+      args.body != null &&
       (!args.body || typeof args.body !== 'object' || Array.isArray(args.body))
     )
       return { status: 'failure', message: 'body 必须是对象' }
     const result = await ctx.researchControl.execute({
       operation: args.operation as ResearchControlOperation,
-      campaignId: args.campaign_id,
+      campaignId: typeof args.campaign_id === 'string' ? args.campaign_id.trim() : '',
       ...(args.body ? { body: args.body as Record<string, unknown> } : {}),
     })
     return result.ok

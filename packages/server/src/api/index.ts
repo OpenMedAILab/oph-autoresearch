@@ -1,4 +1,5 @@
 import { handleCliPreparationsApi } from './cli-preparations.ts'
+import { handleResearchAssistantApi } from './research-assistant.ts'
 /**
  * HTTP API 的派发器。
  *
@@ -79,6 +80,7 @@ const HANDLERS: ApiHandler[] = [
   handleTeamApi,
   handleUsageApi,
   handleResearchControlApi,
+  handleResearchAssistantApi,
   handleResearchDocumentsApi,
   handleCliPreparationsApi,
   handleFormalExecutionApi,

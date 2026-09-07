@@ -1,5 +1,14 @@
 /** Client used by a native CLI only when its parent injected a scoped bridge. */
 const OPERATIONS = new Set([
+  'list',
+  'knowledge/search',
+  'context',
+  'workflow/preset',
+  'literature/import',
+  'evidence/fetch',
+
+  'preflight',
+  'next_actions',
   'prepare',
   'propose',
   'submit',
@@ -33,7 +42,12 @@ export async function runResearchControl(args: string[]): Promise<number> {
     process.stderr.write('此命令只能由受控原生 CLI 会话调用。\n')
     return 2
   }
-  if (campaignId && !allowed.has(campaignId)) {
+  if (
+    campaignId &&
+    allowed.size > 0 &&
+    !allowed.has(campaignId) &&
+    !process.env.OPH_RESEARCH_CONTROL_CONVERSATION
+  ) {
     process.stderr.write('campaign 不在本轮受控范围内。\n')
     return 2
   }

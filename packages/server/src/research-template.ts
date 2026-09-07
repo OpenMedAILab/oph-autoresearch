@@ -5,6 +5,7 @@
  * 源码旁的 assets 不一定存在。初始化补缺失文件；团队模板升级只补字段和角色，不覆盖已有自定义值。
  */
 
+import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
@@ -15,7 +16,7 @@ export interface ResearchTemplateResult {
 }
 
 const DEFAULT_TEAM = {
-  templateVersion: 3,
+  templateVersion: 4,
   name: 'oph-autoresearch 眼科科研团队',
   rules: {
     maxConcurrent: 4,
@@ -26,9 +27,9 @@ const DEFAULT_TEAM = {
     {
       id: 'coordinator',
       name: '研究协调员',
-      description: '贯穿六阶段，拆解任务、编排角色、维护产物契约和人工检查点',
+      description: '通过主控聊天推进调研、方案确认、实验与论文审稿',
       systemPrompt:
-        '你负责协调，不代替数据审计员或独立审查员下结论。先读取 oph-research-pipeline 技能；每个阶段只接受满足契约的产物。方案冻结后必须等待用户批准。',
+        '先读取 oph-research-pipeline。继承已有项目与服务器目录，用 research_control context/prepare 和 workflow/preset 从主题启动研究。内部子代理输出由你核验，研究方案必须等待用户在聊天卡确认。资料与方案保存在版本文档，遇到执行缺项时保留前期成果。',
       modules: ['阶段编排', '产物契约', '人工检查点', '子 Agent 调度'],
       skills: ['oph-research-pipeline'],
       allowedTools: [
@@ -42,6 +43,7 @@ const DEFAULT_TEAM = {
         'write_todos',
         'subagent',
         'workflow',
+        'research_control',
       ],
       maxSteps: 24,
     },
@@ -151,7 +153,7 @@ const DEFAULT_TEAM = {
       name: '证据写作与报告员',
       description: '只依据已通过复核的证据生成科研报告、模型卡和论文初稿',
       systemPrompt:
-        '先读取 oph-research-reporting 技能。逐条读取 claim_evidence_map，只写已接受或明确标注限制的主张；不新增数字、不弱化局限，不把研究验证写成临床可用。',
+        '先读取 oph-research-reporting 技能。逐条读取 claim_evidence_map，只写已接受或明确标注限制的主张；不新增数字、不弱化局限，不把研究验证写成临床可用。 写稿前读取已保存刊会画像和文献正文证据。官方规则与范文推断分开；使用真实审稿意见只限被授权进入模型上下文的训练集。检索和示例学习不是参数微调。',
       modules: ['证据映射', '模型卡', '图表说明', '科研报告与论文'],
       skills: ['oph-research-reporting'],
       allowedTools: [
@@ -206,62 +208,125 @@ const DEFAULT_TEAM = {
       allowedTools: ['read_skill', 'read_file', 'list_dir', 'glob', 'grep', 'run_command'],
       maxSteps: 24,
     },
+    {
+      id: 'venue-analyst',
+      name: '刊会与写作范例专员',
+      description: '分析投稿刊会、官方规则与相关高引用及近期范文',
+      systemPrompt:
+        '先读 oph-venue-analysis。输出带来源日期的 evidence 与 venue 结构供主控入库。只有摘要时不能分析全文写法。',
+      modules: ['刊会适配', '官方投稿要求', '范文分析'],
+      skills: ['oph-venue-analysis'],
+      allowedTools: [
+        'read_skill',
+        'read_file',
+        'list_dir',
+        'glob',
+        'grep',
+        'web_search',
+        'web_fetch',
+        'write_file',
+      ],
+      maxSteps: 28,
+    },
+    {
+      id: 'experiment-preparer',
+      name: '实验准备专员',
+      description: '在方案确认后整理本地实验交接包',
+      systemPrompt:
+        '只读取明确交付的确认方案、数据清单和项目绑定。实际生成 research/experiment_handoff.md，列出任务、预期产物、环境及执行缺项，并返回 handoff 结构。你的权限仅限本地准备，禁止远端执行、训练或声称已有实验结果。',
+      modules: ['方案交接', '实验准备', '缺项识别'],
+      skills: ['oph-study-protocol'],
+      allowedTools: [
+        'read_skill',
+        'read_file',
+        'list_dir',
+        'glob',
+        'grep',
+        'write_file',
+        'edit_file',
+      ],
+      maxSteps: 24,
+    },
+    {
+      id: 'manuscript-reviewer',
+      name: '稿件证据与规范审稿员',
+      description: '独立审阅稿件证据、引用和刊会规范',
+      systemPrompt:
+        '先读 oph-manuscript-review。仅依据明确交付的稿件版本、实验产物、文献及刊会档案点评；不共享写作推理。输出具体定位、严重程度和可执行建议。',
+      modules: ['稿件审阅', '引用核验', '刊会规范'],
+      skills: ['oph-manuscript-review'],
+      allowedTools: [
+        'read_skill',
+        'read_file',
+        'list_dir',
+        'glob',
+        'grep',
+        'web_search',
+        'web_fetch',
+      ],
+      maxSteps: 24,
+    },
   ],
 } as const
 
+const LEGACY_ROLE_FIELDS = {
+  coordinator: {
+    description: '贯穿六阶段，拆解任务、编排角色、维护产物契约和人工检查点',
+    systemPrompt:
+      '你负责协调，不代替数据审计员或独立审查员下结论。先读取 oph-research-pipeline 技能；每个阶段只接受满足契约的产物。方案冻结后必须等待用户批准。',
+  },
+  'research-questioner': {
+    description: '将临床科研意图转成可检验问题，并建立可追溯的文献证据底稿',
+    systemPrompt:
+      '先读取 oph-question-design 技能。围绕 PICO/PECO、预期用途、主要终点和可证伪假设工作；文献结论必须保留来源与适用边界，不把搜索摘要当作证据。',
+  },
+  'data-auditor': {
+    description: '通过 SSH 对眼科影像数据做只读盘点、完整性与泄漏风险检查',
+    systemPrompt:
+      '先读取 ssh-data-audit 技能。只在远端聚合统计，不打印或下载文件名、患者标识、DICOM 头或原始影像；不得修改远程数据。将脱敏汇总写入 dataset_manifest.json。',
+  },
+  'protocol-statistician': {
+    description: '冻结纳排标准、患者级划分、终点、统计方法、基线和消融计划',
+    systemPrompt:
+      '先读取 oph-study-protocol 技能。所有主要分析、阈值、亚组、缺失处理和失败判据都必须在实验前冻结；发现样本量或标签定义不足时停止并提出最小决策清单。',
+  },
+  'experiment-engineer': {
+    description: '在 SSH GPU 服务器执行已批准的基线、训练和评估并保留回执',
+    systemPrompt:
+      '先读取 ssh-experiment-runner 技能。没有明确的方案批准记录不得启动训练。原始数据留在远端；固定配置、种子和代码版本，记录完整运行回执。',
+  },
+  'independent-reviewer': {
+    description: '使用独立上下文复核数据划分、统计结果与论文主张',
+    systemPrompt:
+      '先读取 oph-results-review 技能。不要沿用执行者的未验证解释；从运行回执和机器可核验产物独立复算。发现证据不足时明确驳回，不补造数字。',
+  },
+  'evidence-writer': {
+    description: '只依据已通过复核的证据生成科研报告、模型卡和论文初稿',
+    systemPrompt:
+      '先读取 oph-research-reporting 技能。逐条读取 claim_evidence_map，只写已接受或明确标注限制的主张；不新增数字、不弱化局限，不把研究验证写成临床可用。',
+  },
+  'clinical-challenger': {
+    description: '从临床路径、适用人群和失败病例角度主动推翻候选假设与研究结论',
+    systemPrompt:
+      '你是对抗性审查者，不替候选方案润色。优先寻找不适用人群、替代解释、标签定义冲突、临床无意义终点和会导致结论失效的反例；输出可验证的反证清单。',
+  },
+  'methodology-critic': {
+    description: '独立检查设计、统计、数据泄漏、评价指标和多重比较问题',
+    systemPrompt:
+      '你只依据显式产物与机器可核验证据审查。主动构造数据泄漏、偏倚、指标选择、样本量、阈值与多重比较方面的失败路径；不要把另一个模型的同意当作验证。',
+  },
+  'reproducibility-auditor': {
+    description: '核实命令是否真实运行，并校验代码、环境、配置、数据快照和结果之间的证据链',
+    systemPrompt:
+      '你是独立审计者。不得用 mock、跳过或模型自述代替真实验证；逐项核对运行日志、退出码、代码提交、环境锁定、配置哈希、数据快照和输出文件。证据不足就标记未验证。',
+  },
+} as Record<string, Record<string, string>>
+
 const TEAM_CONFIG = `${JSON.stringify(DEFAULT_TEAM, null, 2)}\n`
 
-const PIPELINE_SKILL = `---
-name: oph-research-pipeline
-description: 眼科影像 AI 研究的端到端编排技能；用于从研究问题、SSH 数据审计和方案冻结推进到实验、独立复核与论文证据映射。
----
-
-# 眼科影像自动科研流程
-
-## 不可突破的边界
-
-- 这是科研辅助流程，不输出临床诊断或治疗建议。
-- 原始影像、DICOM 头、患者标识和逐例结果留在获授权的 SSH 服务器。
-- 本地只保存脱敏聚合、研究方案、代码、配置、日志摘要和可公开图表。
-- 默认只读。远端训练、写文件、提交作业或改变数据必须在方案冻结检查点获得用户明确批准。
-- 角色职责与模型配置分离。优先让执行者与审查者使用不同模型或至少独立上下文；可用时选择 \`cli:claude\`、\`cli:codex\` 等外部原生 CLI。
-- 开始编排前读取 \`.oph/patterns.json\`。固定的是六阶段治理骨架，阶段内部的角色数量、模型和依赖图由 Pattern 动态决定。
-
-## 阶段与产物契约
-
-1. **研究问题** → \`research/research_question.yaml\`
-   - 必含：研究目标、主要假设、目标人群、输入模态、预测目标、主要/次要终点、预期用途、排除项。
-2. **远程数据审计** → \`research/dataset_manifest.json\`
-   - 调用 \`ssh-data-audit\`；只接受脱敏聚合。
-   - 必含：数据快照标识、病例/眼/检查/图像数、模态与标签分布、缺失、重复、划分单位、泄漏风险、质量问题。
-3. **方案冻结** → \`research/study_protocol.md\` + \`research/experiment_spec.yaml\`
-   - 预先确定纳排标准、患者级拆分、主要指标、置信区间、亚组、基线、消融、停止规则和失败判据。
-   - 到此创建 workflow checkpoint，汇报尚未决定的问题；未经批准不得训练。
-4. **基线与正式实验** → \`research/run_receipt.json\`
-   - 调用 \`ssh-experiment-runner\`；每次运行有唯一 run id，配置不可静默改变。
-5. **独立复核** → \`research/claim_evidence_map.yaml\`
-   - 调用 \`oph-results-review\`；主张必须逐条指向可核验的指标、图表或统计输出。
-6. **研究输出** → 研究报告、模型卡与可复现归档
-   - 调用 \`oph-research-reporting\`；只写入已通过独立复核的主张，最终发布前停在研究者审阅检查点。
-
-## Pattern 选择与执行
-
-- **候选—反证—综合**：问题建模和方案冻结。至少两个独立候选，一个 clinical-challenger 或 methodology-critic，再由协调员综合；反对意见不得从综合稿中删除。
-- **分布式审计**：数据审计。按中心、模态、标签、缺失和泄漏风险拆成互不重叠的只读轨道，再由 data-auditor 汇总。
-- **实验 DAG**：远程实验。每个 Worker 负责独立配置/脚本或运行目录，禁止并发编辑同一文件；并发值按 GPU 和项目硬上限设置。
-- **自验证**：独立复核。independent-reviewer 与 reproducibility-auditor 使用新上下文复算，methodology-critic 主动制造反例。
-- **文档审查**：研究输出。写作、引用、统计和复现声明分开核验，最终再综合。
-
-每张 workflow 图都必须以 checkpoint 验收其 agent 节点。节点可显式填写 provider + model；生成者与审查者优先使用不同模型家族。工具结果、失败路线和反例分别写入 \`research/artifact_ledger.yaml\` 与 \`research/pitfall_registry.yaml\`，不得只留在聊天记录里。
-
-## 推荐编排
-
-按阶段分别建立 workflow，而不是一张固定角色长链：候选/探索并行 → Critic/Challenger 对抗检查 → Synthesizer 综合 → 工具验证 → checkpoint。主会话批准后再进入下一阶段；revise 必须携带累计反例回到原子会话。没有依赖的检查可并行，但审查节点不得与被审对象共享隐式上下文。
-
-## 失败即停止
-
-出现以下任一情况，不得继续训练或撰写结论：患者级划分无法确认、标签定义不清、数据版本不可追溯、关键亚组数量未知、远程路径或 SSH 主机未经确认、产物缺字段、回执与实际文件不一致。
-`
+const PIPELINE_SKILL =
+  '---\nname: oph-research-pipeline\ndescription: 主控聊天驱动眼科科研；用于已有项目与数据的文献/刊会调研、方案人工确认、实验交接、证据写作和稿件审阅。\n---\n\n# 主控科研助手\n\n用户提供主题后，先用 research_control context 继承已有目录、服务器绑定和资料。没有研究记录时用 prepare {goal,idempotencyKey} 创建；不要求用户去流程页面或重新填写目录。工具返回的内部标识只在工具间使用。\n\n## 默认工作流\n\n1. 获取 workflow/preset phase=discovery，把返回的 workflow 参数实际交给现有 workflow 工具。文献专员、刊会专员与数据审计员并行，方案统计员综合。数据已准备时先读取清单，必要时才做授权范围内的只读核对。公开文献调研不要求实验环境就绪。\n2. 主控核验输出，用 evidence/fetch 或 record_document/write 保存可定位文献片段、刊会画像，再保存 study。字段以 context.documentSchemas 为准。研究问题、候选比较、主要终点、患者级拆分、基线/消融、资源与停止规则应清楚；未知项不填成事实。\n3. 向用户展示推荐方案与刊会依据，等待聊天方案卡“确认方案并继续”。内部 workflow checkpoint 由主控核验并续接；这不代表人类批准。无需每个内部阶段都询问用户。\n4. 用户确认具体方案版本后，preparation 预设把它交给实验准备专员。实际生成本地交接包后登记 handoff，保留确认方案引用、任务、预期产物和执行缺项。不要把准备完成称为训练完成。\n5. 正式运行前才用 preflight 检查对应执行能力，复用既有执行工具与批准。当前执行器缺失时清楚说明当前节点缺什么，不抹去调研成果。未知运行状态先观察/核对，不盲目重投；取消请求不等于已经停止。\n6. 真实结果经独立复核后，writing 预设使用文献、刊会档案与已接受主张写稿，保存 manuscript；peerreview 预设由临床贡献、方法统计、证据规范三个独立上下文审稿，保存 peerreview，并最多完成一轮返修。发布/投稿仍由用户决定。\n\n## 资料与学习\n\n刊会资料用一个稳定 key 区分期刊或会议届次/track，保存官方要求的来源、日期和适用版本。范文选择说明相关性、高引用或近期代表性；引用数查不到保持 null。官方要求与写法推断结构分开，只有摘要不能声称学习了全文写法。\n\n真实稿件与对应审稿意见按被审版本保存为 reviewcase。同一论文各轮次按 paperGroup 分组，不跨训练/验证/测试集；local-only 和保留集不进入写作或审稿模型。合成样例不算真实审稿案例。检索/示例写作不修改参数；实际微调需另行连接训练后端、数据许可和评测，不能显示假训练成功。\n\n## 不改变的研究边界\n\n原始影像、DICOM 头、患者标识及逐例结果留在授权服务器。本地保存脱敏聚合、代码、方案和汇总产物。方案确认只授权所描述的准备与推进范围；实际远端写入、训练仍遵守既有批准与权限，改变数据、实验范围或资源预算需重新确认。执行者与复核者使用不同模型或独立上下文；证据、负结果和反例不得删除或补造。\n'
+const LEGACY_PIPELINE_HASH = '5729f459fd2fb887699f7b1826b7ab84d2734db59c39a10265db7365671e69c4'
 
 const DATA_AUDIT_SKILL = `---
 name: ssh-data-audit
@@ -543,7 +608,14 @@ pitfalls: []
 # evidence, impact, mitigation, status, related_artifacts。
 `
 
+const VENUE_SKILL =
+  '---\nname: oph-venue-analysis\ndescription: 为科研主题分析投稿期刊/会议，收集官方要求、相关高引用与近期范文，建立可追溯写作档案。\n---\n\n# 刊会分析\n\n从主题、研究类型和现有数据评估适配度，给出推荐与不适配理由。阅读官网投稿指南，记录URL、获取日期和适用版本；会议须记录届次与track。未知要求明确列出，不猜测截止日期或费用。\n\n同时选择主题相关高引用文章与近期代表文章，保留统计提供方、查询日期与选入理由。引用数未知为null，不等于零。先获取可获得正文、定位章节/段落/页码，再分析引言、贡献、实验、图表、讨论与局限写法；仅元数据/摘要不能支撑全文写法分析。\n\n输出 context.documentSchemas 对应的 evidence 和 venue 记录，交由主控用版本文档入库。rules只放官网明确要求；writingInferences放从范文归纳的观察，并引用相应evidenceKey。公开阅读不自动意味着有训练许可。\n'
+const MANUSCRIPT_REVIEW_SKILL =
+  '---\nname: oph-manuscript-review\ndescription: 对具体稿件版本执行多角色Agent审稿，使用可追溯证据和刊会规范，输出定位明确的问题与返修建议。\n---\n\n# 稿件审稿\n\n以当前稿件版本、实验结果、文献和刊会画像为输入，使用独立于写作的上下文。分别核对临床贡献、设计统计、主张与证据及官方规范；明确区分证据缺失和表达问题。\n\n每条意见记录角色、段落/图表/主张定位、major/minor、问题及可执行建议。不得编造审稿人身份、真实同行评审或录用保证。主控汇总为peerreview版本文档，至多一轮自动返修，保留原稿与问题处理记录。\n\n审稿案例仅从允许model-context的train数据取例；local-only、validation/test及合成样例不能充当真实校准证据。被审稿版本与最终发表版不可混淆。导入数据不等于已改善模型，检索和提示修正不是参数微调。\n'
+
 const TEMPLATE_FILES: Readonly<Record<string, string>> = {
+  '.agents/skills/oph-venue-analysis/SKILL.md': VENUE_SKILL,
+  '.agents/skills/oph-manuscript-review/SKILL.md': MANUSCRIPT_REVIEW_SKILL,
   '.oph/team.json': TEAM_CONFIG,
   '.oph/patterns.json': PATTERN_CONFIG,
   '.agents/skills/oph-research-pipeline/SKILL.md': PIPELINE_SKILL,
@@ -570,8 +642,8 @@ function migrateTeamConfig(path: string): boolean {
   }
 
   let changed = false
-  if (typeof parsed.templateVersion !== 'number' || parsed.templateVersion < 3) {
-    parsed.templateVersion = 3
+  if (typeof parsed.templateVersion !== 'number' || parsed.templateVersion < 4) {
+    parsed.templateVersion = 4
     changed = true
   }
   if (!Array.isArray(parsed.roles)) return false
@@ -585,6 +657,15 @@ function migrateTeamConfig(path: string): boolean {
       roles.push(JSON.parse(JSON.stringify(defaultRole)) as Record<string, unknown>)
       changed = true
       continue
+    }
+    for (const field of ['description', 'systemPrompt'] as const) {
+      if (
+        existing[field] === LEGACY_ROLE_FIELDS[defaultRole.id]?.[field] &&
+        existing[field] !== defaultRole[field]
+      ) {
+        existing[field] = defaultRole[field]
+        changed = true
+      }
     }
     if (!Array.isArray(existing.modules)) {
       existing.modules = [...defaultRole.modules]
@@ -618,6 +699,13 @@ export function ensureResearchWorkspace(workspaceRoot: string): ResearchTemplate
     }
   }
 
+  const pipelinePath = join(workspaceRoot, '.agents/skills/oph-research-pipeline/SKILL.md')
+  if (
+    createHash('sha256').update(readFileSync(pipelinePath)).digest('hex') === LEGACY_PIPELINE_HASH
+  ) {
+    writeFileSync(pipelinePath, PIPELINE_SKILL)
+    result.updated.push('.agents/skills/oph-research-pipeline/SKILL.md')
+  }
   const teamPath = join(workspaceRoot, '.oph/team.json')
   if (!result.created.includes('.oph/team.json') && migrateTeamConfig(teamPath)) {
     result.updated.push('.oph/team.json')

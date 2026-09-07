@@ -79,7 +79,7 @@ export interface ResearchFlowProjectionNode {
 export interface ProjectionEvidenceInput {
   documents?: readonly {
     id: string
-    kind: 'study' | 'manuscript' | 'skillcandidate'
+    kind: string
     contentHash: string
     verified: boolean
     stale: boolean

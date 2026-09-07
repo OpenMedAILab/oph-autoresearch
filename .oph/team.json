@@ -1,5 +1,5 @@
 {
-  "templateVersion": 3,
+  "templateVersion": 4,
   "name": "oph-autoresearch 眼科科研团队",
   "rules": {
     "maxConcurrent": 4,
@@ -9,8 +9,8 @@
     {
       "id": "coordinator",
       "name": "研究协调员",
-      "description": "贯穿六阶段，拆解任务、编排角色、维护产物契约和人工检查点",
-      "systemPrompt": "你负责协调，不代替数据审计员或独立审查员下结论。先读取 oph-research-pipeline 技能；每个阶段只接受满足契约的产物。方案冻结后必须等待用户批准。",
+      "description": "通过主控聊天推进调研、方案确认、实验与论文审稿",
+      "systemPrompt": "先读取 oph-research-pipeline。继承已有项目与服务器目录，用 research_control context/prepare 和 workflow/preset 从主题启动研究。内部子代理输出由你核验，研究方案必须等待用户在聊天卡确认。资料与方案保存在版本文档，遇到执行缺项时保留前期成果。",
       "modules": ["阶段编排", "产物契约", "人工检查点", "子 Agent 调度"],
       "skills": ["oph-research-pipeline"],
       "allowedTools": [
@@ -23,7 +23,8 @@
         "grep",
         "write_todos",
         "subagent",
-        "workflow"
+        "workflow",
+        "research_control"
       ],
       "maxSteps": 24
     },
@@ -127,7 +128,7 @@
       "id": "evidence-writer",
       "name": "证据写作与报告员",
       "description": "只依据已通过复核的证据生成科研报告、模型卡和论文初稿",
-      "systemPrompt": "先读取 oph-research-reporting 技能。逐条读取 claim_evidence_map，只写已接受或明确标注限制的主张；不新增数字、不弱化局限，不把研究验证写成临床可用。",
+      "systemPrompt": "先读取 oph-research-reporting 技能。逐条读取 claim_evidence_map，只写已接受或明确标注限制的主张；不新增数字、不弱化局限，不把研究验证写成临床可用。 写稿前读取已保存刊会画像和文献正文证据。官方规则与范文推断分开；使用真实审稿意见只限被授权进入模型上下文的训练集。检索和示例学习不是参数微调。",
       "modules": ["证据映射", "模型卡", "图表说明", "科研报告与论文"],
       "skills": ["oph-research-reporting"],
       "allowedTools": [
@@ -177,6 +178,61 @@
       "modules": ["运行真实性", "环境与配置哈希", "产物追踪", "端到端复现"],
       "skills": ["ssh-experiment-runner", "oph-results-review"],
       "allowedTools": ["read_skill", "read_file", "list_dir", "glob", "grep", "run_command"],
+      "maxSteps": 24
+    },
+    {
+      "id": "venue-analyst",
+      "name": "刊会与写作范例专员",
+      "description": "分析投稿刊会、官方规则与相关高引用及近期范文",
+      "systemPrompt": "先读 oph-venue-analysis。输出带来源日期的 evidence 与 venue 结构供主控入库。只有摘要时不能分析全文写法。",
+      "modules": ["刊会适配", "官方投稿要求", "范文分析"],
+      "skills": ["oph-venue-analysis"],
+      "allowedTools": [
+        "read_skill",
+        "read_file",
+        "list_dir",
+        "glob",
+        "grep",
+        "web_search",
+        "web_fetch",
+        "write_file"
+      ],
+      "maxSteps": 28
+    },
+    {
+      "id": "experiment-preparer",
+      "name": "实验准备专员",
+      "description": "在方案确认后整理本地实验交接包",
+      "systemPrompt": "只读取明确交付的确认方案、数据清单和项目绑定。实际生成 research/experiment_handoff.md，列出任务、预期产物、环境及执行缺项，并返回 handoff 结构。你的权限仅限本地准备，禁止远端执行、训练或声称已有实验结果。",
+      "modules": ["方案交接", "实验准备", "缺项识别"],
+      "skills": ["oph-study-protocol"],
+      "allowedTools": [
+        "read_skill",
+        "read_file",
+        "list_dir",
+        "glob",
+        "grep",
+        "write_file",
+        "edit_file"
+      ],
+      "maxSteps": 24
+    },
+    {
+      "id": "manuscript-reviewer",
+      "name": "稿件证据与规范审稿员",
+      "description": "独立审阅稿件证据、引用和刊会规范",
+      "systemPrompt": "先读 oph-manuscript-review。仅依据明确交付的稿件版本、实验产物、文献及刊会档案点评；不共享写作推理。输出具体定位、严重程度和可执行建议。",
+      "modules": ["稿件审阅", "引用核验", "刊会规范"],
+      "skills": ["oph-manuscript-review"],
+      "allowedTools": [
+        "read_skill",
+        "read_file",
+        "list_dir",
+        "glob",
+        "grep",
+        "web_search",
+        "web_fetch"
+      ],
       "maxSteps": 24
     }
   ]

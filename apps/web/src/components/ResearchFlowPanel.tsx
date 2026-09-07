@@ -55,7 +55,7 @@ export function ResearchFlowPanel(props: {
     )
   return (
     <section aria-label="研究进度与下一步">
-      <h5>研究进度与下一步</h5>
+      <h5>账本进度与下一步</h5>
       <p>{held() ? '本会话主控已暂停' : '手动推进'} · 每次操作仍需满足当前审批与依赖条件。</p>
       <button type="button" disabled={props.busy} onClick={() => void toggle()}>
         {held() ? '恢复手动推进' : '暂停本会话主控'}
@@ -84,7 +84,9 @@ export function ResearchFlowPanel(props: {
           </ol>
         )}
       </Show>
-      <p>这里显示当前账本的核对结果。尚未准入的流程步骤不会自动执行。</p>
+      <p>
+        这里显示真实研究账本的核对结果和下一步；它不等同于固定样例计划的保存状态。尚未准入的流程步骤不会自动执行。
+      </p>
     </section>
   )
 }

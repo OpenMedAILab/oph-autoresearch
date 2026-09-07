@@ -487,6 +487,40 @@ export function serve(opts: ServeOptions) {
             'Bounded research scheduling failed',
             error instanceof Error ? error.message : 'unknown error',
           ),
+        startStudyHandoff: (conversationId, prompt) => {
+          void startRun(conversationId, prompt, undefined, {
+            store: opts.store,
+            content,
+            config: opts.config,
+            bus,
+            runs,
+            researchControlPortFactory: ({
+              workspaceId,
+              workspaceRoot,
+              campaignIds,
+              conversationId,
+            }) =>
+              createResearchControlPort(
+                researchControlDeps(workspaceId, workspaceRoot),
+                campaignIds,
+                conversationId,
+              ),
+            researchControlFactory: ({
+              workspaceId,
+              workspaceRoot,
+              campaignIds,
+              conversationId,
+              signal,
+            }) =>
+              createNativeResearchControlBridge(
+                researchControlDeps(workspaceId, workspaceRoot),
+                campaignIds,
+                signal,
+                undefined,
+                conversationId,
+              ),
+          })
+        },
         startRun: (conversationId, prompt) => {
           void startRun(conversationId, prompt, undefined, {
             store: opts.store,
@@ -495,10 +529,16 @@ export function serve(opts: ServeOptions) {
             bus,
             runs,
             researchControllerOnly: true,
-            researchControlPortFactory: ({ workspaceId, workspaceRoot, campaignIds }) =>
+            researchControlPortFactory: ({
+              workspaceId,
+              workspaceRoot,
+              campaignIds,
+              conversationId,
+            }) =>
               createResearchControlPort(
                 researchControlDeps(workspaceId, workspaceRoot),
                 campaignIds,
+                conversationId,
               ),
           })
         },
@@ -636,16 +676,30 @@ export function serve(opts: ServeOptions) {
                 bus,
                 runs,
                 researchControllerOnly,
-                researchControlFactory: ({ workspaceId, workspaceRoot, campaignIds, signal }) =>
+                researchControlFactory: ({
+                  workspaceId,
+                  workspaceRoot,
+                  campaignIds,
+                  signal,
+                  conversationId,
+                }) =>
                   createNativeResearchControlBridge(
                     researchControlDeps(workspaceId, workspaceRoot),
                     campaignIds,
                     signal,
+                    undefined,
+                    conversationId,
                   ),
-                researchControlPortFactory: ({ workspaceId, workspaceRoot, campaignIds }) =>
+                researchControlPortFactory: ({
+                  workspaceId,
+                  workspaceRoot,
+                  campaignIds,
+                  conversationId,
+                }) =>
                   createResearchControlPort(
                     researchControlDeps(workspaceId, workspaceRoot),
                     campaignIds,
+                    conversationId,
                   ),
               })
             },
@@ -723,14 +777,31 @@ export function serve(opts: ServeOptions) {
           bus,
           runs,
           researchControllerOnly,
-          researchControlFactory: ({ workspaceId, workspaceRoot, campaignIds, signal }) =>
+          researchControlFactory: ({
+            workspaceId,
+            workspaceRoot,
+            campaignIds,
+            signal,
+            conversationId,
+          }) =>
             createNativeResearchControlBridge(
               researchControlDeps(workspaceId, workspaceRoot),
               campaignIds,
               signal,
+              undefined,
+              conversationId,
             ),
-          researchControlPortFactory: ({ workspaceId, workspaceRoot, campaignIds }) =>
-            createResearchControlPort(researchControlDeps(workspaceId, workspaceRoot), campaignIds),
+          researchControlPortFactory: ({
+            workspaceId,
+            workspaceRoot,
+            campaignIds,
+            conversationId,
+          }) =>
+            createResearchControlPort(
+              researchControlDeps(workspaceId, workspaceRoot),
+              campaignIds,
+              conversationId,
+            ),
         })
       },
       close(ws: ServerWebSocket<SocketData>) {

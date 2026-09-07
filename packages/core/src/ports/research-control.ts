@@ -1,4 +1,11 @@
 export type ResearchControlOperation =
+  | 'list'
+  | 'preflight'
+  | 'knowledge/search'
+  | 'context'
+  | 'workflow/preset'
+  | 'literature/import'
+  | 'evidence/fetch'
   | 'prepare'
   | 'propose'
   | 'submit'

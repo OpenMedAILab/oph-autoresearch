@@ -26,14 +26,8 @@ export function ResearchControllerPanel(props: {
         item.scope?.kind === 'controller' &&
         item.scope.expiresAt > Date.now(),
     )
-  function start() {
-    const campaign = props.campaign
-    const endpoint = `/api/research/campaigns/${campaign.id}`
-    const suffix = `?ws=${encodeURIComponent(campaign.workspaceId)}`
-    const approvalUrl = props.approvalUrl
-    const reusable = reusableApproval()
-    const popup = reusable ? null : window.open('about:blank', 'oph-research-approval')
-    let limits: ResearchControllerLimits = reusable?.scope?.controllerLimits ?? {
+  const displayedLimits = () =>
+    reusableApproval()?.scope?.controllerLimits ?? {
       maxAdvances: advances(),
       maxModelRequests: requests(),
       maxOutputTokens: 1024,
@@ -41,6 +35,14 @@ export function ResearchControllerPanel(props: {
       deadlineAt: Date.now() + minutes() * 60_000,
       stopAfter: stopAfter(),
     }
+  function start() {
+    const campaign = props.campaign
+    const endpoint = `/api/research/campaigns/${campaign.id}`
+    const suffix = `?ws=${encodeURIComponent(campaign.workspaceId)}`
+    const approvalUrl = props.approvalUrl
+    const reusable = reusableApproval()
+    const popup = reusable ? null : window.open('about:blank', 'oph-research-approval')
+    let limits: ResearchControllerLimits = displayedLimits()
     return props.act(async () => {
       try {
         let approved = { campaign }
@@ -175,7 +177,9 @@ export function ResearchControllerPanel(props: {
         </select>
       </label>
       <p>
-        每次模型调用最多输出 1024 tokens，输入最多 4096
+        {reusableApproval() ? '正在使用已有审批的实际限额：' : '本次将请求的限额：'}
+        每次模型调用最多输出 {displayedLimits().maxOutputTokens} tokens，输入最多{' '}
+        {displayedLimits().maxInputCharacters}
         字符；压缩上下文也消耗请求次数。按已配置价格预留，服务商费用缺失时不当作零。
       </p>
       <button

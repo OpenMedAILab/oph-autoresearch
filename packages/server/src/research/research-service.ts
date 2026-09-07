@@ -1,4 +1,5 @@
 import { handleCliPreparationsApi } from '../api/cli-preparations.ts'
+import { handleResearchAssistantApi } from '../api/research-assistant.ts'
 /**
  * Narrow adapter over the existing research HTTP boundary.
  *
@@ -11,7 +12,13 @@ import { handleResearchApi } from '../api/research.ts'
 import { handleResearchDocumentsApi } from '../api/research-documents.ts'
 import type { ApiRequestDeps } from '../api/types.ts'
 
+// Adapter operations require a selected campaign; discovery and readiness are handled by the scoped capability.
 export type ResearchControlOperation =
+  | 'knowledge/search'
+  | 'context'
+  | 'workflow/preset'
+  | 'literature/import'
+  | 'evidence/fetch'
   | 'prepare'
   | 'propose'
   | 'submit'
@@ -39,6 +46,11 @@ export interface ResearchControlRequest {
 }
 
 export const RESEARCH_CONTROL_OPERATIONS = new Set<ResearchControlOperation>([
+  'knowledge/search',
+  'context',
+  'workflow/preset',
+  'literature/import',
+  'evidence/fetch',
   'prepare',
   'propose',
   'submit',
@@ -60,6 +72,11 @@ export const RESEARCH_CONTROL_OPERATIONS = new Set<ResearchControlOperation>([
 ])
 
 const paths: Record<Exclude<ResearchControlOperation, 'prepare'>, string> = {
+  'knowledge/search': 'assistant',
+  context: 'assistant',
+  'workflow/preset': 'assistant/preset',
+  'literature/import': 'literature',
+  'evidence/fetch': 'assistant/evidence',
   propose: 'proposals',
   submit: 'synthetic',
   status: '',
@@ -106,6 +123,7 @@ export class ResearchControlApiAdapter {
     } else {
       const suffix = paths[request.operation]
       method = [
+        'context',
         'status',
         'events',
         'next_actions',
@@ -135,6 +153,7 @@ export class ResearchControlApiAdapter {
         : {}),
     })
     return (
+      (await handleResearchAssistantApi(url, req, this.deps)) ??
       (await handleCliPreparationsApi(url, req, this.deps)) ??
       (await handleResearchDocumentsApi(url, req, this.deps)) ??
       (await handleResearchApi(url, req, this.deps)) ??
