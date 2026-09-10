@@ -221,6 +221,68 @@ describe('读盘时机', () => {
   })
 })
 
+test('首次配置返回引导；保存凭证后消失，本地免密模型与配置错误分别处理', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'oph-model-setup-'))
+  const prev = process.env.OPH_AUTORESEARCH_HOME
+  process.env.OPH_AUTORESEARCH_HOME = home
+  const url = new URL('http://127.0.0.1/api/config')
+  const current = cfg()
+  delete current.providers.main!.apiKey
+  const d = { config: current } as unknown as ApiDeps
+  const read = async () => {
+    const response = await handleConfigApi(url, new Request(url.href), d as never)
+    expect(response?.status).toBe(200)
+    return (await response!.json()) as {
+      config: RedactedConfig
+      setupRequired: boolean
+      problems: string[]
+    }
+  }
+  try {
+    await writeFile(join(home, 'config.json'), JSON.stringify(current))
+    const initial = await read()
+    expect(initial.setupRequired).toBe(true)
+    expect(initial.problems).toEqual([])
+    expect(initial.config.providers.main?.hasApiKey).toBe(false)
+
+    const incoming = {
+      ...initial.config,
+      providers: {
+        ...initial.config.providers,
+        main: { ...initial.config.providers.main!, apiKey: 'sk-test-setup' },
+      },
+    }
+    const saved = await handleConfigApi(
+      url,
+      new Request(url.href, { method: 'PUT', body: JSON.stringify({ config: incoming }) }),
+      d as never,
+    )
+    expect(saved?.status).toBe(200)
+    const configured = await read()
+    expect(configured.setupRequired).toBe(false)
+    expect(configured.problems).toEqual([])
+    expect(configured.config.providers.main?.hasApiKey).toBe(true)
+    expect(JSON.stringify(configured)).not.toContain('sk-test-setup')
+
+    current.providers.main!.models = {}
+    await writeFile(join(home, 'config.json'), JSON.stringify(current))
+    expect(await read()).toMatchObject({ setupRequired: true, problems: [] })
+
+    current.active = { provider: 'local', model: 'qwen' }
+    await writeFile(join(home, 'config.json'), JSON.stringify(current))
+    expect(await read()).toMatchObject({ setupRequired: false, problems: [] })
+
+    current.providers.local!.models.qwen = { effort: 'invalid' as never }
+    await writeFile(join(home, 'config.json'), JSON.stringify(current))
+    const invalid = await read()
+    expect(invalid.setupRequired).toBe(false)
+    expect(invalid.problems.join()).toContain('思考强度')
+  } finally {
+    if (prev === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = prev
+  }
+})
+
 describe('保存中的不完整配置', () => {
   test('没有 API Key 时仍能添加模型，凭证问题只在运行前诊断', async () => {
     const current = cfg()

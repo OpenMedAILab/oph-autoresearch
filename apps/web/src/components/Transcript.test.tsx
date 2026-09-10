@@ -466,3 +466,127 @@ describe('定稿的正文不跟着会话流的增长重建', () => {
     dispose()
   })
 })
+
+test('human checkpoint controls require a revision note and submit the current receipt version', async () => {
+  await resetStore()
+  const store = await import('../lib/store/index.ts')
+  store.setState({ activeConversation: 'cv-human' })
+  const originalApi = store.client.api
+  const calls: Record<string, unknown>[] = []
+  store.client.api = (async (_path: string, options?: RequestInit) => {
+    calls.push(JSON.parse(String(options?.body)))
+    return { ok: true }
+  }) as typeof originalApi
+  const { WorkflowDecision } = await import('./WorkflowDecision.tsx')
+  const { render } = await import('solid-js/web')
+  const host = document.createElement('div')
+  document.body.append(host)
+  const workflow = {
+    workflowId: 'wf',
+    goal: 'review',
+    nodes: [],
+    maxConcurrent: 1,
+    phase: 'waiting_review' as const,
+    checkpointId: 'cp',
+    reviewStepId: 'step-2',
+    results: {},
+    attempts: {},
+    approvals: {},
+  }
+  const dispose = render(() => <WorkflowDecision workflow={workflow} checkpointId="cp" />, host)
+  try {
+    await Bun.sleep(0)
+    ;(
+      Array.from(host.querySelectorAll('button')).find(
+        (button) => button.textContent === '返工',
+      ) as HTMLButtonElement
+    ).click()
+    await Bun.sleep(0)
+    const submit = Array.from(host.querySelectorAll('button')).find(
+      (button) => button.textContent === '提交返工',
+    ) as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    const note = host.querySelector('textarea')!
+    note.value = '复算置信区间'
+    note.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(submit.disabled).toBe(false)
+    submit.click()
+    await Bun.sleep(0)
+    expect(calls).toEqual([
+      {
+        type: 'workflow.review',
+        conversationId: 'cv-human',
+        workflowId: 'wf',
+        checkpointId: 'cp',
+        expectedStepId: 'step-2',
+        decision: 'revise',
+        note: '复算置信区间',
+      },
+    ])
+    expect(host.textContent).toContain('已提交')
+  } finally {
+    store.client.api = originalApi
+    dispose()
+    host.remove()
+    await resetStore()
+  }
+})
+
+test('human decision displays the persisted checklist and iteration advice without opening a child conversation', async () => {
+  await resetStore()
+  const { WorkflowDecision } = await import('./WorkflowDecision.tsx')
+  const { render } = await import('solid-js/web')
+  const host = document.createElement('div')
+  document.body.append(host)
+  const workflow: import('@oph-autoresearch/core').WorkflowProjection = {
+    workflowId: 'wf-details',
+    goal: 'Review',
+    maxConcurrent: 1,
+    phase: 'waiting_review',
+    checkpointId: 'human',
+    reviewStepId: 'receipt',
+    attempts: {},
+    approvals: {},
+    nodes: [
+      { id: 'analysis', agent: 'results-analyst', task: 'Analyze', outputKind: 'analysis' },
+      {
+        id: 'human',
+        kind: 'checkpoint',
+        reviewer: 'human',
+        label: 'Review',
+        needs: ['analysis'],
+        checks: ['核对冻结方案', '核对指标来源'],
+      },
+    ],
+    results: {
+      analysis: {
+        nodeId: 'analysis',
+        agent: 'results-analyst',
+        label: 'Analysis',
+        status: 'done',
+        durationMs: 1,
+        output: '{}',
+        structuredOutput: {
+          decision: 'iterate',
+          summary: '置信区间仍过宽',
+          next_experiment: {
+            changes: ['增加一个预注册随机种子'],
+            rationale: '核对重复性',
+            estimated_cost: 'USD 2',
+          },
+        },
+      },
+    },
+  }
+  const dispose = render(() => <WorkflowDecision workflow={workflow} checkpointId="human" />, host)
+  try {
+    expect(host.querySelectorAll('.wf-checks li')).toHaveLength(2)
+    expect(host.textContent).toContain('分析建议：迭代')
+    expect(host.textContent).toContain('增加一个预注册随机种子')
+    expect(host.textContent).toContain('USD 2')
+  } finally {
+    dispose()
+    host.remove()
+    await resetStore()
+  }
+})

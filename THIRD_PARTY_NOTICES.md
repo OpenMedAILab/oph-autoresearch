@@ -23,6 +23,7 @@
 | `@xterm/xterm` | 6.0.0 | MIT |
 | `codemirror` | 6.0.2 | MIT |
 | `highlight.js` | 11.11.1 | BSD-3-Clause |
+| `@larksuiteoapi/node-sdk` | 1.73.3 | MIT |
 | `marked` | 18.0.9 | MIT |
 | `openai` | 6.49.0 | Apache-2.0 |
 | `qrcode` | 1.5.4 | MIT |

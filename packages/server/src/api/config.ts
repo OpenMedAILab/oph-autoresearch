@@ -99,11 +99,14 @@ export const handleConfigApi: ApiHandler = async (url, req, d) => {
      * 全仓没有第二处写 `d.config`，所以整份换掉不会丢字段。
      */
     Object.assign(d.config, await loadConfig())
+    // 与保存闸门共用结构检查；尚未选模型或填写凭证时返回配置引导。
+    const problems = diagnoseConfigStructure(d.config, { allowIncompleteActive: true })
     return json({
       path: configPath(),
       config: redactConfig(d.config),
       notices: configNotices(d.config),
-      problems: diagnoseConfig(d.config),
+      problems,
+      setupRequired: problems.length === 0 && diagnoseConfig(d.config).length > 0,
       // `envAllowList` 留空时真正生效的那一份。设置页拿它当占位符显示——
       // 不下发的话界面只能写一句「留空用默认名单」，而那份名单里有什么无从得知。
       defaultEnvAllowList: DEFAULT_ENV_ALLOW,

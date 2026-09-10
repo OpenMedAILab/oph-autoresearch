@@ -4,14 +4,14 @@ import type {
   ResearchCampaign,
   WorkflowCallRecord,
 } from '@oph-autoresearch/core'
-import { foldWorkflow, parseModelReview } from '@oph-autoresearch/core'
 import {
-  getConversation,
-  getWorkspace,
-  listRuns,
-  listSteps,
-  type Store,
-} from '@oph-autoresearch/store'
+  foldWorkflow,
+  parseModelReview,
+  parseTerminalJson,
+  workflowAncestors,
+} from '@oph-autoresearch/core'
+import { getConversation, getWorkspace, type Store } from '@oph-autoresearch/store'
+import { campaignSteps, experimentSources } from './experiment-sources.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
 
 type Document = Record<string, unknown>
@@ -24,9 +24,8 @@ export type WorkflowReviewEvidence = {
 /** Workflow prose may precede one terminal JSON result; the result itself is never rewritten. */
 export function parseWorkflowReview(output: string, artifactIds: string[]) {
   if (output.length > 16_000) throw new Error('Review output exceeds limit')
-  const start = output.indexOf('{')
-  if (start < 0) throw new Error('Review must end with a JSON object')
-  return parseModelReview(output.slice(start).trim(), artifactIds)
+  const document = parseTerminalJson(output)
+  return parseModelReview(JSON.stringify(document.review ?? document), artifactIds)
 }
 
 /** SSH and workflow records establish provenance, never formal execution or human approval. */
@@ -37,7 +36,8 @@ export function workflowDocumentEvidence(
   contents: (Document | null)[],
 ) {
   const parent = campaign.parentConversationId as ConversationId
-  const steps = listRuns(store, parent).flatMap((run) => listSteps(store, run.id))
+  const steps = campaignSteps(store, parent)
+  const sources = experimentSources(steps)
   const records: WorkflowCallRecord[] = steps.flatMap((step) => {
     if (
       step.toolName !== 'workflow' ||
@@ -83,27 +83,15 @@ export function workflowDocumentEvidence(
       !studyCurrent(doc)
     )
       continue
-    const source = steps.find(
-      (s) =>
-        s.id === doc.sourceStepId && s.toolName === 'ssh_run_command' && s.status === 'success',
-    )
-    const outcome = source?.payload?.kind === 'tool_result' ? source.payload.outcome : null
-    const data = outcome?.data
     if (
-      outcome?.status !== 'success' ||
-      outcome.executed !== true ||
-      !data ||
-      data.exitCode !== 0 ||
-      data.timedOut !== false ||
-      typeof data.stdout !== 'string'
+      sources.some(
+        (source) =>
+          source.sourceStepId === doc.sourceStepId &&
+          source.statusStepId === doc.statusStepId &&
+          canonicalJson(source.summary) === canonicalJson(doc.summary),
+      )
     )
-      continue
-    try {
-      if (canonicalJson(JSON.parse(data.stdout)) === canonicalJson(doc.summary))
-        validExperiments.add(artifact.id)
-    } catch {
-      /* Non-JSON stdout is not an importable aggregate receipt. */
-    }
+      validExperiments.add(artifact.id)
   }
   const reviews: WorkflowReviewEvidence[] = []
   const validReviews = new Set<string>()
@@ -130,7 +118,7 @@ export function workflowDocumentEvidence(
       !folded.projection.nodes.some(
         (node) =>
           node.kind === 'checkpoint' &&
-          node.needs.includes(doc.nodeId as string) &&
+          workflowAncestors(folded.projection.nodes, node.id).has(doc.nodeId as string) &&
           folded.projection.approvals[node.id],
       )
     )

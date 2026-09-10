@@ -67,11 +67,7 @@
               ]
             },
             "score": {
-              "enum": [
-                "pass",
-                "fail",
-                "not_applicable"
-              ]
+              "enum": ["pass", "fail", "not_applicable"]
             },
             "rationale": {
               "type": "string"
@@ -86,11 +82,7 @@
               "type": "boolean"
             },
             "confidence": {
-              "enum": [
-                "high",
-                "medium",
-                "low"
-              ]
+              "enum": ["high", "medium", "low"]
             }
           }
         }
@@ -131,18 +123,10 @@
       "structuredJudgment": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "score",
-          "rationale",
-          "evidence_reference"
-        ],
+        "required": ["score", "rationale", "evidence_reference"],
         "properties": {
           "score": {
-            "enum": [
-              "pass",
-              "fail",
-              "not_applicable"
-            ]
+            "enum": ["pass", "fail", "not_applicable"]
           },
           "rationale": {
             "type": "string"
@@ -196,11 +180,7 @@
         "items": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "section",
-            "change",
-            "target_pattern_ids"
-          ],
+          "required": ["section", "change", "target_pattern_ids"],
           "properties": {
             "section": {
               "type": "string"
@@ -229,23 +209,14 @@
     "$id": "candidate_semantic_gate_output_schema_v1.0",
     "type": "object",
     "additionalProperties": false,
-    "required": [
-      "schema_version",
-      "decision",
-      "failure_reason",
-      "checks",
-      "recommended_action"
-    ],
+    "required": ["schema_version", "decision", "failure_reason", "checks", "recommended_action"],
     "properties": {
       "schema_version": {
         "const": "candidate_semantic_gate_output_v1.0"
       },
       "decision": {
         "type": "string",
-        "enum": [
-          "pass",
-          "fail"
-        ]
+        "enum": ["pass", "fail"]
       },
       "failure_reason": {
         "type": "string"
@@ -264,55 +235,33 @@
         "properties": {
           "clinical_relevance": {
             "type": "string",
-            "enum": [
-              "pass",
-              "fail"
-            ]
+            "enum": ["pass", "fail"]
           },
           "bounded_incremental_change": {
             "type": "string",
-            "enum": [
-              "pass",
-              "fail"
-            ]
+            "enum": ["pass", "fail"]
           },
           "non_gaming_language": {
             "type": "string",
-            "enum": [
-              "pass",
-              "fail"
-            ]
+            "enum": ["pass", "fail"]
           },
           "target_error_pattern_alignment": {
             "type": "string",
-            "enum": [
-              "pass",
-              "fail"
-            ]
+            "enum": ["pass", "fail"]
           },
           "clinical_readability": {
             "type": "string",
-            "enum": [
-              "pass",
-              "fail"
-            ]
+            "enum": ["pass", "fail"]
           },
           "behavioral_drift_risk": {
             "type": "string",
-            "enum": [
-              "low",
-              "medium",
-              "high"
-            ]
+            "enum": ["low", "medium", "high"]
           }
         }
       },
       "recommended_action": {
         "type": "string",
-        "enum": [
-          "accept_for_candidate_evaluation",
-          "reject_before_report_generation"
-        ]
+        "enum": ["accept_for_candidate_evaluation", "reject_before_report_generation"]
       }
     }
   }

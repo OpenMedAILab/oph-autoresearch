@@ -15,7 +15,7 @@ export const handlePairingApi: ApiHandler = async (url, req, d) => {
   const p = url.pathname
 
   if (p === '/api/remote-channels' && req.method === 'GET') {
-    const channels = await loadRemoteChannels()
+    const channels = loadRemoteChannels()
     return json({
       path: remoteChannelsPath(),
       catalog: REMOTE_CHANNEL_CATALOG,

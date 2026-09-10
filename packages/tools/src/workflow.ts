@@ -5,14 +5,18 @@
  * 会话后，由当前会话决定 approve 或 revise；续发仍使用同一个 workflowId。
  */
 import type { ToolContext, ToolSpec } from '@oph-autoresearch/agent'
-import { parseWorkflowCall, type WorkflowTransition } from '@oph-autoresearch/core'
+import {
+  parseWorkflowCall,
+  WORKFLOW_OUTPUT_KINDS,
+  type WorkflowTransition,
+} from '@oph-autoresearch/core'
 
 export const workflowTool: ToolSpec = {
   name: 'workflow',
   description:
     '把复杂任务按 DAG 分批交给子 agent。agent 节点按 needs 并行或串行执行；checkpoint 节点' +
     '把上一批回执交回当前会话审查。到 checkpoint 只代表本次调度返回，不代表整个 workflow 完成：' +
-    '核验后必须再次调用本工具，用同一 workflowId 对该 checkpoint approve 或 revise。' +
+    'session 检查点核验后用同一 workflowId approve 或 revise；human 检查点必须停止并等待人类，模型不能代为决定。' +
     'revise 会向原子会话续发，approve 才启动下一批。' +
     '首次调用可用 maxConcurrent 声明本图期望并发，实际并发仍受项目规则硬上限约束。' +
     '节点不指定 agent 就临时起一个子 agent（当前模型、全套工具），' +
@@ -39,6 +43,11 @@ export const workflowTool: ToolSpec = {
             agent: { type: 'string', description: '角色名或 cli:<id>；agent 节点可省略' },
             task: { type: 'string', description: 'agent 节点任务' },
             label: { type: 'string', description: 'checkpoint 显示名称' },
+            reviewer: {
+              type: ['string', 'null'],
+              enum: ['session', 'human', null],
+              description: 'checkpoint 审查者，默认 session；human 必须由人类裁决',
+            },
             needs: { type: 'array', items: { type: 'string' }, description: '依赖节点 ID' },
             passInput: { type: 'boolean', description: '是否把上游输出传入任务，默认 true' },
             provider: {
@@ -46,6 +55,12 @@ export const workflowTool: ToolSpec = {
               description: '该节点使用的接口；填写时必须同时填写 model',
             },
             model: { type: 'string', description: '该 agent 节点的模型覆盖' },
+            outputKind: {
+              type: ['string', 'null'],
+              enum: [...WORKFLOW_OUTPUT_KINDS, null],
+              description: '节点末尾 JSON 产物契约；不满足时节点失败',
+            },
+            checks: { type: 'array', items: { type: 'string' }, description: '检查点核验清单' },
           },
           required: ['id'],
         },
@@ -97,17 +112,24 @@ export const workflowTool: ToolSpec = {
 
     const res = await ctx.delegate.runGraph({
       call: parsed.call,
+      origin: 'model',
       runId: ctx.runId,
       stepId: ctx.stepId,
       signal: ctx.signal,
     })
-    if (res.error) return { status: 'failure', message: `这张图跑不起来：${res.error}` }
+    if (res.error)
+      return {
+        status: 'failure',
+        executed: false,
+        message: res.error,
+        ...(res.errorKind ? { errorKind: res.errorKind } : {}),
+      }
     if (!res.transition) return { status: 'failure', message: 'Workflow 没有返回状态转移' }
 
     const transition = res.transition
     return {
       status: res.ok ? 'success' : 'failure',
-      message: transitionMessage(transition),
+      message: [transitionMessage(transition), res.reviewPrompt].filter(Boolean).join('\n\n'),
       data: transition as unknown as Record<string, unknown>,
     }
   },
@@ -119,7 +141,9 @@ function transitionMessage(transition: WorkflowTransition): string {
     return (
       `本次调度已返回 ${count} 个回执；整个 workflow 尚未完成。` +
       ` workflowId=${transition.workflowId}，checkpointId=${transition.checkpointId}。` +
-      '请核验回执后，再以 approve 或 revise 续接。'
+      (transition.reviewer === 'human'
+        ? '等待人类决策；停止本轮，不得用 approve 或 revise 代替人类。'
+        : '请核验回执后，再以 approve 或 revise 续接。')
     )
   }
   if (transition.phase === 'completed') return `Workflow 已完成，本次返回 ${count} 个回执`

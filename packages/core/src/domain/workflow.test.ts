@@ -200,6 +200,41 @@ describe('workflow 调用判别', () => {
 })
 
 describe('workflow 投影', () => {
+  test('an interrupted executed decision cannot reopen its human checkpoint', () => {
+    const initial: WorkflowCallRecord = {
+      stepId: 'wf',
+      args: {
+        goal: '训练',
+        nodes: [
+          { id: 'a', task: 'smoke' },
+          { id: 'cp', kind: 'checkpoint', reviewer: 'human', label: '批准', needs: ['a'] },
+        ],
+      },
+      status: 'success',
+      outcome: outcome({
+        workflowId: 'wf',
+        phase: 'waiting_review',
+        checkpointId: 'cp',
+        receipts: [],
+      }),
+    }
+    for (const executed of [true, false]) {
+      const folded = foldWorkflow(
+        [
+          initial,
+          {
+            stepId: 'decision',
+            args: { workflowId: 'wf', checkpointId: 'cp', decision: 'approve', note: '' },
+            status: 'failure',
+            outcome: { status: 'failure', executed, message: 'interrupted' },
+          },
+        ],
+        'wf',
+      )
+      if (!folded.ok) throw new Error(folded.error)
+      expect(folded.projection.phase).toBe(executed ? 'failed' : 'waiting_review')
+    }
+  })
   test('首轮回执、返工和批准只从转移序列折叠', () => {
     const records: WorkflowCallRecord[] = [
       {
@@ -384,4 +419,25 @@ describe('workflow 投影', () => {
     expect(folded.projection.results.b).toBeUndefined()
     expect(folded.projection.attempts).toEqual({ a: 1, b: 1 })
   })
+})
+
+test('workflow carries output kinds and checklist fields and rejects invalid declarations', () => {
+  const nodes: import('./workflow.ts').WorkflowNode[] = [
+    { id: 'analysis', kind: 'agent', agent: 'reviewer', task: 'Analyze', outputKind: 'analysis' },
+    {
+      id: 'cp',
+      kind: 'checkpoint',
+      label: 'Review',
+      needs: ['analysis'],
+      checks: ['A located source'],
+    },
+  ]
+  const parsed = parseWorkflowCall({ goal: 'Contracts', nodes })
+  expect(parsed.ok && parsed.call.kind === 'start' && parsed.call.nodes).toEqual(nodes)
+  expect(
+    parseWorkflowCall({ goal: 'Contracts', nodes: [{ ...nodes[0], outputKind: 'anything' }] }).ok,
+  ).toBe(false)
+  expect(
+    parseWorkflowCall({ goal: 'Contracts', nodes: [nodes[0], { ...nodes[1], checks: [1] }] }).ok,
+  ).toBe(false)
 })

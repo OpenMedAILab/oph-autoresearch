@@ -1,3 +1,7 @@
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { globalScopeRoot } from '@oph-autoresearch/tools'
+import { createFeishuService } from './channels/service.ts'
 import { refreshCliCatalog } from './cli-catalog.ts'
 import { createBoundedScheduler } from './research/bounded-scheduler.ts'
 import {
@@ -217,9 +221,73 @@ export function serve(opts: ServeOptions) {
   const token = pairing.token
 
   const { workspace, rootPath: workspaceRoot } = bootstrapWorkspace(opts.store, opts.workspaceRoot)
-  const researchNotifications =
-    !restricted && opts.researchNotifications
-      ? new ResearchNotificationCoordinator(opts.researchNotifications)
+  // 正文库与主账本挨着放。开在这里而不是每个 run 现开：SQLite 连接有成本，
+  // 而且 GC 需要一个跨 run 存活的句柄。
+  const content =
+    opts.content ?? new ContentStore(contentPathFor(opts.store.db.filename || ':memory:'))
+  const ownsContent = opts.content === undefined
+  const feishu: ReturnType<typeof createFeishuService> | undefined = !restricted
+    ? createFeishuService(
+        {
+          store: opts.store,
+          content,
+          config: opts.config,
+          bus,
+          runs,
+          researchControllerOnly,
+          researchControlFactory: ({
+            workspaceId,
+            workspaceRoot,
+            campaignIds,
+            signal,
+            conversationId,
+          }): ReturnType<typeof createNativeResearchControlBridge> =>
+            createNativeResearchControlBridge(
+              researchControlDeps(workspaceId, workspaceRoot),
+              campaignIds,
+              signal,
+              undefined,
+              conversationId,
+            ),
+          researchControlPortFactory: ({
+            workspaceId,
+            workspaceRoot,
+            campaignIds,
+            conversationId,
+          }): ReturnType<typeof createResearchControlPort> =>
+            createResearchControlPort(
+              researchControlDeps(workspaceId, workspaceRoot),
+              campaignIds,
+              conversationId,
+            ),
+        },
+        (payload, paired) => {
+          const url = new URL(pairing.qrUrl(lanServer?.port ?? boundPort))
+          const fragment = new URLSearchParams(url.hash.slice(1))
+          if (!paired) {
+            fragment.delete('t')
+            fragment.delete('n')
+          }
+          if (payload.conversationId) fragment.set('conversation', payload.conversationId)
+          if (payload.workflow) fragment.set('workflow', payload.workflow.workflowId)
+          fragment.set('workspace', payload.campaign.workspaceId)
+          url.hash = fragment.toString()
+          return url.toString()
+        },
+      )
+    : undefined
+  if (feishu?.adapters.length) mkdirSync(globalScopeRoot(), { recursive: true })
+  const notificationConfig: ResearchNotificationConfig | undefined =
+    opts.researchNotifications ??
+    (feishu?.adapters.length
+      ? {
+          ownDbPath: join(globalScopeRoot(), 'research-notifications.sqlite'),
+          adapters: feishu.adapters,
+        }
+      : undefined)
+  const researchNotifications: ResearchNotificationCoordinator | undefined =
+    !restricted && notificationConfig
+      ? new ResearchNotificationCoordinator(notificationConfig)
       : undefined
   const cliPreparationRoutes =
     !restricted && opts.researchCliPreparation
@@ -259,12 +327,6 @@ export function serve(opts: ServeOptions) {
   if (researchTemplate.created.length > 0) {
     process.stderr.write(`[oph] 已补齐研究工作区模板：${researchTemplate.created.join('、')}\n`)
   }
-
-  // 正文库与主账本挨着放。开在这里而不是每个 run 现开：SQLite 连接有成本，
-  // 而且 GC 需要一个跨 run 存活的句柄。
-  const content =
-    opts.content ?? new ContentStore(contentPathFor(opts.store.db.filename || ':memory:'))
-  const ownsContent = opts.content === undefined
 
   /**
    * 预热启动那个项目的扩展，并全程持有一份引用。
@@ -654,6 +716,19 @@ export function serve(opts: ServeOptions) {
         }
         if (restricted) return withCors(json({ error: RESTRICTED_RESEARCH_CAPABILITY_DENIED }, 403))
         try {
+          if (req.method === 'POST' && url.pathname === '/api/commands') {
+            const command = (await req.json()) as ClientCommand
+            if (command?.type !== 'workflow.review')
+              return withCors(json({ error: '仅支持检查点决策' }, 400))
+            const result = await handleCommand(command, {
+              store: opts.store,
+              content,
+              config: opts.config,
+              bus,
+              runs,
+            })
+            return withCors(json(result, result?.ok ? 202 : 409))
+          }
           const res = await handleApi(url, req, {
             store: opts.store,
             config: opts.config,
@@ -817,6 +892,7 @@ export function serve(opts: ServeOptions) {
     hostname: opts.host,
   })
   boundPort = server.port ?? opts.port
+  feishu?.start(researchNotifications)
   if (!restricted && !process.env.OPH_AUTORESEARCH_TEST_TEMP)
     void refreshCliCatalog().catch(() => undefined)
 
@@ -848,6 +924,7 @@ export function serve(opts: ServeOptions) {
         if ('close' in route.authority && typeof route.authority.close === 'function')
           route.authority.close()
       }
+      feishu?.close()
       researchNotifications?.close()
       boundedScheduler?.close()
       clearInterval(schedulerTimer)

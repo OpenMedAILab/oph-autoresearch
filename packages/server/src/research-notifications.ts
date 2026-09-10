@@ -1,9 +1,11 @@
 import { Database } from 'bun:sqlite'
 import { createHash } from 'node:crypto'
-import type { ResearchEvent } from '@oph-autoresearch/core'
+import type { ResearchEvent, WorkflowCheckpointDetails } from '@oph-autoresearch/core'
 import { parseModelReview } from './research/review-contract.ts'
 
 export type ResearchNotificationKind =
+  | 'human_checkpoint'
+  | 'job_finished'
   | 'approval_needed'
   | 'failure'
   | 'unknown'
@@ -22,6 +24,15 @@ export interface ResearchNotificationPayload {
   occurredAt: number
   kind: ResearchNotificationKind
   campaign: { id: string; workspaceId: string; stage: string; status: string }
+  conversationId?: string
+  workflow?: {
+    workflowId: string
+    checkpointId: string
+    conversationId: string
+    reviewStepId: string
+  }
+  job?: { state: 'completed' | 'failed' | 'unknown'; reason?: string }
+  checkpointDetails?: WorkflowCheckpointDetails
 }
 
 /**
@@ -33,6 +44,7 @@ export interface ResearchNotificationAdapter {
   channel: string
   recipient: string
   enabled?: boolean
+  accepts?(payload: ResearchNotificationPayload): boolean
   /**
    * Delivery is at-least-once. Persist deliveryKey at the external provider so
    * a provider acknowledgement lost before our local receipt commit is deduped.
@@ -117,6 +129,7 @@ function payloadFor(
     deliveryKey,
     eventId: event.id,
     campaignId: event.campaignId,
+    conversationId: event.campaign.parentConversationId,
     campaignSeq: event.sequence,
     occurredAt: event.occurredAt,
     kind,
@@ -241,11 +254,39 @@ export class ResearchNotificationCoordinator {
   record(event: ResearchEvent): number {
     const kind = notificationKind(event)
     if (!kind || this.adapters.size === 0) return 0
+    return this.recordPayload(payloadFor(event, kind, ''))
+  }
+
+  publishOperational(
+    input: Pick<
+      ResearchNotificationPayload,
+      | 'eventId'
+      | 'campaignId'
+      | 'occurredAt'
+      | 'kind'
+      | 'campaign'
+      | 'conversationId'
+      | 'workflow'
+      | 'job'
+      | 'checkpointDetails'
+    >,
+  ): void {
+    this.recordPayload({
+      ...input,
+      schema: 'research-notification-v1',
+      deliveryKey: '',
+      campaignSeq: 0,
+    })
+    void this.deliverDue()
+  }
+
+  private recordPayload(input: ResearchNotificationPayload): number {
     const now = this.now()
     let inserted = 0
     for (const adapter of this.adapters.values()) {
-      const key = deliveryKey(event.id, adapter.channel, adapter.recipient)
-      const payload = JSON.stringify(payloadFor(event, kind, key))
+      if (adapter.accepts && !adapter.accepts(input)) continue
+      const key = deliveryKey(input.eventId, adapter.channel, adapter.recipient)
+      const payload = JSON.stringify({ ...input, deliveryKey: key })
       const result = this.db
         .query(
           `INSERT INTO research_notifications
@@ -254,9 +295,9 @@ export class ResearchNotificationCoordinator {
            ON CONFLICT(event_id,channel,recipient) DO NOTHING`,
         )
         .run(
-          event.id,
-          event.campaignId,
-          kind,
+          input.eventId,
+          input.campaignId,
+          input.kind,
           adapter.channel,
           adapter.recipient,
           key,

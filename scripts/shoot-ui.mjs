@@ -420,13 +420,13 @@ async function main() {
           if (explorerOverflow) errors.push(`[${shot.name}] SSH 连接后资源管理器出现横向溢出`)
           await page.screenshot({ path: join(OUT, `${shot.name}-ssh-connected.png`) })
 
-          // 远程接入只保留三种通道；展开飞书后验证配置卡的分组布局与宽度。
+          // 远程接入只展示飞书；展开后验证配置卡的布局与宽度。
           await page.getByRole('button', { name: '系统设置' }).click()
           await page.getByRole('button', { name: '远程接入', exact: true }).click()
           await page.locator('.channel-catalog').waitFor({ state: 'visible', timeout: 5000 })
           const channelRows = page.locator('.channel-row')
-          if ((await channelRows.count()) !== 3) {
-            errors.push(`[${shot.name}] 远程接入没有恰好显示飞书、企业微信和 QQ 三种通道`)
+          if ((await channelRows.count()) !== 1) {
+            errors.push(`[${shot.name}] 远程接入没有只显示飞书通道`)
           }
           if ((await page.getByText('钉钉机器人', { exact: true }).count()) > 0) {
             errors.push(`[${shot.name}] 已移除的钉钉通道仍出现在界面`)

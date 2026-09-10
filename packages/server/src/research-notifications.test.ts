@@ -407,3 +407,57 @@ describe('durable research notifications', () => {
     }
   })
 })
+
+test('human checkpoints and job terminal states share durable delivery and deduplication', async () => {
+  const delivered: unknown[] = []
+  const coordinator = new ResearchNotificationCoordinator({
+    ownDbPath: await dbPath(),
+    adapters: [
+      {
+        channel: 'feishu',
+        recipient: 'human',
+        enabled: true,
+        async deliver(input) {
+          delivered.push(input.payload)
+        },
+      },
+    ],
+    pollIntervalMs: 100000,
+  })
+  const common = {
+    campaignId: 'campaign',
+    occurredAt: 1,
+    campaign: { id: 'campaign', workspaceId: 'ws', stage: '', status: '' },
+    conversationId: 'cv',
+  }
+  try {
+    const checkpoint = {
+      ...common,
+      eventId: 'workflow:wf:step',
+      kind: 'human_checkpoint' as const,
+      workflow: {
+        workflowId: 'wf',
+        checkpointId: 'cp',
+        conversationId: 'cv',
+        reviewStepId: 'step',
+      },
+    }
+    coordinator.publishOperational(checkpoint)
+    coordinator.publishOperational(checkpoint)
+    coordinator.publishOperational({
+      ...common,
+      eventId: 'job:terminal',
+      kind: 'job_finished',
+      job: { state: 'unknown', reason: 'status_unavailable' },
+    })
+    for (let i = 0; i < 100 && delivered.length < 2; i++) await Bun.sleep(1)
+    expect(delivered).toHaveLength(2)
+    expect(coordinator.list('campaign').map((row) => row.kind)).toEqual([
+      'human_checkpoint',
+      'job_finished',
+    ])
+    expect(coordinator.list('campaign').every((row) => row.status === 'delivered')).toBe(true)
+  } finally {
+    coordinator.close()
+  }
+})

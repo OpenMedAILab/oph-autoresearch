@@ -1,6 +1,18 @@
 import type { ToolOutcomeWire } from './model.ts'
 
 export type WorkflowPhase = 'running' | 'waiting_review' | 'completed' | 'failed'
+export const KNOWLEDGE_KINDS = [
+  'evidence',
+  'venue',
+  'reviewcase',
+  'handoff',
+  'experiment',
+  'resultsreview',
+  'peerreview',
+] as const
+export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number]
+export const WORKFLOW_OUTPUT_KINDS = [...KNOWLEDGE_KINDS, 'study', 'analysis'] as const
+export type WorkflowOutputKind = (typeof WORKFLOW_OUTPUT_KINDS)[number]
 
 export interface WorkflowAgentNode {
   id: string
@@ -13,13 +25,16 @@ export interface WorkflowAgentNode {
   /** 与 model 配对的接口名；保持分列，避免同名模型被路由到错误服务。 */
   provider?: string
   model?: string
+  outputKind?: WorkflowOutputKind
 }
 
 export interface WorkflowCheckpointNode {
   id: string
   kind: 'checkpoint'
+  reviewer?: 'session' | 'human'
   label: string
   needs: string[]
+  checks?: string[]
 }
 
 export type WorkflowNode = WorkflowAgentNode | WorkflowCheckpointNode
@@ -30,8 +45,11 @@ export interface WorkflowReceipt {
   label: string
   status: 'done' | 'failed' | 'skipped'
   output: string
+  structuredOutput?: Record<string, unknown>
   error?: string
   durationMs: number
+  provider?: string
+  model?: string
   session?: string
   conversationId?: string
 }
@@ -69,6 +87,7 @@ export interface WorkflowTransition {
   phase: Exclude<WorkflowPhase, 'running'>
   checkpointId?: string
   receipts: WorkflowReceipt[]
+  reviewer?: 'session' | 'human'
   review?: WorkflowAppliedReview
 }
 
@@ -87,6 +106,7 @@ export interface WorkflowProjection {
   maxConcurrent: number
   phase: WorkflowPhase
   checkpointId?: string
+  reviewStepId?: string
   /** 每个 agent 节点最近一次回执。 */
   results: Record<string, WorkflowReceipt>
   /** 每个 agent 节点累计真实执行次数，由回执序列折叠，不单独持久化。 */
@@ -183,10 +203,22 @@ export function parseWorkflowCall(args: Record<string, unknown>): WorkflowParseR
         // 扁平 strict schema 里 passInput 同时服务 agent 节点；部分 provider 会把它
         // 补成默认 true，而不是 null。检查点不消费这个字段，忽略它即可——若因
         // 严格补全拒绝整张图，模型重试会在界面留下另一张失败卡。
-        for (const key of ['agent', 'task', 'provider', 'model']) {
+        for (const key of ['agent', 'task', 'provider', 'model', 'outputKind']) {
           if (!nullish(node[key])) return { ok: false, error: `检查点 ${id} 不能带 ${key}` }
         }
-        nodes.push({ id, kind: 'checkpoint', label, needs })
+        const reviewer = wireText(node.reviewer)
+        const checks = needsOf(node.checks)
+        if (!checks) return { ok: false, error: `检查点 ${id} 的 checks 必须是字符串数组` }
+        if (reviewer && reviewer !== 'session' && reviewer !== 'human')
+          return { ok: false, error: `检查点 ${id} 的 reviewer 必须是 session 或 human` }
+        nodes.push({
+          id,
+          kind: 'checkpoint',
+          label,
+          needs,
+          ...(reviewer ? { reviewer: reviewer as 'session' | 'human' } : {}),
+          ...(checks.length ? { checks } : {}),
+        })
         continue
       }
       if (kind !== 'agent') return { ok: false, error: `节点 ${id} 的 kind 不支持 ${kind}` }
@@ -195,6 +227,9 @@ export function parseWorkflowCall(args: Record<string, unknown>): WorkflowParseR
       const agent = wireText(node.agent) || 'ad-hoc'
       const provider = wireText(node.provider)
       const model = wireText(node.model)
+      const outputKind = wireText(node.outputKind)
+      if (outputKind && !WORKFLOW_OUTPUT_KINDS.includes(outputKind as WorkflowOutputKind))
+        return { ok: false, error: `节点 ${id} 的 outputKind 无效` }
       if (provider && !model) {
         return { ok: false, error: `节点 ${id} 指定 provider 时必须同时指定 model` }
       }
@@ -207,6 +242,7 @@ export function parseWorkflowCall(args: Record<string, unknown>): WorkflowParseR
         ...(node.passInput === false ? { passInput: false } : {}),
         ...(provider ? { provider } : {}),
         ...(model ? { model } : {}),
+        ...(outputKind ? { outputKind: outputKind as WorkflowOutputKind } : {}),
       })
     }
     return { ok: true, call: { kind: 'start', goal, nodes, maxConcurrent } }
@@ -327,11 +363,17 @@ export function checkpointOutput(
       const result = results[id]
       if (!result) return ''
       const body = result.output || result.error || '无产出'
-      return `### ${id}\n${body}`
+      return `### ${id}${result.provider ? ` · ${result.provider}${result.model ? `/${result.model}` : ''}` : ''}\n${body}`
     })
     .filter(Boolean)
     .join('\n\n')
-  return [note ? `## 主会话审查\n${note}` : '', accepted ? `## 已接受的上游回执\n${accepted}` : '']
+  return [
+    checkpoint.checks?.length
+      ? `## 核验清单\n${checkpoint.checks.map((check) => `- ${check}`).join('\n')}`
+      : '',
+    note ? `## ${checkpoint.reviewer === 'human' ? '人类' : '主会话'}审查\n${note}` : '',
+    accepted ? `## 已接受的上游回执\n${accepted}` : '',
+  ]
     .filter(Boolean)
     .join('\n\n')
 }
@@ -430,7 +472,12 @@ export function foldWorkflow(
       if (review)
         return { ok: false, error: `步骤 ${record.stepId} 的 workflowId 与调用参数不一致` }
     }
-    if (review?.decision === 'revise' && (transition || record.status === 'running')) {
+    if (
+      review?.decision === 'revise' &&
+      (transition ||
+        record.status === 'running' ||
+        (record.status === 'failure' && record.outcome?.executed === true))
+    ) {
       const closure = revisionClosure(
         projection.nodes,
         review.checkpointId,
@@ -442,6 +489,8 @@ export function foldWorkflow(
     }
     if (!transition) {
       if (record.status === 'running' && record.stepId !== workflowId) projection.phase = 'running'
+      if (record.status === 'failure' && record.outcome?.executed === true)
+        projection.phase = 'failed'
       continue
     }
     if (transition.workflowId !== workflowId) {
@@ -475,6 +524,8 @@ export function foldWorkflow(
         projection.attempts[receipt.nodeId] = (projection.attempts[receipt.nodeId] ?? 0) + 1
       }
     }
+    if (transition.phase === 'waiting_review') projection.reviewStepId = record.stepId
+    else delete projection.reviewStepId
     projection.phase = transition.phase
     if (transition.checkpointId) projection.checkpointId = transition.checkpointId
     else delete projection.checkpointId

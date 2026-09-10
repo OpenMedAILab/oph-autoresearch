@@ -50,7 +50,7 @@ export class CliConversationSession {
   async *ask(
     prompt: string,
     conversationId: ConversationId,
-    options?: { model?: string; attachments?: Attachment[] },
+    options?: { model?: string; attachments?: Attachment[]; clientRequestId?: string },
   ): AsyncGenerator<AgentEvent> {
     const { store, signal } = this.opts
     const conversation = getConversation(store, conversationId)!
@@ -81,7 +81,7 @@ export class CliConversationSession {
       conversationId,
       workspaceId: ws.id,
       model,
-      clientRequestId: crypto.randomUUID(),
+      clientRequestId: options?.clientRequestId ?? crypto.randomUUID(),
       userMessageId: message.id,
       messageIdUpperBound: message.id,
       contextSnapshot: [],

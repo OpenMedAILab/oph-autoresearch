@@ -278,11 +278,15 @@ describe('失败要能区分「配错了」和「对面挂了」', () => {
   })
 
   test('地址根本连不上时说清是连不上，不是超时', async () => {
-    const c = new McpClient({
-      name: 'dead',
-      spec: { transport: 'http', url: 'http://127.0.0.1:1/mcp' } as never,
-    })
-    await expect(c.start()).rejects.toThrow(/连接被拒绝|域名解析|127\.0\.0\.1:1/)
+    const closed = Bun.serve({ port: 0, fetch: () => new Response('unused') })
+    const url = `http://127.0.0.1:${closed.port}/mcp`
+    closed.stop(true)
+    const c = new McpClient({ name: 'dead', spec: { transport: 'http', url } as never })
+    try {
+      await expect(c.start()).rejects.toThrow(/连接被拒绝|域名解析|127\.0\.0\.1/)
+    } finally {
+      c.stop()
+    }
   })
 
   /**

@@ -8,7 +8,13 @@
 import type { Attachment, Conversation, EffortLevel } from '@oph-autoresearch/core'
 import { produce } from 'solid-js/store'
 import { ApiError } from '../client.ts'
-import { client, discardPace, reloadActiveConversation, syncViews } from './connection.ts'
+import {
+  client,
+  discardPace,
+  loadOlderConversation,
+  reloadActiveConversation,
+  syncViews,
+} from './connection.ts'
 import {
   addWorkspace,
   loadServerConfig,
@@ -20,7 +26,7 @@ import {
 } from './settings.ts'
 import { isDesktopShell, tauriInvoke } from './shell.ts'
 import { isRunning, markBusy, setState, state } from './state.ts'
-import { closeAllPanelTabs, setOpenFile, setWorkspace, workspace } from './ui.ts'
+import { closeAllPanelTabs, setOpenFile, setSidePanel, setWorkspace, workspace } from './ui.ts'
 
 /** 本地文件操作完成后，让文件树与已打开的预览统一失效。 */
 export function invalidateWorkspaceFiles(): void {
@@ -45,6 +51,24 @@ export async function loadConversations(): Promise<void> {
   }
   const res = await client.api<{ conversations: Conversation[] }>('/api/conversations')
   setState('conversations', res.conversations)
+  const target = new URLSearchParams(location.hash.slice(1)).get('conversation')
+  if (target) {
+    if (new URLSearchParams(location.hash.slice(1)).has('workflow')) setSidePanel(null)
+    await selectConversation(target)
+    const fragment = new URLSearchParams(location.hash.slice(1))
+    const workflow = fragment.get('workflow')
+    while (workflow && !state.views[target]?.transcript.some((item) => item.id === workflow)) {
+      if (!(await loadOlderConversation(target))) break
+    }
+    fragment.delete('conversation')
+    fragment.delete('workspace')
+    history.replaceState(
+      null,
+      '',
+      `${location.pathname}${location.search}${fragment.size ? `#${fragment}` : ''}`,
+    )
+    return
+  }
   if (state.activeConversation) return
   if (res.conversations[0]) {
     await selectConversation(res.conversations[0].id)

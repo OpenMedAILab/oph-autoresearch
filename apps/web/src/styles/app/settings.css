@@ -1479,6 +1479,30 @@ textarea.code-area::placeholder {
 .settings-notices.bad {
   color: var(--danger);
 }
+.model-setup-notice {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.model-setup-notice p {
+  margin: var(--s-1) 0 0;
+}
+.model-setup-action {
+  min-height: 44px;
+}
+.main > .model-setup-notice {
+  margin: var(--s-4);
+}
 /* markdown 段落在会话流里带着 12px 段距，这里一条提醒就三五行，撑得太散。 */
 .settings-notices .markdown p {
   margin-bottom: var(--s-1);

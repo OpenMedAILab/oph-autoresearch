@@ -58,7 +58,7 @@
 | S5 基线与受限实验 | 远程实验 | experiment-dag | 基线/候选/消融执行员、实验反证员 | 每次 Attempt 的 `run_receipt.json`、实验索引 | 资源超限回到 G2 |
 | S6 评价与误差分析 | 独立复核 | metric-challenge | 统计复算员、校准/公平性审查员、临床误差分析员 | 指标包、图表、亚组与失败病例清单 | 不产生最终主张批准 |
 | S7 独立复核 | 独立复核 | self-verification | 独立复核员、泄漏审查员、复现审计员 | `claim_evidence_map.yaml`、复现差异 | G3 结论接受/返工 |
-| S8 写作、归档与复现 | 研究输出 | document-review | 证据写作者、统计/引用审查员、研究协调员 | 报告、模型卡、`artifact_ledger.yaml`、复现清单 | 发布确认与 Campaign 关闭 |
+| S8 写作、归档与复现 | 研究输出 | document-review | 证据写作者、统计/引用审查员、研究协调员 | 报告、模型卡、版本化文档账本、复现清单 | 发布确认与 Campaign 关闭 |
 
 标注网站未接入时，S2 的标注分支可以明确标记为 `not_applicable`，不能伪装成已完成。接入后它只作为 Task/Artifact/Event 适配器，不另起一条绕过审批的 Agent 链。
 
@@ -156,7 +156,7 @@ effective_concurrency = min(
 ### P1：自适应团队与证据链
 
 - 实现基于能力、费用、配额、独立性的 Model Router，并记录每次路由理由。
-- 将 `.oph/patterns.json` 从展示配置升级为带进入条件、输出契约、资源上限的版本化 PatternSpec。
+- 预设的进入条件、输出契约与资源上限由现有 workflow 及文档版本校验负责。
 - 为 Artifact 增加哈希、血缘、数据快照和代码版本；让 Claim–Evidence Map 成为报告唯一数字来源。
 - 接入 SSH 作业监控、取消、恢复与 GPU/磁盘配额。
 

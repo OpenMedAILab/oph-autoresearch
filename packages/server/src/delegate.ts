@@ -16,11 +16,13 @@ import type { DelegatePort } from '@oph-autoresearch/agent'
 import {
   type AgentEvent,
   type ConversationId,
+  checkpointOutput,
   foldWorkflow,
   type RunId,
   type StepId,
   SUBAGENT_NODE_ID,
   type WorkflowCallRecord,
+  type WorkflowCheckpointNode,
   type WorkflowNode,
   type WorkflowTransition,
 } from '@oph-autoresearch/core'
@@ -29,6 +31,7 @@ import {
   getConversation,
   listRuns,
   listSteps,
+  type Store,
   setStepChildConversation,
 } from '@oph-autoresearch/store'
 import {
@@ -41,6 +44,7 @@ import {
   TeamOrchestrator,
 } from '@oph-autoresearch/team'
 import type { CommandDeps } from './deps.ts'
+import { validateWorkflowOutput } from './research/workflow-output.ts'
 import { resolveModel, runBuiltinMember } from './team-run.ts'
 
 /** 派活只用到装配三件套（账本、正文库、配置），不碰那条 WebSocket。 */
@@ -58,6 +62,36 @@ const AD_HOC_ROLE: Role = {
   name: '临时子 agent',
   description: '当前模型、全套工具，任务结束即销毁',
   systemPrompt: '',
+}
+
+/** Workflow steps are the recovery authority; exclude the current uncommitted call. */
+export function workflowRecords(
+  store: Store,
+  conversationId: ConversationId,
+  currentStepId = '',
+): WorkflowCallRecord[] {
+  const records: WorkflowCallRecord[] = []
+  for (const run of listRuns(store, conversationId)) {
+    for (const step of listSteps(store, run.id)) {
+      if (
+        step.id === currentStepId ||
+        step.kind !== 'tool_action' ||
+        step.toolName !== 'workflow'
+      ) {
+        continue
+      }
+      const payload = step.payload
+      if (payload?.kind !== 'tool_call' && payload?.kind !== 'tool_result') continue
+      records.push({
+        stepId: step.id,
+        ...(payload.args ? { args: payload.args } : {}),
+        ...(payload.kind === 'tool_result' ? { outcome: payload.outcome } : {}),
+        status:
+          step.status === 'running' ? 'running' : step.status === 'success' ? 'success' : 'failure',
+      })
+    }
+  }
+  return records
 }
 
 export function makeDelegate(ctx: {
@@ -92,39 +126,6 @@ export function makeDelegate(ctx: {
   const inherited = () => {
     const c = getConversation(deps.store, conversationId)
     return c?.provider && c.model ? { provider: c.provider, model: c.model } : undefined
-  }
-
-  /**
-   * workflow 没有第二份运行表：同一父会话里已经落库的 workflow tool step
-   * 就是恢复权威。当前正在执行的 step 尚无结果，必须排除，避免把请求当成事实。
-   */
-  const workflowRecords = (currentStepId: string): WorkflowCallRecord[] => {
-    const records: WorkflowCallRecord[] = []
-    for (const run of listRuns(deps.store, conversationId)) {
-      for (const step of listSteps(deps.store, run.id)) {
-        if (
-          step.id === currentStepId ||
-          step.kind !== 'tool_action' ||
-          step.toolName !== 'workflow'
-        ) {
-          continue
-        }
-        const payload = step.payload
-        if (payload?.kind !== 'tool_call' && payload?.kind !== 'tool_result') continue
-        records.push({
-          stepId: step.id,
-          ...(payload.args ? { args: payload.args } : {}),
-          ...(payload.kind === 'tool_result' ? { outcome: payload.outcome } : {}),
-          status:
-            step.status === 'running'
-              ? 'running'
-              : step.status === 'success'
-                ? 'success'
-                : 'failure',
-        })
-      }
-    }
-    return records
   }
 
   /** 这一次用哪一对：点名了就解析它，没点名就继承父会话。 */
@@ -341,7 +342,10 @@ export function makeDelegate(ctx: {
         requestedMaxConcurrent = input.call.maxConcurrent
         state = {}
       } else {
-        const folded = foldWorkflow(workflowRecords(input.stepId), workflowId)
+        const folded = foldWorkflow(
+          workflowRecords(deps.store, conversationId, input.stepId),
+          workflowId,
+        )
         if (!folded.ok) return { ok: false, error: folded.error }
         const projection = folded.projection
         if (projection.phase !== 'waiting_review') {
@@ -356,6 +360,13 @@ export function makeDelegate(ctx: {
             error: `工作流 ${workflowId} 当前待审查的是 ${projection.checkpointId ?? '无'}，不是 ${input.call.checkpointId}`,
           }
         }
+        const checkpoint = projection.nodes.find((node) => node.id === projection.checkpointId)
+        if (
+          checkpoint?.kind === 'checkpoint' &&
+          checkpoint.reviewer === 'human' &&
+          input.origin !== 'human'
+        )
+          return { ok: false, error: '等待人类决策', errorKind: 'waiting_human' }
         goal = projection.goal
         nodes = projection.nodes
         requestedMaxConcurrent = projection.maxConcurrent
@@ -384,6 +395,8 @@ export function makeDelegate(ctx: {
           secrets: collectSecrets(deps.config),
           runId: input.runId as RunId,
           maxConcurrent: effectiveMaxConcurrent,
+          workflowId,
+          validateOutput: async (node, output) => validateWorkflowOutput(node, output),
           resolveCli: (id) => clis.find((c) => c.id === id),
           // 进度带上 stepId：前端按它认领是哪一张图卡。不带的话事件到了也无处可落。
           emit: (ev: AgentEvent) =>
@@ -429,10 +442,24 @@ export function makeDelegate(ctx: {
       )
       try {
         const result = await orchestrator.run(goal, state)
+        const checkpoint = nodes.find(
+          (node): node is WorkflowCheckpointNode =>
+            node.kind === 'checkpoint' && node.id === result.checkpointId,
+        )
         const transition: WorkflowTransition = {
           workflowId,
           phase: result.phase,
           receipts: result.receipts,
+          ...(result.checkpointId
+            ? {
+                reviewer:
+                  (
+                    nodes.find(
+                      (node) => node.id === result.checkpointId && node.kind === 'checkpoint',
+                    ) as WorkflowCheckpointNode | undefined
+                  )?.reviewer ?? 'session',
+              }
+            : {}),
           ...(result.checkpointId ? { checkpointId: result.checkpointId } : {}),
           ...(result.review ? { review: result.review } : {}),
         }
@@ -441,6 +468,9 @@ export function makeDelegate(ctx: {
             result.receipts.every((receipt) => receipt.status === 'done') &&
             result.phase !== 'failed',
           transition,
+          ...(checkpoint?.checks?.length
+            ? { reviewPrompt: checkpointOutput(checkpoint, {}, '') }
+            : {}),
         }
       } catch (err) {
         // 图本身不合法（成环、悬空依赖、门禁引用不到角色）在这里落地：

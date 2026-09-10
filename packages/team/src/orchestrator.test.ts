@@ -562,3 +562,38 @@ describe('成员子会话', () => {
     expect('childConversationId' in (done ?? {})).toBe(false)
   })
 })
+
+test('failed upstream can be revised but cannot be approved into the next batch', async () => {
+  const config: TeamConfig = {
+    name: 'contract',
+    roles: [role('r')],
+    plan: [
+      { id: 'a', agent: 'r', task: 'Produce' },
+      { id: 'c', kind: 'checkpoint', label: 'Review', needs: ['a'] },
+      { id: 'b', agent: 'r', task: 'Consume', needs: ['c'] },
+    ],
+  }
+  let calls = 0
+  const deps = {
+    workspaceRoot: '/tmp',
+    signal: new AbortController().signal,
+    runId: 'run_contract' as never,
+    emit: () => {},
+    resolveCli: () => undefined,
+    runBuiltin: async () => {
+      calls++
+      return { ok: false, output: '', error: 'Invalid contract', conversationId: 'child' }
+    },
+  }
+  const first = await new TeamOrchestrator(config, deps as never).run('Review')
+  expect(first.phase).toBe('waiting_review')
+  await expect(
+    new TeamOrchestrator(config, deps as never).run('Review', {
+      results: Object.fromEntries(first.receipts.map((receipt) => [receipt.nodeId, receipt])),
+      approvals: {},
+      checkpointId: 'c',
+      review: { checkpointId: 'c', decision: 'approve', note: '', revisions: [] },
+    }),
+  ).rejects.toThrow('请先返工')
+  expect(calls).toBe(1)
+})

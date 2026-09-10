@@ -18,6 +18,7 @@ import { globTool, grepTool } from './search.ts'
 import { makeShellTool } from './shell.ts'
 import { moveSkillTool, readSkillTool, writeSkillTool } from './skills.ts'
 import { sshListTool, sshReadTool, sshRunTool } from './ssh.ts'
+import { sshJobStatusTool } from './ssh-job.ts'
 import { writeTodosTool } from './todos.ts'
 import { webFetchTool, webSearchTool } from './web.ts'
 
@@ -187,6 +188,7 @@ export function registerBuiltinTools(
     sshListTool,
     sshReadTool,
     sshRunTool,
+    sshJobStatusTool,
     readMemoryTool,
     writeMemoryTool,
     deleteMemoryTool,

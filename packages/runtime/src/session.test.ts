@@ -6,7 +6,7 @@
  * 一个「只读」角色如果 allowedTools 没生效，它照样能改文件，而配置看着是对的。
  */
 
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -399,18 +399,23 @@ describe('外部工具按量转按需', () => {
  * 新建会话的来源标记。
  *
  * `ask` 不带 conversationId 时会**当场建一个会话**——这一步在任何 provider
- * 调用之前发生，所以下面用一个必然连不上的 baseUrl 就能测到它：请求失败，
+ * 调用之前发生，所以下面用本地 provider 的终态拒绝响应验证：请求失败，
  * 但会话已经在库里了。
  */
 describe('新建会话的来源', () => {
+  const rejectedProvider = Bun.serve({
+    port: 0,
+    fetch: () => new Response('fixture rejects authentication', { status: 401 }),
+  })
+  afterAll(() => rejectedProvider.stop(true))
   const offline: OphConfig = {
     active: { provider: 'p', model: 'deepseek-v4-flash' },
     providers: {
       p: {
         kind: 'openai_chat_completions',
         apiKey: 'sk-x',
-        // 端口 1 上不会有人在听，连接立刻被拒——不出网、不等超时。
-        baseUrl: 'http://127.0.0.1:1/v1',
+        // 明确的终态响应避免连接失败触发退避等待。
+        baseUrl: `http://127.0.0.1:${rejectedProvider.port}/v1`,
         models: { 'deepseek-v4-flash': {} },
       },
     },

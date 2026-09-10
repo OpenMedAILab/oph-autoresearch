@@ -121,7 +121,13 @@ async function setup() {
     messageIdUpperBound: null,
     contextSnapshot: [],
   })
-  const summary = { status: 'completed', successful_calls: 20, clinical_validation: false }
+  const summary = {
+    run_dir: '/fixture/run',
+    pid: 12,
+    exit_code: 0,
+    metrics_summary: { successful_calls: 20 },
+    clinical_validation: false,
+  }
   const step = appendStep(store, {
     runId: run.id,
     seq: 1,
@@ -144,6 +150,7 @@ async function setup() {
     studyHash: study.contentHash,
     executionChannel: 'ssh-engineering',
     sourceStepId: step.id,
+    statusStepId: null,
     summary,
     limitations: ['Provenance is not clinical validity'],
     previousVersion: null,
@@ -168,7 +175,11 @@ async function setup() {
     study,
   }
 }
-async function reviewFixture(f: Awaited<ReturnType<typeof setup>>, approve = true) {
+async function reviewFixture(
+  f: Awaited<ReturnType<typeof setup>>,
+  approve = true,
+  indirect = false,
+) {
   const saved = await f.write('experiment', f.experiment)
   const artifact = f.campaign().artifactVersions.find((a) => a.contentHash === saved.contentHash)!
   const child = createConversation(f.store, {
@@ -188,7 +199,15 @@ async function reviewFixture(f: Awaited<ReturnType<typeof setup>>, approve = tru
     goal: 'Independent review',
     nodes: [
       { id: 'review', agent: 'independent-reviewer', task: 'Review exact artifacts', needs: [] },
-      { id: 'c', kind: 'checkpoint', label: 'Accept review', needs: ['review'] },
+      ...(indirect
+        ? [{ id: 'analysis', agent: 'results-analyst', task: 'Analyze', needs: ['review'] }]
+        : []),
+      {
+        id: 'c',
+        kind: 'checkpoint',
+        label: 'Accept review',
+        needs: [indirect ? 'analysis' : 'review'],
+      },
     ],
     maxConcurrent: 1,
   }
@@ -221,6 +240,18 @@ async function reviewFixture(f: Awaited<ReturnType<typeof setup>>, approve = tru
             durationMs: 10,
             conversationId: child.id,
           },
+          ...(indirect
+            ? [
+                {
+                  nodeId: 'analysis',
+                  agent: 'results-analyst',
+                  label: 'Analysis',
+                  status: 'done',
+                  output: 'Accept',
+                  durationMs: 1,
+                },
+              ]
+            : []),
         ],
       },
     },
@@ -392,4 +423,193 @@ test('unmapped manuscript claims are rejected and corrupted experiment files inv
   expect(docs.find((d) => d.kind === 'resultsreview')?.stale).toBe(true)
   expect(docs.find((d) => d.kind === 'manuscript')?.stale).toBe(true)
   await expect(researchPreset(f.deps, f.campaign(), 'writing')).rejects.toThrow('结果尚未独立复核')
+})
+
+test('detached experiment imports require matching launch and terminal receipts in the conversation tree', async () => {
+  const f = await setup()
+  const child = createConversation(f.store, {
+    workspaceId: f.workspace.id,
+    parentConversationId: f.parent.id,
+    source: 'workflow',
+    sourceRef: 'experiment-engineer',
+    provider: 'test',
+    model: 'test',
+  })
+  const run = createRun(f.store, {
+    conversationId: child.id,
+    workspaceId: f.workspace.id,
+    model: 'test',
+    clientRequestId: 'detach',
+    userMessageId: null,
+    messageIdUpperBound: null,
+    contextSnapshot: [],
+  })
+  const launch = appendStep(f.store, {
+    runId: run.id,
+    seq: 1,
+    kind: 'tool_action',
+    toolName: 'ssh_run_command',
+    status: 'success',
+    payload: {
+      kind: 'tool_result',
+      args: { detach: true },
+      outcome: {
+        status: 'success',
+        executed: true,
+        message: 'Launched',
+        data: { profile: 'gpu', runDir: '/runs/actual', pid: 42, state: 'running' },
+      },
+    },
+  })
+  const status = (state: string, pid = 42, profile = 'gpu') =>
+    appendStep(f.store, {
+      runId: run.id,
+      seq: 2,
+      kind: 'tool_action',
+      toolName: 'ssh_job_status',
+      status: 'success',
+      payload: {
+        kind: 'tool_result',
+        args: { profile, runDir: '/runs/actual' },
+        outcome: {
+          status: 'success',
+          executed: true,
+          message: state,
+          data: {
+            profile,
+            runDir: '/runs/actual',
+            pid,
+            state,
+            exitCode: state === 'failed' ? 7 : state === 'completed' ? 0 : null,
+            logTail: 'Epoch 1\n{"metrics_summary":{"auroc":"unknown"}}',
+          },
+        },
+      },
+    })
+  const document = {
+    ...f.experiment,
+    key: 'detach',
+    sourceStepId: launch.id,
+    statusStepId: status('unknown').id,
+    summary: {
+      run_dir: '/runs/actual',
+      pid: 42,
+      exit_code: 0,
+      metrics_summary: { auroc: 'unknown' },
+    },
+  }
+  await expect(f.write('experiment', document)).rejects.toThrow('provenance')
+  for (const wrong of [status('completed', 99), status('completed', 42, 'other-profile')])
+    await expect(f.write('experiment', { ...document, statusStepId: wrong.id })).rejects.toThrow(
+      'provenance',
+    )
+  const completed = status('completed')
+  await expect(
+    f.write('experiment', {
+      ...document,
+      statusStepId: completed.id,
+      summary: { ...document.summary, metrics_summary: { auroc: 0.99 } },
+    }),
+  ).rejects.toThrow('provenance')
+  const saved = await f.write('experiment', { ...document, statusStepId: completed.id })
+  expect(
+    (await readResearchDocuments(f.store, f.root, f.campaign().id)).find(
+      (doc) => doc.contentHash === saved.contentHash,
+    )?.verified,
+  ).toBe(true)
+  await expect(researchPreset(f.deps, f.campaign(), 'writing')).rejects.toThrow('独立复核')
+  const failed = status('failed')
+  const negative = await f.write('experiment', {
+    ...document,
+    key: 'failed-run',
+    statusStepId: failed.id,
+    summary: { ...document.summary, exit_code: 7 },
+  })
+  expect(
+    (await readResearchDocuments(f.store, f.root, f.campaign().id)).find(
+      (doc) => doc.contentHash === negative.contentHash,
+    )?.verified,
+  ).toBe(true)
+  const other = createConversation(f.store, {
+    workspaceId: f.workspace.id,
+    provider: 'test',
+    model: 'test',
+  })
+  const otherContext = await assistantContext(f.deps, [
+    { ...f.campaign(), parentConversationId: other.id },
+  ])
+  expect(otherContext.campaigns[0]?.experimentSources).toHaveLength(0)
+})
+
+test('campaign usage includes nested and archived members, separates currencies and excludes unavailable CLI usage', async () => {
+  const { archiveConversation, updateRunUsage } = await import('@oph-autoresearch/store')
+  const { campaignUsage } = await import('./campaign-usage.ts')
+  const f = await setup()
+  const makeChild = (parent: typeof f.parent) =>
+    createConversation(f.store, {
+      workspaceId: f.workspace.id,
+      parentConversationId: parent.id,
+      source: 'workflow',
+      sourceRef: 'fixture',
+      provider: 'test',
+      model: 'test',
+    })
+  const child = makeChild(f.parent),
+    nested = makeChild(child),
+    cli = makeChild(nested)
+  const addUsage = (conversation: typeof child, currency: 'USD' | 'CNY', cost: number | null) => {
+    const run = createRun(f.store, {
+      conversationId: conversation.id,
+      workspaceId: f.workspace.id,
+      model: 'test',
+      clientRequestId: conversation.id,
+      userMessageId: null,
+      messageIdUpperBound: null,
+      contextSnapshot: [],
+    })
+    updateRunUsage(f.store, run.id, {
+      inputTokens: 10,
+      outputTokens: 20,
+      cachedTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: 0,
+      cost,
+      currency,
+      turns: [],
+      ...(cost === null ? { reporting: 'unavailable' } : {}),
+    })
+  }
+  addUsage(child, 'USD', 1.2)
+  addUsage(nested, 'CNY', 8)
+  addUsage(cli, 'USD', null)
+  archiveConversation(f.store, child.id)
+  const other = createConversation(f.store, {
+    workspaceId: f.workspace.id,
+    provider: 'test',
+    model: 'test',
+  })
+  addUsage(other, 'USD', 999)
+  const usage = campaignUsage(f.store, f.parent.id)
+  expect(usage).toMatchObject({
+    conversationCount: 4,
+    runCount: 4,
+    inputTokens: 20,
+    outputTokens: 40,
+    unavailableRuns: 1,
+    costs: [
+      { currency: 'CNY', cost: 8 },
+      { currency: 'USD', cost: 1.2 },
+    ],
+  })
+})
+
+test('human approval after analysis also covers its upstream independent review', async () => {
+  const f = await setup()
+  const review = await reviewFixture(f, true, true)
+  const saved = await f.write('resultsreview', review.document)
+  expect(
+    (await readResearchDocuments(f.store, f.root, f.campaign().id)).find(
+      (doc) => doc.contentHash === saved.contentHash,
+    )?.verified,
+  ).toBe(true)
 })

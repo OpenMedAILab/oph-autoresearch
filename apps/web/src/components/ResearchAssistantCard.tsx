@@ -1,3 +1,4 @@
+import { type Currency, formatMoney } from '@oph-autoresearch/core'
 import { createResource, createSignal, For, Show } from 'solid-js'
 import {
   client,
@@ -24,6 +25,12 @@ type Research = {
   version: number
   studySelection: unknown
   selectionStale: boolean
+  usage?: {
+    inputTokens: number
+    outputTokens: number
+    costs: { currency: string; cost: number }[]
+    unavailableRuns: number
+  }
   documents: Document[]
 }
 
@@ -35,7 +42,12 @@ export function ResearchAssistantCard() {
       const ws = workspace()?.id,
         conversation = state.activeConversation
       return ws && conversation
-        ? { ws, conversation, version: researchRefreshVersion(ws, conversation) }
+        ? {
+            ws,
+            conversation,
+            version: researchRefreshVersion(ws, conversation),
+            running: isRunning(),
+          }
         : undefined
     },
     async ({ ws, conversation }) =>
@@ -108,6 +120,21 @@ export function ResearchAssistantCard() {
                 </span>
               </summary>
               <div class="research-assistant-content">
+                <Show when={research.usage}>
+                  {(usage) => (
+                    <p class="research-usage">
+                      会话累计（含子会话）：{usage().inputTokens + usage().outputTokens} tokens ·{' '}
+                      {usage().costs.length
+                        ? usage()
+                            .costs.map((item) => formatMoney(item.cost, item.currency as Currency))
+                            .join(' / ')
+                        : '金额不可得'}
+                      {usage().unavailableRuns
+                        ? ` · ${usage().unavailableRuns} 次用量不可得（含外部 CLI），未计入合计`
+                        : ''}
+                    </p>
+                  )}
+                </Show>
                 <Show when={research.selectionStale}>
                   <output>方案或目录已变化，请查看当前内容后重新确认。</output>
                 </Show>

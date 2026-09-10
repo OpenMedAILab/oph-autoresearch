@@ -1,10 +1,11 @@
 /** 远程遥控通道的控制面配置。凭证只保存环境变量名，不把 secret 写入 JSON。 */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { globalScopeRoot } from '@oph-autoresearch/tools'
 
-export type RemoteChannelKind = 'feishu' | 'wecom' | 'qq'
+export type RemoteChannelKind = 'feishu'
 export type RemoteControlLevel = 'chat' | 'review' | 'control'
 
 export interface RemoteChannelConfig {
@@ -16,6 +17,8 @@ export interface RemoteChannelConfig {
   secretEnv: string
   allowFrom: string[]
   controlLevel: RemoteControlLevel
+  chatId?: string
+  conversationId?: string
 }
 
 export const REMOTE_CHANNEL_CATALOG = [
@@ -23,18 +26,6 @@ export const REMOTE_CHANNEL_CATALOG = [
     kind: 'feishu',
     name: '飞书机器人',
     transport: 'WebSocket 长连接',
-    credentialHint: 'App ID',
-  },
-  {
-    kind: 'wecom',
-    name: '微信（企业微信）',
-    transport: 'AI Bot WebSocket',
-    credentialHint: 'Bot ID',
-  },
-  {
-    kind: 'qq',
-    name: 'QQ 机器人',
-    transport: 'QQ 开放平台 WebSocket',
     credentialHint: 'App ID',
   },
 ] as const
@@ -46,10 +37,13 @@ export function remoteChannelsPath(): string {
   return join(globalScopeRoot(), 'remote-channels.json')
 }
 
-export async function loadRemoteChannels(): Promise<RemoteChannelConfig[]> {
-  const parsed = await readFile(remoteChannelsPath(), 'utf8')
-    .then((raw) => JSON.parse(raw) as { channels?: unknown })
-    .catch(() => ({ channels: [] }))
+export function loadRemoteChannels(): RemoteChannelConfig[] {
+  let parsed: { channels?: unknown }
+  try {
+    parsed = JSON.parse(readFileSync(remoteChannelsPath(), 'utf8'))
+  } catch {
+    return []
+  }
   if (!Array.isArray(parsed.channels)) return []
   return parsed.channels.map(normalize).filter((item): item is RemoteChannelConfig => item !== null)
 }
@@ -65,8 +59,13 @@ export async function saveRemoteChannels(input: unknown): Promise<RemoteChannelC
     return channel
   })
   const ids = new Set<string>()
+  const apps = new Set<string>()
   for (const channel of channels) {
     if (ids.has(channel.id)) throw new Error(`远程通道标识重复：${channel.id}`)
+    if (channel.enabled && apps.has(channel.appId)) throw new Error('同一飞书应用只能启用一条通道')
+    if (channel.enabled) apps.add(channel.appId)
+    if (Boolean(channel.chatId) !== Boolean(channel.conversationId))
+      throw new Error('群聊必须同时绑定主会话')
     ids.add(channel.id)
   }
   const path = remoteChannelsPath()
@@ -108,7 +107,19 @@ function normalize(input: unknown): RemoteChannelConfig | null {
     secretEnv,
     allowFrom,
     controlLevel,
+    ...(typeof value.chatId === 'string' && value.chatId.trim()
+      ? { chatId: value.chatId.trim() }
+      : {}),
+    ...(typeof value.conversationId === 'string' && value.conversationId.trim()
+      ? { conversationId: value.conversationId.trim() }
+      : {}),
   }
+}
+
+type ConnectionState = 'connecting' | 'connected' | 'failed' | 'disabled'
+const connectionStates = new Map<string, ConnectionState>()
+export function setRemoteChannelConnectionState(id: string, state: ConnectionState): void {
+  connectionStates.set(id, state)
 }
 
 export function remoteChannelStatus(channel: RemoteChannelConfig) {
@@ -117,6 +128,10 @@ export function remoteChannelStatus(channel: RemoteChannelConfig) {
     id: channel.id,
     configured: Boolean(channel.appId && channel.secretEnv && channel.allowFrom.length),
     credentialReady,
-    state: !channel.enabled ? 'disabled' : !credentialReady ? 'missing_credential' : 'configured',
+    state: !channel.enabled
+      ? 'disabled'
+      : !credentialReady
+        ? 'missing_credential'
+        : (connectionStates.get(channel.id) ?? 'configured'),
   }
 }

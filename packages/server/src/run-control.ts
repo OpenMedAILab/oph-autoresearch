@@ -35,6 +35,7 @@ import {
 import {
   createGoal,
   currentGoal,
+  findRunByClientRequest,
   getConversation,
   getResearchCampaign,
   listResearchCampaigns,
@@ -49,6 +50,7 @@ import { makePluginPort } from './plugin-port.ts'
 import { createBoundedController } from './research/bounded-controller.ts'
 import { publishResearchEvents } from './research-events.ts'
 import type { GoalArm } from './runs.ts'
+import { announceHumanCheckpoint } from './workflow-decisions.ts'
 
 /**
  * 发起一轮。
@@ -73,6 +75,7 @@ export async function startRun(
    * 清了循环最多跑一轮。
    */
   goalRound?: GoalArm,
+  clientRequestId?: string,
 ): Promise<void> {
   /*
    * 占位与检查必须是同一个同步动作：只检查不占位的话，从这里到 `runs.register()`
@@ -83,6 +86,7 @@ export async function startRun(
    * 用户发消息不再走到这里——忙时它排进队列（`commands.ts`）；定时任务也不会
    * ——两条路径都是**新建会话**再起轮（`server.ts` 与 `api/schedules.ts`）。
    */
+  if (clientRequestId && findRunByClientRequest(deps.store, conversationId, clientRequestId)) return
   if (!deps.runs.reserve(conversationId)) {
     deps.bus.publish(
       {
@@ -340,6 +344,7 @@ export async function startRun(
     try {
       for await (const ev of session.ask(content, conversationId, {
         ...(model ? { model } : {}),
+        ...(clientRequestId ? { clientRequestId } : {}),
         ...(attachments?.length ? { attachments } : {}),
       })) {
         // 并非所有事件都带 runId（git.state / file.changed 是工作区级的），
@@ -352,6 +357,22 @@ export async function startRun(
             controller,
             startedAt: Date.now(),
           })
+        }
+        if (ev.type === 'tool.finished') {
+          announceHumanCheckpoint(deps, conversationId, ev.runId, ev.stepId, ev.outcome)
+          if (
+            (ev.outcome.data?.phase === 'waiting_review' && ev.outcome.data.reviewer === 'human') ||
+            ev.outcome.errorKind === 'waiting_human'
+          ) {
+            const goal = currentGoal(deps.store, conversationId)
+            if (goal?.status === 'active')
+              stopGoal(
+                deps,
+                conversationId,
+                { goalId: goal.id, revision: goal.revision },
+                { action: 'blocked', code: 'waiting_human', reason: '等待人类检查点决策' },
+              )
+          }
         }
         if (ev.type === 'run.finished') stopReason = ev.stopReason
         if (ev.type === 'run.error') failure = ev.message
@@ -465,7 +486,15 @@ function fireFollowUpRound(conversationId: ConversationId, deps: Omit<CommandDep
       deps.runs.enqueueFront(conversationId, item)
       return
     }
-    void startRun(conversationId, item.content, undefined, deps, item.attachments).catch((err) => {
+    void startRun(
+      conversationId,
+      item.content,
+      undefined,
+      deps,
+      item.attachments,
+      undefined,
+      item.id,
+    ).catch((err) => {
       // 塞回队首而不是吞掉：卡片重新出现，用户看得见它没发出去。
       deps.runs.enqueueFront(conversationId, item)
       deps.bus.publish(
@@ -821,7 +850,7 @@ function goalRoundPrompt(goal: Goal): string {
  */
 export async function compactConversation(
   conversationId: ConversationId,
-  deps: CommandDeps,
+  deps: Omit<CommandDeps, 'ws'>,
 ): Promise<void> {
   const emit = (ev: AgentEvent) => deps.bus.publish(ev, conversationId)
   // 手动压缩不属于任何 run，用空 runId——事件协议要求这个字段存在，
@@ -917,7 +946,10 @@ export async function compactConversation(
  * 字段集必须与 `Session.resolveProfile` 逐项相同——少给一项（`maxOutputTokens`
  * 就漏过一次）的表现是手动摘要按另一套上限发出去，两条入口的产出从此不可比。
  */
-function summaryProfile(deps: CommandDeps, conversationId: ConversationId): ProviderProfile {
+function summaryProfile(
+  deps: Omit<CommandDeps, 'ws'>,
+  conversationId: ConversationId,
+): ProviderProfile {
   const model = getConversation(deps.store, conversationId)?.model ?? deps.config.active.model
   const stored = resolveModel(deps.config, model)
   if (!stored) throw new Error(`配置里没有模型 "${model}"`)

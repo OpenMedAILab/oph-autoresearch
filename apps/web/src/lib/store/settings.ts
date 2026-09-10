@@ -84,6 +84,7 @@ export interface ConfigPayload {
   config: RedactedConfig
   notices: string[]
   problems: string[]
+  setupRequired: boolean
   /** `envAllowList` 留空时真正生效的那一份，由服务端下发（真源在 `tools/shell.ts`）。 */
   defaultEnvAllowList: string[]
 }
@@ -365,7 +366,10 @@ export interface WorkspaceDetail extends WorkspaceInfo {
   pendingTrust: string[]
 }
 export function loadWorkspace(): Promise<WorkspaceDetail | null> {
-  return client.api<WorkspaceDetail | null>('/api/workspace')
+  const target = new URLSearchParams(location.hash.slice(1)).get('workspace')
+  return client.api<WorkspaceDetail | null>(
+    `/api/workspace${target ? `?ws=${encodeURIComponent(target)}` : ''}`,
+  )
 }
 
 /**

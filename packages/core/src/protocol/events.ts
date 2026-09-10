@@ -47,6 +47,7 @@ export interface EventEnvelope<T extends AgentEvent = AgentEvent> {
 }
 
 export type AgentEvent =
+  | SshJobFinishedEvent
   | ResearchChangedEvent
   // ── 会话 ──
   | ConversationUpdatedEvent
@@ -78,6 +79,15 @@ export type AgentEvent =
   // ── 跟进消息 ──
   | QueueChangedEvent
   | MessageInjectedEvent
+
+export interface SshJobFinishedEvent {
+  type: 'ssh.job.finished'
+  runId: RunId
+  profile: string
+  runDir: string
+  state: 'completed' | 'failed' | 'unknown'
+  reason?: string
+}
 
 /** Notification only; authoritative snapshots and gaps are fetched from ResearchEvent REST. */
 export interface ResearchChangedEvent {
@@ -485,7 +495,9 @@ export interface TeamMemberEvent {
   /** 该成员背后的执行器：内置 loop 或外部 CLI。 */
   backend: 'builtin' | 'codex' | 'claude' | 'grok' | 'custom'
   /** queued = 依赖已经满足，但正在等待本工作流的并发槽位。 */
-  phase: 'queued' | 'spawned' | 'working' | 'done' | 'failed'
+  phase: 'queued' | 'spawned' | 'working' | 'done' | 'failed' | 'waiting_review'
+  reviewer?: 'human'
+  workflowId?: string
   summary?: string
   childConversationId?: ConversationId
   /**

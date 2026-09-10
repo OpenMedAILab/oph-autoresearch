@@ -115,7 +115,14 @@ export function resolveEndpoint(): Endpoint {
   if (location.hash.includes('t=')) {
     const decoded = decodePairingUrl(location.href)
     if (decoded?.token) {
-      history.replaceState(null, '', `${location.pathname}${location.search}`)
+      const fragment = new URLSearchParams(location.hash.slice(1))
+      fragment.delete('t')
+      fragment.delete('n')
+      history.replaceState(
+        null,
+        '',
+        `${location.pathname}${location.search}${fragment.size ? `#${fragment}` : ''}`,
+      )
       try {
         sessionStorage.setItem('oph-autoresearch.token', decoded.token)
       } catch {

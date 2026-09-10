@@ -272,6 +272,7 @@ export function ModelSettings() {
     >
       {(c) => (
         <>
+          <ConfigStatus />
           <CliModels />
           <section class="settings-block">
             <div class="tab-strip">
@@ -495,8 +496,6 @@ export function ModelSettings() {
               error={modelCatalogError()}
             />
           </Show>
-
-          <ConfigStatus />
 
           <ConfirmDialog
             open={doomed() !== null}

@@ -205,14 +205,18 @@ export {
   type ResearchExecutionBoundary,
 } from './domain/research-policy.ts'
 export { type ClaimEvidenceMap, parseModelReview } from './domain/review-contract.ts'
+export { parseTerminalJson } from './domain/terminal-json.ts'
 // workflow 的跨层序列化契约与纯投影：team/server/web 共用，不能各算一份。
 export {
   checkpointOutput,
   DEFAULT_MAX_CONCURRENT,
   foldWorkflow,
+  KNOWLEDGE_KINDS,
+  type KnowledgeKind,
   parseWorkflowCall,
   type RevisionClosureResult,
   revisionClosure,
+  WORKFLOW_OUTPUT_KINDS,
   type WorkflowAgentNode,
   type WorkflowAppliedReview,
   type WorkflowCall,
@@ -220,6 +224,7 @@ export {
   type WorkflowCheckpointNode,
   type WorkflowFoldResult,
   type WorkflowNode,
+  type WorkflowOutputKind,
   type WorkflowParseResult,
   type WorkflowPhase,
   type WorkflowProjection,
@@ -229,6 +234,11 @@ export {
   workflowGroupId,
   workflowTransitionOf,
 } from './domain/workflow.ts'
+export {
+  type WorkflowCheckpointDetails,
+  workflowAncestors,
+  workflowCheckpointDetails,
+} from './domain/workflow-checkpoint.ts'
 export type { ResearchControlOperation, ResearchControlPort } from './ports/research-control.ts'
 // 服务端 → 客户端的事件
 export type {

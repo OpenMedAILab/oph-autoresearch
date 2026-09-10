@@ -1,14 +1,7 @@
 /** Knowledge records use the existing immutable document and campaign artifact store. */
-export const KNOWLEDGE_KINDS = [
-  'evidence',
-  'venue',
-  'reviewcase',
-  'handoff',
-  'experiment',
-  'resultsreview',
-  'peerreview',
-] as const
-export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number]
+import { KNOWLEDGE_KINDS, type KnowledgeKind, parseModelReview } from '@oph-autoresearch/core'
+
+export { KNOWLEDGE_KINDS, type KnowledgeKind } from '@oph-autoresearch/core'
 export const isKnowledgeKind = (kind: string): kind is KnowledgeKind =>
   KNOWLEDGE_KINDS.includes(kind as KnowledgeKind)
 
@@ -103,8 +96,17 @@ export const KNOWLEDGE_GUIDE = {
     key: 'ssh-experiment',
     studyHash: 'Currently confirmed study hash',
     executionChannel: 'ssh-engineering',
-    sourceStepId: 'Successful ssh_run_command step in this research conversation',
-    summary: { note: 'Exact JSON object returned in that SSH step stdout; aggregates only' },
+    sourceStepId: 'Successful synchronous or detach ssh_run_command step in this conversation tree',
+    statusStepId:
+      'Matching terminal ssh_job_status step for detach; null for synchronous execution',
+    summary: {
+      run_dir: 'Actual run directory',
+      pid: 1,
+      exit_code: 0,
+      metrics_summary: {
+        note: 'Aggregates from terminal JSON in stdout/logTail; SSH handles must match context.experimentSources',
+      },
+    },
     limitations: ['Engineering provenance is not formal execution or clinical validation'],
     previousVersion: null,
   },
@@ -260,12 +262,22 @@ export function validateKnowledge(kind: KnowledgeKind, document: Record<string, 
     requireText(document.sourceStepId, 'SSH source step')
     if (document.executionChannel !== 'ssh-engineering' || !record(document.summary))
       throw new Error('Expected SSH engineering aggregate receipt')
+    if (document.statusStepId !== null) requireText(document.statusStepId, 'SSH status step')
+    const summary = document.summary
+    requireText(summary.run_dir, 'summary.run_dir')
+    if (!Number.isSafeInteger(summary.pid) || Number(summary.pid) < 1)
+      throw new Error('Invalid summary.pid')
+    if (!Number.isSafeInteger(summary.exit_code) || Number(summary.exit_code) < 0)
+      throw new Error('Invalid summary.exit_code')
+    if (!record(summary.metrics_summary))
+      throw new Error('summary.metrics_summary must be an object; missing metrics stay unknown')
     texts(document.limitations, 'experiment limitations', true)
   } else if (kind === 'resultsreview') {
     for (const key of ['studyHash', 'workflowId', 'nodeId']) requireText(document[key], key)
     const ids = texts(document.experimentIds, 'experiment IDs', true)
     if (new Set(ids).size !== ids.length || !record(document.review))
       throw new Error('Invalid result review')
+    parseModelReview(JSON.stringify(document.review), ids)
   } else {
     requireText(document.manuscriptHash, 'manuscript hash')
     if (document.revisionRound !== 1)
