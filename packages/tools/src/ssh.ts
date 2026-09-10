@@ -18,6 +18,7 @@ import type { ToolSpec } from '@oph-autoresearch/agent'
 import type { Workspace } from '@oph-autoresearch/core'
 import { collectProcess } from './sandbox.ts'
 import { globalScopeRoot } from './scopes.ts'
+import { detachedJobScript } from './ssh-job-script.ts'
 
 export interface SshProfile {
   id: string
@@ -554,7 +555,7 @@ function quote(value: string): string {
 }
 
 /** 远端再按 realpath 校验一次，避免根目录内的符号链接跳到 /etc 等边界外。 */
-function remotePathGuard(profile: SshProfile, path: string): string {
+export function remotePathGuard(profile: SshProfile, path: string): string {
   return (
     `root=$(realpath -e ${quote(profile.root)}) || exit $?; ` +
     `path=$(realpath -e ${quote(path)}) || exit $?; ` +
@@ -677,7 +678,7 @@ export async function prepareSshCommand(
   }
 }
 
-async function sshExec(
+export async function sshExec(
   profile: SshProfile,
   command: string,
   options: {
@@ -941,7 +942,10 @@ export async function readSshWholeText(
   }
 }
 
-async function findProfile(id: string, binding?: Workspace['serverBinding']): Promise<SshProfile> {
+export async function findSshProfile(
+  id: string,
+  binding?: Workspace['serverBinding'],
+): Promise<SshProfile> {
   if (binding && id !== binding.profileId) throw new Error('该服务器不属于当前研究项目')
   const profile = (await loadSshProfiles()).find((p) => p.id === id)
   if (!profile) throw new Error(`找不到 SSH 连接：${id}`)
@@ -973,7 +977,7 @@ export const sshListTool: ToolSpec = {
   async fn(args, ctx) {
     if (args.profile === undefined) {
       const available = ctx.projectServerBinding
-        ? [await findProfile(ctx.projectServerBinding.profileId, ctx.projectServerBinding)]
+        ? [await findSshProfile(ctx.projectServerBinding.profileId, ctx.projectServerBinding)]
         : await loadSshProfiles()
       const profiles = available.map((profile) => ({
         id: profile.id,
@@ -988,7 +992,7 @@ export const sshListTool: ToolSpec = {
         data: { profiles },
       }
     }
-    const profile = await findProfile(
+    const profile = await findSshProfile(
       String(args.profile ?? ctx.projectServerBinding?.profileId),
       ctx.projectServerBinding,
     )
@@ -1029,7 +1033,7 @@ export const sshReadTool: ToolSpec = {
   parallelSafe: true,
   resourceKeys: (a) => [`ssh:${String(a.profile)}:${String(a.path)}`],
   async fn(args, ctx) {
-    const profile = await findProfile(
+    const profile = await findSshProfile(
       String(args.profile ?? ctx.projectServerBinding?.profileId),
       ctx.projectServerBinding,
     )
@@ -1087,9 +1091,12 @@ export function resolveSshRunOptions(profile: SshProfile, args: Record<string, u
   )
     throw new Error('timeout_ms 必须为 1000 到 3600000 之间的整数毫秒')
   if (args.cwd != null && typeof args.cwd !== 'string') throw new Error('cwd 必须为字符串')
+  if (args.detach != null && typeof args.detach !== 'boolean')
+    throw new Error('detach 必须为布尔值')
   const cwd = resolveSshPath(profile, args.cwd as string | undefined)
   const unsupported = Object.keys(args).filter(
-    (key) => !['profile', 'command', 'cwd', 'timeout_ms'].includes(key) && args[key] != null,
+    (key) =>
+      !['profile', 'command', 'cwd', 'timeout_ms', 'detach'].includes(key) && args[key] != null,
   )
   if (unsupported.length) throw new Error(`SSH 命令不支持参数：${unsupported.join(', ')}`)
   return { timeoutMs, cwd }
@@ -1103,6 +1110,10 @@ export const sshRunTool: ToolSpec = {
     type: 'object',
     properties: {
       profile: { type: 'string', description: 'SSH 连接标识' },
+      detach: {
+        type: 'boolean',
+        description: '分离启动长任务并返回 runDir/pid；用 ssh_job_status 查询终态',
+      },
       command: { type: 'string', description: '交给远程登录 shell 的命令' },
       cwd: { type: 'string', description: '允许根目录内的远程工作目录；省略时使用绑定根目录' },
       timeout_ms: {
@@ -1124,7 +1135,7 @@ export const sshRunTool: ToolSpec = {
   targetExtractor: (a) => String(a.profile),
   permissionEffect: 'execute',
   async fn(args, ctx) {
-    const profile = await findProfile(
+    const profile = await findSshProfile(
       String(args.profile ?? ctx.projectServerBinding?.profileId),
       ctx.projectServerBinding,
     )
@@ -1147,6 +1158,23 @@ export const sshRunTool: ToolSpec = {
     }
     const command = String(args.command ?? '').trim()
     if (!command) return { status: 'failure', executed: false, message: 'command 不能为空' }
+    if (args.detach === true) {
+      const runDir = posix.join(options.cwd, 'oph-jobs', `${Date.now()}-${crypto.randomUUID()}`)
+      const launch = await sshExec(
+        profile,
+        `${remotePathGuard(profile, options.cwd)}cd "$path" || exit $?; ${detachedJobScript(command, runDir)}`,
+        { signal: ctx.signal, timeoutMs: options.timeoutMs },
+      )
+      const pid = /^\d+$/.test(launch.stdout.trim()) ? Number(launch.stdout.trim()) : null
+      const launched = !launch.timedOut && launch.exitCode === 0 && pid !== null
+      return {
+        status: launched ? 'success' : 'failure',
+        message: launched
+          ? '远端作业已分离启动；请用 ssh_job_status 查询结果'
+          : `作业启动未确认（${sshError(launch)}）；先查询 runDir，不要重复提交`,
+        data: { profile: profile.id, runDir, pid, state: launched ? 'running' : 'unknown' },
+      }
+    }
     const guarded = `cd ${quote(options.cwd)} && ${command}`
     const result = await sshExec(profile, guarded, {
       signal: ctx.signal,

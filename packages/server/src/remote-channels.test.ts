@@ -22,8 +22,8 @@ const channel: RemoteChannelConfig = {
 }
 
 describe('远程遥控通道配置', () => {
-  test('只提供飞书、企业微信与 QQ 三种通道', () => {
-    expect(REMOTE_CHANNEL_CATALOG.map((item) => item.kind)).toEqual(['feishu', 'wecom', 'qq'])
+  test('只提供已经接线的飞书通道', () => {
+    expect(REMOTE_CHANNEL_CATALOG.map((item) => item.kind)).toEqual(['feishu'])
   })
 
   test('只落环境变量名，不接受空白操作者列表', async () => {

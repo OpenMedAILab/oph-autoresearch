@@ -11,6 +11,7 @@
 
 import type { AgentEvent, ConversationId, StopReason } from '@oph-autoresearch/core'
 import { type ModelRef, type OphConfig, Session } from '@oph-autoresearch/runtime'
+import { getConversation, listRuns } from '@oph-autoresearch/store'
 import type { Role } from '@oph-autoresearch/team'
 import type { CommandDeps } from './deps.ts'
 
@@ -21,8 +22,7 @@ import type { CommandDeps } from './deps.ts'
  * 用户在界面上切到便宜模型之后派活，不继承就仍然按 `config.active` 发请求——
  * 而工具描述向模型承诺的是「当前模型」。
  *
- * 角色只点了模型没点接口时**保持那一对不动**：那条路径按裸模型名发请求，接口靠反查，
- * 换一对进去只会让落库的接口名与实际发出去的那家对不上。
+ * 角色仅指定模型时，先解析其唯一接口，再创建具有明确模型绑定的子会话。
  */
 export function memberModel(
   role: Pick<Role, 'id' | 'provider' | 'model'>,
@@ -43,7 +43,7 @@ export function memberModel(
       model: role.model ?? Object.keys(pinned.models)[0] ?? config.active.model,
     }
   }
-  if (role.model) return config.active
+  if (role.model) return resolveModel(role.model, config)
   return pick?.inherit ?? config.active
 }
 
@@ -135,7 +135,13 @@ export async function runBuiltinMember(
     /** 子会话的每一条事件，带着它自己的会话 id。见本文件头那段。 */
     onEvent?: (event: AgentEvent, conversationId: ConversationId) => void
   },
-): Promise<{ ok: boolean; output: string; error?: string; conversationId?: ConversationId }> {
+): Promise<{
+  ok: boolean
+  output: string
+  error?: string
+  conversationId?: ConversationId
+  active?: ModelRef
+}> {
   const { role } = input
   const { deps } = ctx
 
@@ -164,10 +170,6 @@ export async function runBuiltinMember(
 
   try {
     for await (const ev of session.ask(input.prompt, input.existingConversationId, {
-      // 点名过模型时不再带角色那一个：裸模型名会盖过上面刚定下的那一对。
-      ...(role.model && !ctx.explicit && !input.existingConversationId
-        ? { model: role.model }
-        : {}),
       // 成员子会话不进会话列表——`listConversations` 的判据是 `source IS NULL`。
       // 不打这个标记的话，每跑一次 team，用户列表里就多出 N 条以成员 prompt
       // 开头的条目，而点进去只有半截独白。
@@ -191,10 +193,18 @@ export async function runBuiltinMember(
     session.dispose()
   }
 
+  const actualRun = conversationId ? listRuns(deps.store, conversationId).at(-1) : undefined
+  const actualConversation = conversationId
+    ? getConversation(deps.store, conversationId)
+    : undefined
+  const actual = actualConversation
+    ? { provider: actualConversation.provider, model: actualRun?.model ?? actualConversation.model }
+    : undefined
   const output = text.trim()
   return {
     ...memberOutcome({ error, stop, output }),
     output,
+    ...(actual ? { active: actual } : {}),
     ...(conversationId ? { conversationId } : {}),
   }
 }

@@ -333,6 +333,7 @@ export async function loadTeamConfig(workspaceRoot: string): Promise<WorkspaceTe
       systemPrompt: String(r.systemPrompt ?? ''),
       ...(Array.isArray(r.modules) ? { modules: r.modules.map(String) } : {}),
       ...(Array.isArray(r.skills) ? { skills: r.skills.map(String) } : {}),
+      ...(r.independence === 'required' ? { independence: 'required' as const } : {}),
       ...(r.provider ? { provider: String(r.provider) } : {}),
       ...(r.model ? { model: String(r.model) } : {}),
       ...(r.effort ? { effort: r.effort as NonNullable<Role['effort']> } : {}),

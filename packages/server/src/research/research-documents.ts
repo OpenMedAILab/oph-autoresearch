@@ -17,6 +17,7 @@ import {
 } from './research-knowledge.ts'
 import { parseModelReview } from './review-contract.ts'
 import { canonicalJson, sha256 } from './skill-lock.ts'
+import { STUDY_GUIDE } from './study-contract.ts'
 import { type WorkflowReviewEvidence, workflowDocumentEvidence } from './workflow-evidence.ts'
 
 export type ResearchDocumentKind = 'study' | 'manuscript' | 'skillcandidate' | KnowledgeKind
@@ -213,27 +214,32 @@ function currentReview(
 function sameArtifactReferences(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
-function validateStudy(campaign: ResearchCampaign, document: DocumentInput) {
-  if (
-    !hasExactKeys(document, [
-      'PICO',
-      'codeVersion',
-      'counterEvidence',
-      'endpoints',
-      'evidenceCitations',
-      'previousVersion',
-      'protocol',
-      'question',
-      'splitPlan',
-    ])
+export function validateStudyStructure(document: DocumentInput) {
+  const expected = Object.keys(STUDY_GUIDE).filter(
+    (key) => key !== 'revision_note' || document.revision_note !== undefined,
   )
-    fail('invalid study document')
+  const missing = expected.filter((key) => !Object.hasOwn(document, key))
+  const extra = Object.keys(document).filter((key) => !expected.includes(key))
+  if (missing.length || extra.length)
+    fail(`Invalid study fields: missing [${missing.join(', ')}]; unexpected [${extra.join(', ')}]`)
+  if (document.previousVersion !== null) {
+    if (typeof document.previousVersion !== 'string' || !HASH.test(document.previousVersion))
+      fail('invalid study previousVersion')
+    text(document.revision_note, 'study revision_note')
+  } else if (document.revision_note !== undefined)
+    text(document.revision_note, 'study revision_note')
   text(document.question, 'study question')
   json(document.PICO, 'study PICO', true)
   json(document.protocol, 'study protocol', true)
   json(document.splitPlan, 'study splitPlan', true)
   text(document.codeVersion, 'study codeVersion', MAX_SHORT_TEXT)
-  const citations = stringList(document.evidenceCitations, 'study evidenceCitations')
+  stringList(document.evidenceCitations, 'study evidenceCitations')
+  stringList(document.counterEvidence, 'study counterEvidence')
+  stringList(document.endpoints, 'study endpoints')
+}
+function validateStudy(campaign: ResearchCampaign, document: DocumentInput) {
+  validateStudyStructure(document)
+  const citations = document.evidenceCitations as string[]
   if (
     citations.some(
       (id) =>
@@ -244,8 +250,6 @@ function validateStudy(campaign: ResearchCampaign, document: DocumentInput) {
     )
   )
     fail('unknown evidence citation', 409)
-  stringList(document.counterEvidence, 'study counterEvidence')
-  stringList(document.endpoints, 'study endpoints')
   requirePreviousVersion(campaign, 'study', document.previousVersion)
 }
 function validateManuscript(

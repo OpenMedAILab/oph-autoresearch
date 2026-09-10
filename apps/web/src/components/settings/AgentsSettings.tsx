@@ -44,6 +44,8 @@ interface RoleJson {
   modules?: string[]
   skills?: string[]
   provider?: string
+  independence?: 'required'
+  allowedTools?: string[]
   model?: string
   maxSteps?: number
 }
@@ -60,6 +62,7 @@ interface RoleForm {
   systemPrompt: string
   modules: string
   skills: string
+  provider: string
   model: string
   maxSteps: string
 }
@@ -145,6 +148,7 @@ export default function AgentsSettings() {
       systemPrompt: r.systemPrompt ?? '',
       modules: (r.modules ?? []).join('\n'),
       skills: (r.skills ?? []).join('\n'),
+      provider: r.provider ?? '',
       model: r.model ?? '',
       maxSteps: r.maxSteps === undefined ? '' : String(r.maxSteps),
     })
@@ -162,15 +166,22 @@ export default function AgentsSettings() {
       const roles = cfg.roles
       const at = roles.findIndex((x) => x.id === id)
       const next: RoleJson = {
+        ...(at >= 0 ? roles[at] : {}),
         id,
         name: f.name.trim() || id,
         description: f.description.trim(),
         systemPrompt: f.systemPrompt,
         ...(lines(f.modules).length ? { modules: lines(f.modules) } : {}),
         ...(lines(f.skills).length ? { skills: lines(f.skills) } : {}),
+        ...(f.provider.trim() ? { provider: f.provider.trim() } : {}),
         ...(f.model.trim() ? { model: f.model.trim() } : {}),
         ...(f.maxSteps.trim() ? { maxSteps: steps } : {}),
       }
+      if (!f.provider.trim()) delete next.provider
+      if (!f.model.trim()) delete next.model
+      if (!f.maxSteps.trim()) delete next.maxSteps
+      if (!lines(f.modules).length) delete next.modules
+      if (!lines(f.skills).length) delete next.skills
       if (at >= 0) roles[at] = next
       else roles.push(next)
       setRoleForm(null)
@@ -305,6 +316,20 @@ export default function AgentsSettings() {
                         value={f().description}
                         onInput={(e) => setRoleForm({ ...f(), description: e.currentTarget.value })}
                       />
+                    </div>
+                    <div class="setting-row">
+                      <label class="setting-row-text" for="role-provider">
+                        接口
+                      </label>
+                      <div class="setting-row-control">
+                        <input
+                          id="role-provider"
+                          value={f().provider}
+                          onInput={(event) =>
+                            setRoleForm({ ...f(), provider: event.currentTarget.value })
+                          }
+                        />
+                      </div>
                     </div>
                     <div class="setting-row">
                       <div class="setting-row-text">

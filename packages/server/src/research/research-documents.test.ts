@@ -35,6 +35,7 @@ function study(previousVersion: string | null, citation = 'citation-1') {
     splitPlan: { unit: 'patient', train: 0.7, validation: 0.1, test: 0.2 },
     codeVersion: 'c994218',
     previousVersion,
+    ...(previousVersion ? { revision_note: 'Revised in response to independent review' } : {}),
   }
 }
 

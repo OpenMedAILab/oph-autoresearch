@@ -1,6 +1,6 @@
 import { createResource, createSignal, For, Show } from 'solid-js'
 import { loaded } from '../lib/resource.ts'
-import { client, explainApiError } from '../lib/store/index.ts'
+import { client, explainApiError, state } from '../lib/store/index.ts'
 import { IconChevron, IconPlus, IconTrash } from './Icons.tsx'
 
 interface Candidate {
@@ -18,7 +18,7 @@ interface PairingInfo {
   candidates: Candidate[]
 }
 
-type ChannelKind = 'feishu' | 'wecom' | 'qq'
+type ChannelKind = 'feishu'
 type ControlLevel = 'chat' | 'review' | 'control'
 interface ChannelConfig {
   id: string
@@ -29,6 +29,8 @@ interface ChannelConfig {
   secretEnv: string
   allowFrom: string[]
   controlLevel: ControlLevel
+  chatId?: string
+  conversationId?: string
 }
 interface ChannelCatalog {
   kind: ChannelKind
@@ -40,7 +42,7 @@ interface ChannelStatus {
   id: string
   configured: boolean
   credentialReady: boolean
-  state: 'disabled' | 'missing_credential' | 'configured'
+  state: 'disabled' | 'missing_credential' | 'configured' | 'connecting' | 'connected' | 'failed'
 }
 interface ChannelsPayload {
   path: string
@@ -302,6 +304,33 @@ export default function PairPanel() {
                               <option value="control">对话 + 审批 + 停止运行</option>
                             </select>
                           </label>
+                          <label>
+                            <span>飞书群 ID</span>
+                            <input
+                              value={row().chatId ?? ''}
+                              onInput={(event) =>
+                                change(row().id, { chatId: event.currentTarget.value })
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>群聊主会话</span>
+                            <select
+                              value={row().conversationId ?? ''}
+                              onChange={(event) =>
+                                change(row().id, { conversationId: event.currentTarget.value })
+                              }
+                            >
+                              <option value="">未绑定</option>
+                              <For each={state.conversations}>
+                                {(conversation) => (
+                                  <option value={conversation.id}>
+                                    {conversation.title || '新会话'}
+                                  </option>
+                                )}
+                              </For>
+                            </select>
+                          </label>
                           <label class="channel-enabled">
                             <input
                               type="checkbox"
@@ -312,7 +341,7 @@ export default function PairPanel() {
                             />
                             <span>
                               <strong>启用此通道</strong>
-                              <small>保存配置后开始接收机器人消息</small>
+                              <small>重启服务后生效</small>
                             </span>
                           </label>
                         </div>
@@ -324,10 +353,7 @@ export default function PairPanel() {
             }}
           </For>
         </div>
-        <p class="pair-hint">
-          微信使用企业微信官方 AI
-          Bot；不接入非官方个人微信协议。密钥只从环境变量读取，不写入配置文件。
-        </p>
+        <p class="pair-hint">密钥只从环境变量读取，不写入配置文件。</p>
         <Show when={rows().length > 0}>
           <div class="remote-channel-actions">
             <button class="btn-primary" type="button" disabled={busy()} onClick={() => void save()}>
@@ -344,6 +370,9 @@ export default function PairPanel() {
 }
 
 function statusLabel(state?: ChannelStatus['state']): string {
+  if (state === 'connected') return '已连接'
+  if (state === 'connecting') return '连接中'
+  if (state === 'failed') return '连接失败'
   if (state === 'configured') return '凭证就绪'
   if (state === 'missing_credential') return '缺少环境变量'
   return '未启用'

@@ -36,6 +36,7 @@ export interface Role {
   /** 开始任务前必须按需读取的项目技能名。 */
   skills?: string[]
   /** 用哪个接口（config.providers 的键）。不填用当前生效的。 */
+  independence?: 'required'
   provider?: string
   model?: string
   effort?: EffortLevel

@@ -382,6 +382,21 @@ export function listConversations(store: Store, workspaceId: WorkspaceId): Conve
     .map(rowToConversation)
 }
 
+/** Includes archived descendants; parent links and workspace identity are the only authority. */
+export function listConversationTree(store: Store, parentId: ConversationId): Conversation[] {
+  return store.db
+    .query<ConversationRow, [string]>(`
+    WITH RECURSIVE tree AS (
+      SELECT * FROM conversations WHERE id = ?
+      UNION
+      SELECT child.* FROM conversations child JOIN tree parent
+        ON child.parent_conversation_id = parent.id AND child.workspace_id = parent.workspace_id
+    ) SELECT * FROM tree ORDER BY created_at, id
+  `)
+    .all(parentId)
+    .map(rowToConversation)
+}
+
 /**
  * 归档一个项目下当前的全部会话。
  *

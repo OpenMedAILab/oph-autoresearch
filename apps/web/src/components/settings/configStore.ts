@@ -44,6 +44,7 @@ export const config = () => payload()?.config ?? null
 export const configPath = () => payload()?.path ?? ''
 export const configNotices = () => payload()?.notices ?? []
 export const configProblems = () => payload()?.problems ?? []
+export const modelSetupRequired = () => payload()?.setupRequired ?? false
 export const defaultEnvAllowList = () => payload()?.defaultEnvAllowList ?? []
 export const configError = error
 export const configWriteError = writeError
@@ -57,6 +58,7 @@ export function ensureConfig(): void {
 }
 
 export async function reloadConfig(): Promise<void> {
+  started = true
   try {
     setPayload(await loadServerConfig())
     setError(null)

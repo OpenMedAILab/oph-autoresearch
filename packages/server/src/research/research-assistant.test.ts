@@ -1,6 +1,6 @@
 /** Covers chat tool scope, versioned knowledge, confirmation, scheduler recovery and real preparation delegation with a scripted model. */
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,7 +26,7 @@ import { ensureResearchWorkspace } from '../research-template.ts'
 import { RunManager } from '../runs.ts'
 import { createBoundedScheduler } from './bounded-scheduler.ts'
 import { createResearchControlPort } from './native-research-control.ts'
-import { pendingStudyHandoff } from './research-assistant.ts'
+import { pendingStudyHandoff, researchPreset } from './research-assistant.ts'
 import { readResearchDocuments, writeResearchDocument } from './research-documents.ts'
 
 const cleanup: (() => Promise<void>)[] = []
@@ -52,6 +52,12 @@ async function setup() {
   const started: string[] = []
   const deps = {
     store,
+    config: {
+      active: { provider: 'fake', model: 'deepseek-v4-flash' },
+      providers: {
+        fake: { kind: 'openai_responses', apiKey: 'test', models: { 'deepseek-v4-flash': {} } },
+      },
+    } as unknown as OphConfig,
     workspaceId: workspace.id,
     workspaceRoot: root,
     bus,
@@ -263,6 +269,7 @@ test('confirmation binds the current version, is idempotent and survives dispatc
     ...f.study,
     question: 'Revised question',
     previousVersion: f.plan.contentHash,
+    revision_note: 'Updated question in response to review',
   })
   expect((await f.confirm(old.id, old.contentHash))?.status).toBe(409)
   expect((await f.confirm())?.status).toBe(200)
@@ -383,7 +390,15 @@ test('confirmed preparation executes the existing workflow and child model tool,
                 { type: 'response.created', response: { id: 'response2' } },
                 {
                   type: 'response.output_text.delta',
-                  delta: 'Local experiment handoff prepared; executor not configured.',
+                  delta: JSON.stringify({
+                    key: 'experiment-preparation',
+                    studyHash: f.campaign().studySelection!.contentHash,
+                    summary: 'Local file prepared by workflow child',
+                    tasks: ['baseline'],
+                    expectedOutputs: ['metrics'],
+                    blockers: ['Executor not configured'],
+                    previousVersion: null,
+                  }),
                 },
                 {
                   type: 'response.completed',
@@ -439,6 +454,7 @@ test('confirmed preparation executes the existing workflow and child model tool,
       } as unknown as ToolContext,
     )
     expect(result.status).toBe('success')
+    expect(result.message).toContain('核验清单')
     expect(await readFile(join(f.root, 'research/experiment_handoff.md'), 'utf8')).toContain(
       'Fixture tasks',
     )
@@ -457,6 +473,32 @@ test('confirmed preparation executes the existing workflow and child model tool,
         (d) => d.kind === 'handoff' && d.verified && !d.stale,
       ),
     ).toBe(true)
+    for (const [phase, checkpoint] of [
+      ['experiment', 'go_training'],
+      ['results', 'accepted'],
+    ]) {
+      const preset = await f.port.execute({
+        operation: 'workflow/preset',
+        campaignId: '',
+        body: { phase },
+      })
+      expect(preset.ok).toBe(true)
+      const nodes = (preset.data as { workflow: { nodes: { id: string; reviewer?: string }[] } })
+        .workflow.nodes
+      expect(nodes.find((node) => node.id === checkpoint)?.reviewer).toBe('human')
+      if (phase === 'results') {
+        expect(nodes.map((node) => node.id)).toEqual([
+          'collect',
+          'review',
+          'analysis',
+          'reproduce',
+          'accepted',
+        ])
+        expect(nodes.find((node) => node.id === 'accepted')).toMatchObject({
+          needs: ['analysis', 'reproduce'],
+        })
+      }
+    }
     expect(f.campaign().attempts).toHaveLength(0)
   } finally {
     provider.stop(true)
@@ -479,4 +521,235 @@ test('missing source content invalidates the plan and prevents preparation after
       })
     ).ok,
   ).toBe(false)
+})
+
+test('discovery challenges use a second configured provider and explicit role choices take precedence', async () => {
+  const f = await setup()
+  f.deps.config.providers.review = {
+    ...f.deps.config.providers.fake!,
+    models: { 'review-model': {} },
+  }
+  const result = await researchPreset(f.deps, f.campaign(), 'discovery')
+  const challenges = result.workflow.nodes.filter((node) => node.id.startsWith('challenge_'))
+  expect(challenges).toHaveLength(2)
+  for (const node of challenges) {
+    expect(node).toMatchObject({ provider: 'review', model: 'review-model', needs: ['proposal'] })
+  }
+  expect(result.workflow.nodes.find((node) => node.id === 'synthesis_final')?.needs).toEqual([
+    'challenge_clinical',
+    'challenge_methods',
+  ])
+  expect(result.workflow.nodes.find((node) => node.id === 'synthesis')?.needs).toEqual([
+    'synthesis_final',
+  ])
+  const path = join(f.root, '.oph/team.json')
+  const team = JSON.parse(await readFile(path, 'utf8'))
+  Object.assign(
+    team.roles.find((role: { id: string }) => role.id === 'clinical-challenger'),
+    { provider: 'fake', model: 'deepseek-v4-flash' },
+  )
+  await writeFile(path, JSON.stringify(team))
+  const pinned = await researchPreset(f.deps, f.campaign(), 'discovery')
+  expect(pinned.workflow.nodes.find((node) => node.id === 'challenge_clinical')).toMatchObject({
+    provider: 'fake',
+    model: 'deepseek-v4-flash',
+  })
+  expect(pinned.workflow.nodes.at(-1)).toMatchObject({
+    label: expect.stringContaining('同模型审查'),
+  })
+})
+
+test('single-provider review is labelled and experiment/results retain evidence gates', async () => {
+  const f = await setup()
+  const result = await researchPreset(f.deps, f.campaign(), 'discovery')
+  expect(result.workflow.nodes.at(-1)).toMatchObject({
+    label: expect.stringContaining('同模型审查'),
+  })
+  await expect(researchPreset(f.deps, f.campaign(), 'experiment')).rejects.toThrow('交接包')
+  await expect(researchPreset(f.deps, f.campaign(), 'results')).rejects.toThrow('交接包')
+})
+
+test('review routing skips empty credentials and ranks effective catalog capabilities', async () => {
+  const f = await setup()
+  f.deps.config.providers.empty = {
+    ...f.deps.config.providers.fake!,
+    apiKey: '',
+    models: { 'gpt-5.4': {} },
+  }
+  f.deps.config.providers.review = {
+    ...f.deps.config.providers.fake!,
+    models: { 'unknown-model': {}, 'deepseek-v4-flash': {} },
+  }
+  const result = await researchPreset(f.deps, f.campaign(), 'discovery')
+  expect(result.workflow.nodes.find((node) => node.id === 'challenge_methods')).toMatchObject({
+    provider: 'review',
+    model: 'deepseek-v4-flash',
+  })
+  expect(result.workflow.nodes.find((node) => node.id === 'proposal')).toMatchObject({
+    outputKind: 'study',
+  })
+  expect(result.workflow.nodes.at(-1)).toMatchObject({
+    checks: expect.arrayContaining(['与冻结方案的冲突已明确列出。']),
+  })
+})
+
+test('scripted drift outputs cannot register fake citations, frozen-plan changes, abstract writing or exit-zero success', async () => {
+  const f = await setup()
+  await f.confirm()
+  await f.write('evidence', {
+    key: 'abstract',
+    title: 'Abstract only',
+    url: 'https://example.org/abstract',
+    retrievedAt: '2026-09-10',
+    readingDepth: 'abstract',
+    license: 'fixture',
+    segments: [{ locator: 'Abstract', text: 'No methods available' }],
+    previousVersion: null,
+  })
+  const cases = [
+    {
+      kind: 'study' as const,
+      document: {
+        ...f.study,
+        evidenceCitations: ['doi:invented'],
+        previousVersion: f.plan.contentHash,
+        revision_note: 'Added reference',
+      },
+      error: 'unknown evidence citation',
+    },
+    {
+      kind: 'handoff' as const,
+      document: {
+        key: 'changed-plan',
+        studyHash: `sha256:${'0'.repeat(64)}`,
+        summary: 'Changed endpoint without confirmation',
+        tasks: ['train'],
+        expectedOutputs: ['metrics'],
+        blockers: [],
+        previousVersion: null,
+      },
+      error: 'currently confirmed study',
+    },
+    {
+      kind: 'venue' as const,
+      document: {
+        key: 'abstract-venue',
+        name: 'Fixture',
+        venueType: 'journal',
+        year: null,
+        track: null,
+        officialUrl: 'https://example.org',
+        fit: 'unknown',
+        rules: [],
+        exemplars: [
+          {
+            evidenceKey: 'abstract',
+            reason: 'fixture',
+            citationCount: null,
+            citationSource: null,
+            citationCheckedAt: null,
+          },
+        ],
+        writingInferences: [
+          { text: 'Full-text methods use this structure', evidenceKeys: ['abstract'] },
+        ],
+        unknowns: [],
+        previousVersion: null,
+      },
+      error: 'full-text evidence',
+    },
+    {
+      kind: 'resultsreview' as const,
+      document: {
+        key: 'exit-zero',
+        studyHash: f.plan.contentHash,
+        experimentIds: ['exit-code-zero'],
+        workflowId: 'nonexistent',
+        nodeId: 'review',
+        review: {
+          decision: 'supported',
+          claims: [
+            { claim: 'Exit 0 proves clinical benefit', artifactVersionIds: ['exit-code-zero'] },
+          ],
+          limitations: [],
+        },
+        previousVersion: null,
+      },
+      error: 'provenance',
+    },
+  ]
+  let reply = ''
+  const provider = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () =>
+      new Response(
+        [
+          { type: 'response.created', response: { id: 'drift' } },
+          { type: 'response.output_text.delta', delta: reply },
+          {
+            type: 'response.completed',
+            response: {
+              id: 'drift',
+              status: 'completed',
+              usage: { input_tokens: 10, output_tokens: 10 },
+            },
+          },
+        ]
+          .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+          .join(''),
+        { headers: { 'content-type': 'text/event-stream' } },
+      ),
+  })
+  try {
+    const config = {
+      ...f.deps.config,
+      mode: 'auto',
+      providers: { fake: { ...f.deps.config.providers.fake!, baseUrl: `${provider.url}v1` } },
+    } as OphConfig
+    const delegate = makeDelegate({
+      workspaceRoot: f.root,
+      conversationId: f.parent.id,
+      deps: {
+        store: f.store,
+        bus: f.deps.bus,
+        runs: f.deps.runs,
+        content: new ContentStore(contentPathFor(join(f.root, 'study.sqlite'))),
+        config,
+      },
+    })
+    for (const item of cases) {
+      reply = JSON.stringify(item.document)
+      const result = await delegate.runGraph!({
+        call: {
+          kind: 'start',
+          goal: 'Drift regression',
+          maxConcurrent: 1,
+          nodes: [
+            {
+              id: 'producer',
+              agent: 'ad-hoc',
+              task: 'Return the requested document',
+              outputKind: item.kind,
+            },
+          ],
+        },
+        runId: 'run_drift',
+        stepId: 'step_drift',
+        signal: new AbortController().signal,
+      })
+      expect(result.transition?.phase).toBe('completed') // Structural validity cannot establish scientific truth.
+      await expect(
+        f.write(item.kind, result.transition!.receipts[0]!.structuredOutput!),
+      ).rejects.toThrow(item.error)
+    }
+    expect(f.campaign().studySelection?.contentHash).toBe(f.plan.contentHash)
+    expect(
+      (await readResearchDocuments(f.store, f.root, f.campaign().id)).some(
+        (doc) => doc.kind === 'resultsreview',
+      ),
+    ).toBe(false)
+  } finally {
+    provider.stop(true)
+  }
 })

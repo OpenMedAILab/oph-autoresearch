@@ -1,28 +1,16 @@
 import { For, Show } from 'solid-js'
 import { renderMarkdown } from '../../lib/markdown.ts'
 import { configNotices, configProblems, configWriteError } from './configStore.ts'
+import { ModelSetupNotice } from './ModelSetupNotice.tsx'
 
 /**
- * 当前配置的三类状态。**都是不说出来用户就会误判的事实**，所以摆在设置页里，
- * 而不是只在终端打印——桌面端用户不会去跑 `oph config`。
- *
- * 1. `writeError`：刚才那一下写失败了。没有「保存」按钮之后**失败必须自己现身**——
- *    改一格就写一次，成功时不需要反馈（值就在那儿），失败时不说的话，界面显示的
- *    还是用户刚点的值，而落盘的是旧值。
- * 2. `problems`：服务端 `diagnoseConfig` 的诊断（比如 active 指向的档案没配 key）。
- *    这是**当前配置的状态**，和「刚才那一下」是两回事，两个都显示但不合并。
- * 3. `notices`：`configNotices` 的提醒——不阻断运行、但每次都要说的事实
- *    （放开了工作区之外的目录、模型不在内置目录所以计价按 0、sandboxNetwork
- *    在本机没生效、权限模式是 full）。**这一条必须渲染出来**：服务端发了、store
- *    也收了，界面上没人读的话，就成了「配了但没生效」的那几件事，
- *    桌面端用户一件都看不到。
- *
- * 按 markdown 渲染：这几段本来就是 markdown（`configNotices` 的注释里写明了两个
- * 落点共用一份文案），当纯文本贴出来就是满屏星号和挤成一行的列表。
+ * 展示服务端的配置引导、配置诊断与能力提醒；保存失败单独保留。
+ * 诊断和提醒包含 markdown，必须保留列表与代码的层级。
  */
 export function ConfigStatus() {
   return (
     <>
+      <ModelSetupNotice />
       <Show when={configWriteError()}>{(msg) => <div class="settings-error">{msg()}</div>}</Show>
       <Show when={configProblems().length}>
         <div class="settings-notices bad">

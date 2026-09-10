@@ -1,5 +1,6 @@
 import { findCli } from '@oph-autoresearch/team'
 import { CLI_PROVIDER_PREFIX, supportsCliModel } from './cli-conversation.ts'
+import { decideWorkflow } from './workflow-decisions.ts'
 /**
  * 客户端指令的分发与拒绝回执。
  *
@@ -12,17 +13,29 @@ import type {
   CommandRejectedFrame,
   CommandRejectReason,
 } from '@oph-autoresearch/core'
-import { getConversation, setConversationModel } from '@oph-autoresearch/store'
+import {
+  findRunByClientRequest,
+  getConversation,
+  setConversationModel,
+} from '@oph-autoresearch/store'
 import type { ServerWebSocket } from 'bun'
 import type { CommandDeps, SocketData } from './deps.ts'
 import { compactConversation, pauseGoal, resumeGoal, setGoal, startRun } from './run-control.ts'
 
-export async function handleCommand(cmd: ClientCommand, deps: CommandDeps): Promise<void> {
-  if (!deps.ws.data.authed) return
+export async function handleCommand(
+  cmd: ClientCommand,
+  deps: Omit<CommandDeps, 'ws'> & { ws?: CommandDeps['ws'] },
+): Promise<Awaited<ReturnType<typeof decideWorkflow>> | undefined> {
+  if (deps.ws && !deps.ws.data.authed) return
 
   switch (cmd.type) {
+    case 'workflow.review': {
+      const result = decideWorkflow(cmd, deps)
+      if (!result.ok) reject(deps.ws, cmd.type, 'conflict', result.error)
+      return result
+    }
     case 'subscribe':
-      deps.bus.setSubscription(deps.ws.data.id, cmd.conversationIds)
+      if (deps.ws) deps.bus.setSubscription(deps.ws.data.id, cmd.conversationIds)
       return
 
     case 'run.interrupt':
@@ -41,6 +54,7 @@ export async function handleCommand(cmd: ClientCommand, deps: CommandDeps): Prom
       return
 
     case 'message.send': {
+      if (findRunByClientRequest(deps.store, cmd.conversationId, cmd.clientRequestId)) return
       /*
        * 会话在跑时**不再回绝**，这一条排进队列，去向由 `steer` 决定：
        * 注入当前这一轮，或者等这一轮收尾后作为下一轮发起。
@@ -61,7 +75,15 @@ export async function handleCommand(cmd: ClientCommand, deps: CommandDeps): Prom
       }
       // 附件随消息一起转发。协议、存储、模型侧都支持，漏掉 `cmd.attachments`
       // 这一手的话，整条链路就是有类型没数据。
-      await startRun(cmd.conversationId, cmd.content, cmd.model, deps, cmd.attachments)
+      await startRun(
+        cmd.conversationId,
+        cmd.content,
+        cmd.model,
+        deps,
+        cmd.attachments,
+        undefined,
+        cmd.clientRequestId,
+      )
       return
     }
 
@@ -187,7 +209,7 @@ export async function handleCommand(cmd: ClientCommand, deps: CommandDeps): Prom
 
 /** 指令回执只回给发起方——别的客户端没发过这条指令，收到只会困惑。 */
 export function reject(
-  ws: ServerWebSocket<SocketData>,
+  ws: ServerWebSocket<SocketData> | undefined,
   command: string,
   reason: CommandRejectReason,
   message: string,
@@ -200,5 +222,5 @@ export function reject(
     message,
     ...(clientRequestId ? { clientRequestId } : {}),
   }
-  ws.send(JSON.stringify(frame))
+  ws?.send(JSON.stringify(frame))
 }

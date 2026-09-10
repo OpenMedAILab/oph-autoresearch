@@ -1134,6 +1134,7 @@ export class Session {
         }
       })(),
       signal: this.opts.signal,
+      emitSshJobFinished: (job) => emit({ type: 'ssh.job.finished', runId, ...job }),
       emitTodos: (todos) => {
         emit({ type: 'todos', runId, todos })
       },

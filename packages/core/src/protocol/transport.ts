@@ -193,6 +193,7 @@ export interface HelloErrFrame {
 // ─────────────────────────────── 指令 ───────────────────────────────
 
 export type ClientCommand =
+  | WorkflowReviewCommand
   | SendMessageCommand
   | InterruptRunCommand
   | SubscribeCommand
@@ -203,6 +204,16 @@ export type ClientCommand =
   | GoalSetCommand
   | FollowUpSteerCommand
   | FollowUpDropCommand
+
+export interface WorkflowReviewCommand {
+  type: 'workflow.review'
+  conversationId: ConversationId
+  workflowId: string
+  checkpointId: string
+  expectedStepId: string
+  decision: 'approve' | 'revise'
+  note: string
+}
 
 export interface SendMessageCommand {
   type: 'message.send'

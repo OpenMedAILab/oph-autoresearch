@@ -64,6 +64,7 @@ import { reparseSkip } from '../lib/stream-pace.ts'
 import { AttachmentThumb } from './AttachmentThumb.tsx'
 import { IconChevron, IconSpinner } from './Icons.tsx'
 import { TodoList } from './TodoList.tsx'
+import { WorkflowDecision } from './WorkflowDecision.tsx'
 
 /** 历史请求的可见落点：首屏反馈、失败重试，以及按需加载更早轮次。 */
 export function ConversationHistoryBoundary(props: {
@@ -1028,6 +1029,13 @@ function ToolGroup(props: { members: TranscriptItem[] }) {
  */
 function DelegateCard(props: { item: TranscriptItem }) {
   const graph = () => delegateGraph(props.item)
+  onMount(() => {
+    const target = new URLSearchParams(location.hash.slice(1)).get('workflow')
+    if (target && target === props.item.workflow?.workflowId)
+      requestAnimationFrame(() =>
+        document.getElementById(`workflow-${target}`)?.scrollIntoView({ block: 'center' }),
+      )
+  })
 
   /**
    * 一格现在什么状态。会话端点没有状态——它是这条会话本身。
@@ -1202,6 +1210,7 @@ function DelegateCard(props: { item: TranscriptItem }) {
   return (
     <div
       class="wf-card"
+      id={props.item.workflow ? `workflow-${props.item.workflow.workflowId}` : undefined}
       classList={{
         failed: props.item.workflow
           ? props.item.workflow.phase === 'failed'
@@ -1244,6 +1253,23 @@ function DelegateCard(props: { item: TranscriptItem }) {
                           ref={hold(n.key)}
                         >
                           <span class="wf-node-name truncate">{n.title}</span>
+                          <Show
+                            when={
+                              props.item.workflow?.phase === 'waiting_review' &&
+                              props.item.workflow?.checkpointId === n.key &&
+                              props.item.workflow.nodes.some(
+                                (node) =>
+                                  node.id === n.key &&
+                                  node.kind === 'checkpoint' &&
+                                  node.reviewer === 'human',
+                              )
+                            }
+                          >
+                            <WorkflowDecision
+                              workflow={props.item.workflow!}
+                              checkpointId={n.key}
+                            />
+                          </Show>
                         </div>
                       }
                     >
@@ -1258,6 +1284,14 @@ function DelegateCard(props: { item: TranscriptItem }) {
                         {/* 主行是那一格的名字：一张图里区分得开谁是谁的就是它。
                             执行者压一档——同一张图里常常四格都是同一个。 */}
                         <span class="wf-node-name truncate">{name()}</span>
+                        <Show when={props.item.workflow?.results[n.key]?.provider}>
+                          <span class="wf-node-model truncate">
+                            {props.item.workflow?.results[n.key]?.provider}
+                            <Show when={props.item.workflow?.results[n.key]?.model}>
+                              /{props.item.workflow?.results[n.key]?.model}
+                            </Show>
+                          </span>
+                        </Show>
                         <span class="wf-node-who truncate">
                           <Show when={n.agentLabel}>{st()?.label || n.agentLabel}</Show>
                           <Show when={st()?.durationMs}>

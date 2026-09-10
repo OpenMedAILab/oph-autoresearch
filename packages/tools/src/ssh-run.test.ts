@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveSshRunOptions, type SshProfile, saveSshProfiles, sshRunTool } from './ssh.ts'
+import { sshJobStatusTool } from './ssh-job.ts'
 
 const profile: SshProfile = {
   id: 'run-test',
@@ -40,6 +41,18 @@ describe('SSH execution limits and receipt state', () => {
       '#!/bin/sh\nfor arg do command="$arg"; done\nexec /bin/sh -c "$command"\n',
     )
     await chmod(shim, 0o700)
+    const setsid = join(bin, 'setsid')
+    await writeFile(
+      setsid,
+      '#!/usr/bin/env python3\nimport os, sys\nos.setsid()\nos.execvp(sys.argv[1], sys.argv[1:])\n',
+    )
+    await chmod(setsid, 0o700)
+    const realpath = join(bin, 'realpath')
+    await writeFile(
+      realpath,
+      '#!/usr/bin/env python3\nimport os, sys\nprint(os.path.realpath(sys.argv[-1], strict=True))\n',
+    )
+    await chmod(realpath, 0o700)
     const previousHome = process.env.OPH_AUTORESEARCH_HOME
     const previousPath = process.env.PATH
     process.env.OPH_AUTORESEARCH_HOME = root
@@ -48,7 +61,7 @@ describe('SSH execution limits and receipt state', () => {
       await saveSshProfiles([{ ...profile, root }])
       const ctx = { emit() {} } as unknown as Parameters<typeof sshRunTool.fn>[1]
       const ok = await sshRunTool.fn(
-        { profile: profile.id, command: 'pwd', cwd, timeout_ms: 1000 },
+        { profile: profile.id, command: 'pwd', cwd, timeout_ms: 5000 },
         ctx,
       )
       expect(ok.status).toBe('success')
@@ -58,6 +71,56 @@ describe('SSH execution limits and receipt state', () => {
         remoteState: 'completed',
         timedOut: false,
       })
+      const events: unknown[] = []
+      const jobContext = {
+        ...ctx,
+        emitSshJobFinished: (event: unknown) => events.push(event),
+      } as Parameters<typeof sshJobStatusTool.fn>[1]
+      const detached = await sshRunTool.fn(
+        {
+          profile: profile.id,
+          cwd,
+          command: 'sleep 1; printf "finished\\n"',
+          detach: true,
+          timeout_ms: 5000,
+        },
+        ctx,
+      )
+      if (detached.status !== 'success') throw new Error(JSON.stringify(detached))
+      expect(detached.status).toBe('success')
+      expect(detached.data?.pid).toBeGreaterThan(0)
+      const runDir = detached.data?.runDir
+      expect(
+        (await sshJobStatusTool.fn({ profile: profile.id, runDir }, jobContext)).data?.state,
+      ).toBe('running')
+      await Bun.sleep(1100)
+      const finished = await sshJobStatusTool.fn({ profile: profile.id, runDir }, jobContext)
+      expect(finished.data).toMatchObject({
+        state: 'completed',
+        exitCode: 0,
+        logTail: 'finished\n',
+      })
+      expect(events).toHaveLength(1)
+      const failed = await sshRunTool.fn(
+        { profile: profile.id, cwd, command: 'exit 7', detach: true },
+        ctx,
+      )
+      await Bun.sleep(50)
+      expect(
+        (
+          await sshJobStatusTool.fn(
+            { profile: profile.id, runDir: failed.data?.runDir },
+            jobContext,
+          )
+        ).data,
+      ).toMatchObject({ state: 'failed', exitCode: 7 })
+      const unknownDir = join(cwd, 'lost-job')
+      await mkdir(unknownDir)
+      await writeFile(join(unknownDir, 'pid'), '99999999')
+      expect(
+        (await sshJobStatusTool.fn({ profile: profile.id, runDir: unknownDir }, jobContext)).data,
+      ).toMatchObject({ state: 'unknown', reason: 'process_missing_without_exit_code' })
+      expect(events).toHaveLength(3)
       const started = Date.now()
       const stalled = await sshRunTool.fn(
         { profile: profile.id, command: 'exec sleep 5', timeout_ms: 1000 },
@@ -82,5 +145,5 @@ describe('SSH execution limits and receipt state', () => {
       if (previousPath === undefined) delete process.env.PATH
       else process.env.PATH = previousPath
     }
-  })
+  }, 10_000)
 })

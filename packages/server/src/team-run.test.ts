@@ -55,9 +55,12 @@ describe('成员会话的选型', () => {
     expect('error' in r && r.error).toContain('查无此接口')
   })
 
-  /** 只点模型不点接口的那条路按裸模型名发请求，接口靠反查——这一对不能换。 */
-  test('角色只点了模型时保持配置默认那一对', () => {
-    expect(memberModel({ id: 'r', model: 'm-other' }, config, 继承)).toEqual(config.active)
+  /** 裸模型名须在派发前解析，确保会话与回执记录实际接口。 */
+  test('角色只点了模型时解析实际接口与模型', () => {
+    expect(memberModel({ id: 'r', model: 'm-other' }, config, 继承)).toEqual({
+      provider: '默认接口',
+      model: 'm-other',
+    })
   })
 
   /** 用户这一次点名要换个模型跑，角色自己钉的那一对也得让开。 */

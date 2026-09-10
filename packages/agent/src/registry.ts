@@ -118,13 +118,16 @@ export interface DelegatePort {
    */
   runGraph(input: {
     call: WorkflowCall
+    origin?: 'model' | 'human'
     runId: string
     stepId: string
     signal: AbortSignal
   }): Promise<{
     ok: boolean
     error?: string
+    errorKind?: string
     transition?: WorkflowTransition
+    reviewPrompt?: string
   }>
 }
 
@@ -518,6 +521,12 @@ export interface ToolContext {
    * 单独一条通道而不是复用 emit：emit 是**增量文本**语义（stdout 一段一段来），
    * 待办是**整表快照**语义，混在一条通道里前端没法区分该追加还是该替换。
    */
+  emitSshJobFinished?: (job: {
+    profile: string
+    runDir: string
+    state: 'completed' | 'failed' | 'unknown'
+    reason?: string
+  }) => void
   emitTodos?(todos: TodoItem[]): void
   /**
    * 请求授权。被拒时工具必须原样放弃，不得绕行。

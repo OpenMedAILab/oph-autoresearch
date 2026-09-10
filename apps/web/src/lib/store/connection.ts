@@ -297,6 +297,7 @@ function foldContent(cid: string, ev: AgentEvent): void {
       if (!ev.stepId) return
       setState(
         produce((s) => {
+          if (ev.phase === 'waiting_review') return
           const card = s.views[cid]?.transcript.find((t) => t.id === ev.stepId)
           if (!card) return
           const nodes = card.nodes ?? []

@@ -14,6 +14,8 @@ import RemoteSshBrowser from './components/RemoteSshBrowser.tsx'
 import { ResearchAssistantCard } from './components/ResearchAssistantCard.tsx'
 import { ResearchStageDetail } from './components/ResearchWorkspace.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
+import { reloadConfig } from './components/settings/configStore.ts'
+import { ModelSetupNotice } from './components/settings/ModelSetupNotice.tsx'
 import { Tooltip } from './components/Tooltip.tsx'
 import { Transcript } from './components/Transcript.tsx'
 import { TrustDialog } from './components/TrustDialog.tsx'
@@ -156,6 +158,7 @@ export function App() {
   createEffect((wasReady: boolean) => {
     const ready = state.connection === 'ready'
     if (ready && !wasReady) {
+      void reloadConfig()
       void discoverCliModels()
       void restoreWorkspaceSession().catch((error) => {
         setState('notice', {
@@ -316,6 +319,9 @@ export function App() {
             view().history.error === null,
         }}
       >
+        <Show when={!settingsPage()}>
+          <ModelSetupNotice />
+        </Show>
         {/* 面板放大时正文整块卸载，不是用 CSS 藏起来：`display: none` 会把
             滚动容器的 scrollTop 清成 0，还原时用户落在几百条之前的开头，而
             重新挂载会走一遍「贴底」的初始态，还原就停在最新那条上。 */}

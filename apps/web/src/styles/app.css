@@ -10,6 +10,7 @@
 
 @import "./app/shell.css";
 @import "./app/transcript.css";
+@import "./app/workflow-decision.css";
 @import "./app/research-assistant.css";
 @import "./app/composer.css";
 @import "./app/panel.css";

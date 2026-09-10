@@ -29,11 +29,19 @@ export interface OrchestratorDeps {
     model?: string
     existingConversationId?: ConversationId
     onConversation?: (conversationId: ConversationId) => void
-  }): Promise<{ ok: boolean; output: string; error?: string; conversationId?: ConversationId }>
+  }): Promise<{
+    ok: boolean
+    output: string
+    error?: string
+    conversationId?: ConversationId
+    active?: { provider: string; model: string }
+  }>
   emit(event: AgentEvent): void
   runId: RunId
   /** 单次工作流的有效并发值；调用方已将期望值与项目硬上限取小。 */
   maxConcurrent?: number
+  workflowId?: string
+  validateOutput?: (node: WorkflowAgentNode, output: string) => Promise<Record<string, unknown>>
 }
 
 export interface OrchestratorReview {
@@ -102,6 +110,8 @@ export class TeamOrchestrator {
         note: review.note,
       }
       if (review.decision === 'approve') {
+        if (checkpoint.needs.some((id) => results.has(id) && results.get(id)!.status !== 'done'))
+          throw new Error('检查点有失败或跳过的回执，请先返工')
         approvals.set(
           checkpoint.id,
           checkpointOutput(checkpoint, Object.fromEntries(results), review.note),
@@ -310,7 +320,11 @@ export class TeamOrchestrator {
     }
 
     const upstream = (node.needs ?? [])
-      .map((id) => results.get(id)?.output ?? approvals.get(id) ?? '')
+      .map((id) => {
+        const receipt = results.get(id)
+        if (!receipt) return approvals.get(id) ?? ''
+        return `${receipt.provider ? `上游 ${id} 由 ${receipt.provider}${receipt.model ? `/${receipt.model}` : ''} 生成。\n` : ''}${receipt.output}`
+      })
       .filter(Boolean)
       .join('\n\n---\n\n')
     const withGoal = node.task.replaceAll('{goal}', goal)
@@ -323,7 +337,10 @@ export class TeamOrchestrator {
     const task = correction
       ? `## 主会话续发指令\n\n${correction}\n\n## 原任务与最新输入\n\n${originalTask}`
       : originalTask
-    const prompt = role ? this.composePrompt(role, task) : task
+    const contractTask = node.outputKind
+      ? `${task}\n输出契约：${node.outputKind}。末尾只返回一个完整 JSON 对象，字段遵循任务中的 documentSchemas。workflowId=${this.deps.workflowId ?? ''}；nodeId=${node.id}。`
+      : task
+    const prompt = role ? this.composePrompt(role, contractTask) : contractTask
     const backend = cli ? ('custom' as const) : ('builtin' as const)
 
     this.deps.emit({
@@ -362,6 +379,7 @@ export class TeamOrchestrator {
                 delta,
               }),
           }).then((result) => ({
+            active: { provider: `cli:${cli.id}`, model: undefined },
             ok: result.ok,
             output: result.output,
             error: result.ok
@@ -392,13 +410,25 @@ export class TeamOrchestrator {
               }),
           })
 
+      let structuredOutput: Record<string, unknown> | undefined
+      let contractError: string | undefined
+      if (res.ok && node.outputKind) {
+        try {
+          if (!this.deps.validateOutput) throw new Error('Output validator unavailable')
+          structuredOutput = await this.deps.validateOutput(node, res.output)
+        } catch (error) {
+          contractError = `输出契约 ${node.outputKind}：${error instanceof Error ? error.message : 'invalid output'}`
+        }
+      }
+      const error = contractError || res.error
+      const ok = res.ok && !contractError
       this.deps.emit({
         type: 'team.member',
         runId: this.deps.runId,
         memberId: node.id,
         roleName: label,
         backend,
-        phase: res.ok ? 'done' : 'failed',
+        phase: ok ? 'done' : 'failed',
         summary: res.output.slice(0, 200),
         ...('conversationId' in res && res.conversationId
           ? { childConversationId: res.conversationId }
@@ -411,9 +441,16 @@ export class TeamOrchestrator {
         nodeId: node.id,
         agent: node.agent,
         label,
-        status: res.ok ? 'done' : 'failed',
+        status: ok ? 'done' : 'failed',
         output: res.output,
-        ...(res.error ? { error: res.error } : {}),
+        ...(structuredOutput ? { structuredOutput } : {}),
+        ...(error ? { error } : {}),
+        ...(res.active
+          ? {
+              provider: res.active.provider,
+              ...(res.active.model ? { model: res.active.model } : {}),
+            }
+          : {}),
         durationMs: Date.now() - started,
         ...('session' in res && res.session
           ? { session: res.session }

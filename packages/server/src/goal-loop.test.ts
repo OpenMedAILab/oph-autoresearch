@@ -436,6 +436,40 @@ describe('四条防失控', () => {
     expect(bodies.length).toBe(after)
   }, 20_000)
 
+  test('human checkpoint blocks automatic goal continuation after the current turn', async () => {
+    const cv = conversation()
+    script = [
+      ok(
+        toolTurn('workflow', {
+          goal: '实验确认',
+          nodes: [
+            { id: 'smoke', agent: 'ad-hoc', task: '执行 smoke' },
+            {
+              id: 'approve',
+              kind: 'checkpoint',
+              reviewer: 'human',
+              label: '批准训练',
+              needs: ['smoke'],
+            },
+          ],
+        }),
+      ),
+      ok(textTurn('smoke passed')),
+      ok(textTurn('等待人类批准训练')),
+    ]
+    expect(setGoal(cv, '执行实验并等待人类批准', deps()).ok).toBe(true)
+    expect(
+      await waitFor((event) => event.type === 'goal' && event.goal.status === 'blocked'),
+    ).not.toBeNull()
+    await settle()
+    expect(currentGoal(store, cv)?.blockedCode).toBe('waiting_human')
+    expect(runs.armedOf(cv)).toBeNull()
+    expect(runs.isBusy(cv)).toBe(false)
+    expect(bodies).toHaveLength(3)
+    await settle()
+    expect(bodies).toHaveLength(3)
+  })
+
   /** 取消之后暂停，不自动重启。 */
   test('中断这一轮 = 目标转 paused 并解除标记', async () => {
     const cv = conversation()

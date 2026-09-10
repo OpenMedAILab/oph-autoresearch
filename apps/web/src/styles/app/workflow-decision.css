@@ -1,0 +1,51 @@
+.wf-decision {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+.wf-decision-actions {
+  display: flex;
+  gap: 8px;
+}
+.wf-checks {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.wf-analysis {
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.wf-analysis p {
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+.wf-decision button {
+  min-height: 44px;
+  min-width: 64px;
+}
+.wf-decision textarea {
+  width: 100%;
+  height: 96px;
+  resize: none;
+  padding: 8px;
+  color: inherit;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
+.wf-node-model {
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.wf-node.session:has(.wf-decision) {
+  width: min(306px, 100%);
+  max-width: 100%;
+  gap: 8px;
+  flex-direction: column;
+}

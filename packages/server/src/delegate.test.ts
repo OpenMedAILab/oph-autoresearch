@@ -18,8 +18,10 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { EventDispatcher } from '@larksuiteoapi/node-sdk'
 import type { ToolContext } from '@oph-autoresearch/agent'
 import type { AgentEvent, ConversationId, EventEnvelope, RunId } from '@oph-autoresearch/core'
+import { foldWorkflow } from '@oph-autoresearch/core'
 import type { OphConfig } from '@oph-autoresearch/runtime'
 import {
   appendMessage,
@@ -37,8 +39,13 @@ import {
   upsertWorkspace,
 } from '@oph-autoresearch/store'
 import { EventBus } from './bus.ts'
-import { makeDelegate } from './delegate.ts'
+import { createFeishuService } from './channels/service.ts'
+import { makeDelegate, workflowRecords } from './delegate.ts'
+import { saveRemoteChannels } from './remote-channels.ts'
+import { ResearchNotificationCoordinator } from './research-notifications.ts'
 import { RunManager } from './runs.ts'
+import { serve } from './server.ts'
+import { decideWorkflow } from './workflow-decisions.ts'
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' }
 
@@ -139,7 +146,13 @@ function delegate(conversationId: ConversationId) {
   })
 }
 
-function seedWaitingWorkflow(parent: ConversationId, child: ConversationId, key: string) {
+function seedWaitingWorkflow(
+  parent: ConversationId,
+  child: ConversationId,
+  key: string,
+  reviewer?: 'human',
+  next = false,
+) {
   const run = createRun(store, {
     conversationId: parent,
     workspaceId: workspaceId as never,
@@ -153,7 +166,14 @@ function seedWaitingWorkflow(parent: ConversationId, child: ConversationId, key:
     goal: '形成可靠结论',
     nodes: [
       { id: 'a', kind: 'agent', agent: 'ad-hoc', task: '研究并给出证据' },
-      { id: 'review', kind: 'checkpoint', label: '主会话审查', needs: ['a'] },
+      {
+        id: 'review',
+        kind: 'checkpoint',
+        label: '主会话审查',
+        needs: ['a'],
+        ...(reviewer ? { reviewer } : {}),
+      },
+      ...(next ? [{ id: 'b', agent: 'ad-hoc', task: '批准后执行', needs: ['review'] }] : []),
     ],
   }
   const step = appendStep(store, {
@@ -712,4 +732,311 @@ describe('workflow 从父会话账本续接', () => {
     ).toBe(true)
     expect(listSteps(store, run.id).filter((step) => step.toolName === 'workflow')).toHaveLength(4)
   })
+})
+
+test('human checkpoint rejects model approval; authenticated HTTP continues the same graph exactly once', async () => {
+  const parent = conversation()
+  const child = createConversation(store, {
+    workspaceId: workspaceId as never,
+    provider: 'fake',
+    model: 'deepseek-v4-flash',
+    source: 'workflow',
+    sourceRef: 'ad-hoc',
+    parentConversationId: parent,
+  }).id
+  const first = seedWaitingWorkflow(parent, child, 'human-decision', 'human', true)
+  const denied = await delegate(parent).runGraph({
+    call: {
+      kind: 'review',
+      workflowId: first.id,
+      checkpointId: 'review',
+      decision: 'approve',
+      note: '模型同意',
+      revisions: [],
+    },
+    origin: 'model',
+    runId: first.runId,
+    stepId: 'st_denied',
+    signal: new AbortController().signal,
+  })
+  expect(denied).toMatchObject({ ok: false, errorKind: 'waiting_human' })
+  expect(denied.transition).toBeUndefined()
+  script = [() => new Response(textTurn('已执行批准后的节点'), { headers: SSE_HEADERS })]
+  const server = serve({
+    store,
+    content,
+    config,
+    workspaceRoot: dir,
+    host: '127.0.0.1',
+    port: 0,
+    token: 'human-test-token',
+  })
+  const command = {
+    type: 'workflow.review',
+    conversationId: parent,
+    workflowId: first.id,
+    checkpointId: 'review',
+    expectedStepId: first.id,
+    decision: 'approve',
+    note: '实验员批准',
+  }
+  const request = (token: string) =>
+    fetch(`http://127.0.0.1:${server.port}/api/commands`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(command),
+    })
+  try {
+    expect((await request('invalid')).status).toBe(401)
+    expect((await request('human-test-token')).status).toBe(202)
+    expect((await request('human-test-token')).status).toBe(409)
+    for (let i = 0; i < 100 && server.runs.isBusy(parent); i++) await Bun.sleep(10)
+    expect(server.runs.isBusy(parent)).toBe(false)
+    const folded = foldWorkflow(workflowRecords(store, parent), first.id)
+    if (!folded.ok) throw new Error(folded.error)
+    expect(folded.projection.phase).toBe('completed')
+    expect(folded.projection.approvals.review).toContain('实验员批准')
+    expect(folded.projection.results.b).toMatchObject({
+      output: '已执行批准后的节点',
+      provider: 'fake',
+      model: 'deepseek-v4-flash',
+    })
+    expect((await request('human-test-token')).status).toBe(409)
+  } finally {
+    server.stop()
+  }
+})
+
+test('human revision reuses the child, publishes a fresh checkpoint and rejects the previous card', async () => {
+  const parent = conversation()
+  const child = createConversation(store, {
+    workspaceId: workspaceId as never,
+    provider: 'fake',
+    model: 'deepseek-v4-flash',
+    source: 'workflow',
+    sourceRef: 'ad-hoc',
+    parentConversationId: parent,
+  }).id
+  const initial = seedWaitingWorkflow(parent, child, 'human-revise', 'human')
+  const deps = { store, content, config, bus, runs }
+  const command = {
+    type: 'workflow.review' as const,
+    conversationId: parent,
+    workflowId: initial.id,
+    checkpointId: 'review',
+    expectedStepId: initial.id,
+    decision: 'revise' as const,
+    note: '补充反例证据',
+  }
+  expect(decideWorkflow({ ...command, note: ' ' }, deps).ok).toBe(false)
+  script = [() => new Response(textTurn('修订稿及反例'), { headers: SSE_HEADERS })]
+  expect(decideWorkflow(command, deps).ok).toBe(true)
+  for (let i = 0; i < 200 && runs.isBusy(parent); i++) await Bun.sleep(10)
+  expect(runs.isBusy(parent)).toBe(false)
+  const folded = foldWorkflow(workflowRecords(store, parent), initial.id)
+  if (!folded.ok) throw new Error(folded.error)
+  expect(folded.projection.phase).toBe('waiting_review')
+  expect(folded.projection.results.a).toMatchObject({
+    conversationId: child,
+    output: '修订稿及反例',
+  })
+  expect(folded.projection.reviewStepId).not.toBe(initial.id)
+  expect(
+    events.some(
+      ({ event }) =>
+        event.type === 'team.member' &&
+        event.phase === 'waiting_review' &&
+        event.reviewer === 'human',
+    ),
+  ).toBe(true)
+  expect(decideWorkflow({ ...command, decision: 'approve' }, deps).ok).toBe(false)
+  expect(
+    decideWorkflow(
+      { ...command, decision: 'approve', expectedStepId: folded.projection.reviewStepId! },
+      deps,
+    ).ok,
+  ).toBe(true)
+  for (let i = 0; i < 200 && runs.isBusy(parent); i++) await Bun.sleep(10)
+})
+
+test('Feishu service reconciles checkpoints and replies only to its triggering main-conversation message', async () => {
+  const parent = conversation()
+  const unrelated = createConversation(store, {
+    workspaceId: workspaceId as never,
+    provider: 'fake',
+    model: 'deepseek-v4-flash',
+  }).id
+  const child = createConversation(store, {
+    workspaceId: workspaceId as never,
+    provider: 'fake',
+    model: 'deepseek-v4-flash',
+    source: 'workflow',
+    sourceRef: 'ad-hoc',
+    parentConversationId: parent,
+  }).id
+  const checkpoint = seedWaitingWorkflow(parent, child, 'feishu-pending', 'human')
+  const previousHome = process.env.OPH_AUTORESEARCH_HOME
+  const previousSecret = process.env.OPH_TEST_FEISHU_SECRET
+  process.env.OPH_AUTORESEARCH_HOME = await mkdtemp(join(dir, 'feishu-home-'))
+  process.env.OPH_TEST_FEISHU_SECRET = 'fixture-secret'
+  let dispatcher: EventDispatcher | undefined
+  const sent: { url: string; body: { content?: string; msg_type?: string } }[] = []
+  const http = (async (input: unknown, options?: RequestInit) => {
+    const url = String(input)
+    if (url.includes('tenant_access_token'))
+      return Response.json({ code: 0, tenant_access_token: 'fixture-token', expire: 7200 })
+    if (url.includes('bot/v3')) return Response.json({ code: 0, bot: { open_id: 'bot' } })
+    sent.push({ url, body: JSON.parse(String(options?.body ?? '{}')) })
+    return Response.json({ code: 0 })
+  }) as typeof fetch
+  let service: ReturnType<typeof createFeishuService> | undefined
+  let coordinator: ResearchNotificationCoordinator | undefined
+  try {
+    await saveRemoteChannels([
+      {
+        id: 'fixture',
+        kind: 'feishu',
+        name: 'fixture',
+        enabled: true,
+        appId: 'app',
+        secretEnv: 'OPH_TEST_FEISHU_SECRET',
+        allowFrom: ['human'],
+        controlLevel: 'review',
+        chatId: 'chat',
+        conversationId: parent,
+      },
+    ])
+    service = createFeishuService(
+      { store, content, config, bus, runs },
+      () => 'http://localhost/',
+      {
+        http,
+        socketFactory: () => ({
+          async start(input) {
+            dispatcher = input.eventDispatcher
+          },
+          close() {},
+        }),
+      },
+    )
+    coordinator = new ResearchNotificationCoordinator({
+      ownDbPath: join(dir, 'feishu-notify.sqlite'),
+      adapters: service.adapters,
+    })
+    service.start(coordinator)
+    for (let i = 0; i < 100 && !dispatcher; i++) await Bun.sleep(10)
+    expect(dispatcher).toBeDefined()
+    await coordinator.deliverDue()
+    expect(coordinator.list(`conversation:${parent}`)).toMatchObject([
+      { kind: 'human_checkpoint', eventId: `workflow:${checkpoint.id}:${checkpoint.id}` },
+    ])
+    const invoke = (id: string, text: string) =>
+      dispatcher!.handles.get('im.message.receive_v1')!({
+        sender: { sender_type: 'user', sender_id: { open_id: 'human' } },
+        message: {
+          message_id: id,
+          chat_id: 'chat',
+          chat_type: 'group',
+          message_type: 'text',
+          mentions: [{ key: '@_bot', id: { open_id: 'bot' } }],
+          content: JSON.stringify({ text: `@_bot ${text}` }),
+        },
+      })
+    script = [() => new Response(textTurn('主会话的最终答复'), { headers: SSE_HEADERS })]
+    invoke('source-message', '讨论实验设计')
+    invoke('source-message', '讨论实验设计')
+    for (let i = 0; i < 200 && !sent.some((row) => row.url.endsWith('/source-message/reply')); i++)
+      await Bun.sleep(10)
+    expect(
+      sent
+        .filter((row) => row.url.endsWith('/source-message/reply'))
+        .map((row) => JSON.parse(row.body.content!)),
+    ).toEqual([{ text: '主会话的最终答复' }])
+    const foreignRun = createRun(store, {
+      conversationId: unrelated,
+      workspaceId: workspaceId as never,
+      model: 'deepseek-v4-flash',
+      clientRequestId: 'foreign',
+      userMessageId: null,
+      messageIdUpperBound: null,
+      contextSnapshot: [],
+    })
+    bus.publish(
+      {
+        type: 'run.finished',
+        runId: foreignRun.id,
+        status: 'done',
+        stopReason: 'completed',
+        usage: foreignRun.usage,
+        fileChanges: [],
+      },
+      unrelated,
+    )
+    await Bun.sleep(20)
+    expect(sent.filter((row) => row.body.msg_type === 'text')).toHaveLength(1)
+  } finally {
+    service?.close()
+    coordinator?.close()
+    if (previousHome === undefined) delete process.env.OPH_AUTORESEARCH_HOME
+    else process.env.OPH_AUTORESEARCH_HOME = previousHome
+    if (previousSecret === undefined) delete process.env.OPH_TEST_FEISHU_SECRET
+    else process.env.OPH_TEST_FEISHU_SECRET = previousSecret
+  }
+})
+
+// Contracts run through the real member session and local scripted HTTP provider.
+test('workflow output contracts fail at producer completion and suppress dependent nodes', async () => {
+  const valid = {
+    decision: 'iterate',
+    summary: 'One more prespecified seed',
+    findings: [],
+    next_experiment: {
+      changes: ['repeat seed'],
+      rationale: 'Wide uncertainty',
+      estimated_cost: 'unknown',
+    },
+    pitfalls_added: [],
+    limitations: ['Small fixture'],
+  }
+  for (const [output, ok] of [
+    [JSON.stringify(valid), true],
+    [JSON.stringify({ decision: 'iterate' }), false],
+    [`${JSON.stringify(valid)}\n${JSON.stringify(valid)}`, false],
+    [JSON.stringify({ ...valid, next_experiment: null }), false],
+  ] as const) {
+    const cv = conversation()
+    script = [
+      () => new Response(textTurn(output), { headers: SSE_HEADERS }),
+      () => new Response(textTurn('Reviewed'), { headers: SSE_HEADERS }),
+    ]
+    const result = await delegate(cv).runGraph!({
+      call: {
+        kind: 'start',
+        goal: 'Contract regression',
+        maxConcurrent: 1,
+        nodes: [
+          { id: 'analysis', agent: 'ad-hoc', task: 'Return analysis', outputKind: 'analysis' },
+          { id: 'dependent', agent: 'ad-hoc', task: 'Review the analysis', needs: ['analysis'] },
+          {
+            id: 'human',
+            kind: 'checkpoint',
+            reviewer: 'human',
+            label: 'Review',
+            needs: ['dependent'],
+            checks: ['Evidence is located'],
+          },
+        ],
+      },
+      runId: 'run_contract',
+      stepId: 'step_contract',
+      signal: new AbortController().signal,
+    })
+    expect(result.transition?.phase).toBe('waiting_review')
+    expect(result.ok).toBe(ok)
+    expect(result.transition?.receipts[1]?.status).toBe(ok ? 'done' : 'skipped')
+    expect(result.transition?.receipts?.[0]?.status).toBe(ok ? 'done' : 'failed')
+    if (ok) expect(result.transition?.receipts?.[0]?.structuredOutput).toEqual(valid)
+    else expect(result.transition?.receipts?.[0]?.error).toContain('输出契约 analysis')
+    expect(listRuns(store, cv)).toHaveLength(0)
+  }
 })
